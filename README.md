@@ -63,25 +63,28 @@ dev-agents/
 
 | Agent | Role | Scope |
 |-------|------|-------|
-| `orchestrator` | Task planner | Breaks goals into parallel tasks, assigns agents, manages merge order |
+| `orchestrator` | **Default entry point** | Your tech lead colleague — routes tasks, plans work, spots blind spots |
 | `tech-scout` | Competitive intelligence | Monitors AI tooling releases, suggests workflow improvements |
 | `security-reviewer` | Security auditor | Reviews code for vulnerabilities, compliance, best practices |
 | `seo-auditor` | SEO auditor | Audits pages for meta tags, structured data, Core Web Vitals |
 
 ## When to Use Which Agent
 
-Pick your entry point based on the size of the task:
+**Default: Start with the orchestrator.** It's your tech lead colleague — it helps you figure out what to do, who should do it, and what you haven't thought of. Even for simple tasks, it'll confirm the right agent and flag blind spots.
 
 | Situation | Start with | Example |
 |-----------|-----------|---------|
-| **One focused task** | Go directly to the role agent | `claude --agent go-backend "fix auth bug #123"` |
-| **Multi-task goal** | `orchestrator` first, then role agents | "Close all P2 issues", "Build the payments feature" |
+| **Not sure where to start** | `orchestrator` | "I need to add payments — what's the plan?" |
+| **Not sure which agent** | `orchestrator` | "Is this a backend or devops task?" |
+| **Multi-task goal** | `orchestrator` | "Close all P2 issues", "Build the booking feature" |
+| **What should I work on?** | `orchestrator` | "What's the highest priority work right now?" |
+| **One clear, focused task** | Go directly to the role agent | `claude --agent go-backend "fix auth bug #123"` |
 | **Weekly maintenance** | `tech-scout` | "What AI tooling updates should we adopt?" |
 | **Before merging a PR** | `security-reviewer` | "Review PR #301 for security issues" |
 | **Before a launch** | `seo-auditor` | "Audit all public pages for SEO" |
 | **New project** | `new-project.sh` script, then `orchestrator` | "Scaffold and plan the initial sprint" |
 
-**Rule of thumb**: If the work touches 1 agent's scope, go direct. If it touches 2+ scopes, start with the orchestrator.
+**Rule of thumb**: When in doubt, ask the orchestrator. It'll either handle it or point you to the right agent.
 
 ## Usage
 
