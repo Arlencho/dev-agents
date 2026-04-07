@@ -147,6 +147,70 @@ cd my-new-saas
 claude --agent go-backend "scaffold the API with health check and auth"
 ```
 
+## Complete Workflow Guide
+
+Here's how a typical development session looks from start to finish:
+
+### 1. Start with the Orchestrator
+```bash
+cd ~/my-project
+claude --agent orchestrator "I need to add a payment system with Stripe"
+```
+
+The orchestrator will:
+- Analyze what's needed (API endpoints, database tables, frontend pages)
+- Tell you which agents to use
+- Produce a wave plan with merge order
+- Flag things you haven't considered ("you'll also need webhook handling")
+
+### 2. Execute the Plan
+The orchestrator outputs something like:
+```
+Wave 1 (parallel):
+  - db-architect: "create payments migration" → branch feat/payments-db
+  - api-designer: "add payment endpoints to api.yaml" → branch feat/payments-spec
+
+Wave 2 (after Wave 1 merges):
+  - go-backend: "implement payment service with Stripe" → branch feat/payments-api
+
+Wave 3 (after Wave 2 merges):
+  - web-frontend: "build checkout page" → branch feat/payments-ui
+  - test-engineer: "add payment flow tests" → branch feat/payments-tests
+```
+
+Run Wave 1 agents in parallel:
+```bash
+claude --agent db-architect "create payments migration with orders table"   # Terminal 1
+claude --agent api-designer "add POST /payments and webhook endpoints"      # Terminal 2
+```
+
+### 3. Merge and Continue
+Merge Wave 1 PRs, then start Wave 2:
+```bash
+claude --agent go-backend "implement Stripe payment service"
+```
+
+### 4. Review Before Merging
+```bash
+claude --agent security-reviewer "review the payment implementation for security issues"
+```
+
+### 5. Post-Launch
+```bash
+claude --agent seo-auditor "audit the new checkout page for SEO"
+claude --agent tech-scout "any new Stripe SDK features we should adopt?"
+```
+
+### Multi-Machine Parallel (advanced)
+Same workflow but across machines:
+```bash
+# From your MacBook — dispatch to Mac Minis
+./scripts/run-remote.sh mac-mini-1 git@github.com:Arlencho/repo.git go-backend "implement payment service"
+./scripts/run-remote.sh mac-mini-2 git@github.com:Arlencho/repo.git web-frontend "build checkout page"
+```
+
+---
+
 ## Multi-Machine Setup
 
 1. Clone this repo on every machine (MacBook, Mac Minis, etc.)
