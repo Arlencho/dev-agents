@@ -68,23 +68,46 @@ dev-agents/
 | `security-reviewer` | Security auditor | Reviews code for vulnerabilities, compliance, best practices |
 | `seo-auditor` | SEO auditor | Audits pages for meta tags, structured data, Core Web Vitals |
 
+## When to Use Which Agent
+
+Pick your entry point based on the size of the task:
+
+| Situation | Start with | Example |
+|-----------|-----------|---------|
+| **One focused task** | Go directly to the role agent | `claude --agent go-backend "fix auth bug #123"` |
+| **Multi-task goal** | `orchestrator` first, then role agents | "Close all P2 issues", "Build the payments feature" |
+| **Weekly maintenance** | `tech-scout` | "What AI tooling updates should we adopt?" |
+| **Before merging a PR** | `security-reviewer` | "Review PR #301 for security issues" |
+| **Before a launch** | `seo-auditor` | "Audit all public pages for SEO" |
+| **New project** | `new-project.sh` script, then `orchestrator` | "Scaffold and plan the initial sprint" |
+
+**Rule of thumb**: If the work touches 1 agent's scope, go direct. If it touches 2+ scopes, start with the orchestrator.
+
 ## Usage
 
-### Single Agent
+### Direct Agent (single-scope task)
 ```bash
 cd ~/my-project
 claude --agent go-backend "implement the /users endpoint"
 ```
 
-### Orchestrated Parallel Work
+### Orchestrator (multi-scope goal)
 ```bash
-# Let the orchestrator plan the work
+# Step 1: Orchestrator analyzes and produces a wave plan
 claude --agent orchestrator "close all P2 issues on this repo"
 
-# It outputs a wave plan — then execute:
+# Step 2: Execute the plan — parallel agents per wave
 claude --agent go-backend "implement auth service"      # Terminal 1
 claude --agent web-frontend "build login page"          # Terminal 2
 claude --agent db-architect "create users migration"    # Terminal 3
+
+# Step 3: Merge in the order the orchestrator specified
+```
+
+### Without Claude Code (just planning)
+```bash
+# You can also use the orchestrator pattern manually in any Claude session:
+# "Break this into parallel tasks and tell me which agents to use"
 ```
 
 ### Remote Execution (Mac Minis)
