@@ -1,18 +1,18 @@
 # Dev Agents
 
-Portable, project-agnostic, provider-agnostic role definitions for AI-powered parallel development.
+Portable, project-agnostic, provider-agnostic role definitions and tooling for AI-powered parallel development.
 
 ## What This Is
 
-Reusable role definitions that tell AI coding agents their scope, conventions, and boundaries. Works with Claude Code today, designed to support OpenAI, Cursor, Grok, and others as they mature.
+A complete toolkit for running multiple AI coding agents in parallel across machines and projects. Defines agent roles, project templates, orchestration scripts, and multi-machine runners. Works with Claude Code today, designed to support OpenAI, Cursor, Grok, and others.
 
 ## Quick Setup
 
 ```bash
 git clone git@github.com:Arlencho/dev-agents.git
 cd dev-agents
-chmod +x scripts/bootstrap.sh
-./scripts/bootstrap.sh claude    # or: openai, cursor, grok (when supported)
+chmod +x scripts/*.sh
+./scripts/bootstrap.sh claude
 ```
 
 ## Repo Structure
@@ -20,27 +20,34 @@ chmod +x scripts/bootstrap.sh
 ```
 dev-agents/
 ├── roles/                    # Provider-agnostic role definitions (source of truth)
-│   ├── go-backend.md
-│   ├── web-frontend.md
-│   ├── mobile.md
-│   ├── db-architect.md
-│   ├── api-designer.md
-│   ├── devops.md
-│   └── test-engineer.md
+│   ├── go-backend.md         # Go API engineer
+│   ├── web-frontend.md       # Next.js/React engineer
+│   ├── mobile.md             # React Native/Expo engineer
+│   ├── db-architect.md       # Database architect
+│   ├── api-designer.md       # API contract owner
+│   ├── devops.md             # DevOps engineer
+│   ├── test-engineer.md      # Test engineer (never modifies prod code)
+│   ├── orchestrator.md       # Meta-agent — plans, delegates, tracks
+│   ├── tech-scout.md         # AI tooling monitor — competitive intelligence
+│   ├── security-reviewer.md  # Security auditor — PR review, vulnerability scanning
+│   └── seo-auditor.md        # SEO auditor — meta tags, structured data, Core Web Vitals
+├── templates/                # Project CLAUDE.md templates
+│   ├── go-nextjs-monorepo.md # Go + Next.js full-stack template
+│   └── python-fastapi.md     # Python FastAPI service template
 ├── providers/
 │   ├── claude/agents/        # Claude Code format (ready)
 │   ├── openai/               # OpenAI format (placeholder)
 │   ├── cursor/               # Cursor rules format (placeholder)
 │   └── grok/                 # Grok format (placeholder)
 └── scripts/
-    └── bootstrap.sh          # Multi-provider bootstrap
+    ├── bootstrap.sh          # Install agents on any machine
+    ├── run-remote.sh         # Run an agent on a remote machine via SSH
+    └── new-project.sh        # Scaffold a new project with agent infrastructure
 ```
 
-- **`roles/`** — The canonical definitions. Edit here.
-- **`providers/<name>/`** — Provider-specific format. Generated or adapted from roles.
-- **`scripts/bootstrap.sh`** — Links the correct provider format to your system.
-
 ## Available Agents
+
+### Development Agents (write code)
 
 | Agent | Role | Scope |
 |-------|------|-------|
@@ -52,48 +59,111 @@ dev-agents/
 | `devops` | DevOps engineer | Docker, CI/CD, deployment, scripts |
 | `test-engineer` | Test engineer | Unit, integration, E2E tests only |
 
-## Usage (Claude Code)
+### Meta Agents (coordinate and review)
 
+| Agent | Role | Scope |
+|-------|------|-------|
+| `orchestrator` | Task planner | Breaks goals into parallel tasks, assigns agents, manages merge order |
+| `tech-scout` | Competitive intelligence | Monitors AI tooling releases, suggests workflow improvements |
+| `security-reviewer` | Security auditor | Reviews code for vulnerabilities, compliance, best practices |
+| `seo-auditor` | SEO auditor | Audits pages for meta tags, structured data, Core Web Vitals |
+
+## Usage
+
+### Single Agent
 ```bash
-# Single agent
 cd ~/my-project
 claude --agent go-backend "implement the /users endpoint"
+```
 
-# Parallel agents (different terminals or machines)
-claude --agent go-backend "implement auth service"      # Machine 1
-claude --agent web-frontend "build login page"          # Machine 2
-claude --agent db-architect "create users migration"    # Machine 3
+### Orchestrated Parallel Work
+```bash
+# Let the orchestrator plan the work
+claude --agent orchestrator "close all P2 issues on this repo"
+
+# It outputs a wave plan — then execute:
+claude --agent go-backend "implement auth service"      # Terminal 1
+claude --agent web-frontend "build login page"          # Terminal 2
+claude --agent db-architect "create users migration"    # Terminal 3
+```
+
+### Remote Execution (Mac Minis)
+```bash
+# Run an agent on a remote machine
+./scripts/run-remote.sh mac-mini-1 git@github.com:Arlencho/olympus-platform.git go-backend "fix auth bug #123"
+```
+
+### Tech Scout (periodic)
+```bash
+# Run weekly to stay current
+claude --agent tech-scout "scan for AI tooling updates relevant to our workflow"
+```
+
+### Security Review
+```bash
+# Review a specific PR
+claude --agent security-reviewer "review PR #301 for security issues"
+
+# Full codebase audit
+claude --agent security-reviewer "audit the entire codebase for vulnerabilities"
+```
+
+### SEO Audit
+```bash
+claude --agent seo-auditor "audit all public pages for SEO issues"
+```
+
+### New Project
+```bash
+# Scaffold a new project with AI agent infrastructure
+./scripts/new-project.sh go-nextjs my-new-saas
+cd my-new-saas
+claude --agent go-backend "scaffold the API with health check and auth"
 ```
 
 ## Multi-Machine Setup
 
-1. Clone this repo on every machine
+1. Clone this repo on every machine (MacBook, Mac Minis, etc.)
 2. Run `./scripts/bootstrap.sh claude`
 3. `git pull` to update agents everywhere
 
-The bootstrap symlinks agents to `~/.claude/agents/` so they're available in every project on that machine.
+The bootstrap symlinks agents to `~/.claude/agents/` — available in every project on that machine.
+
+## Project Templates
+
+Templates provide a pre-configured `CLAUDE.md` for common project types:
+
+| Template | Stack | Use case |
+|----------|-------|----------|
+| `go-nextjs-monorepo` | Go + Next.js + PostgreSQL | Full-stack SaaS, APIs with web frontend |
+| `python-fastapi` | Python + FastAPI + SQLAlchemy | Data services, ML APIs, microservices |
+
+```bash
+./scripts/new-project.sh go-nextjs my-project
+```
 
 ## Parallel Development Rules
 
 1. Break work into non-conflicting tasks (different files/directories)
 2. Assign each task to the right agent role
 3. Each agent works on its own git branch
-4. Merge sequentially: first done -> merge -> rebase others
-5. **No two agents touch the same files**
+4. `api.yaml` changes merge FIRST (everything depends on the contract)
+5. Database migrations merge BEFORE code that uses them
+6. Tests merge LAST
+7. **No two agents touch the same files**
 
 ## Adding Agents
 
 1. Create `roles/<name>.md` with the role definition
-2. Copy to `providers/claude/agents/<name>.md` (add Claude frontmatter if needed)
+2. Copy to `providers/claude/agents/<name>.md`
 3. Run `./scripts/bootstrap.sh claude` to relink
 4. Commit and push — all machines get it on `git pull`
 
 ## Adding Providers
 
 1. Create `providers/<name>/` directory
-2. Add a format adapter (script or template) that reads from `roles/`
+2. Add a format adapter that reads from `roles/`
 3. Add a case to `scripts/bootstrap.sh`
-4. Submit a PR
 
 ## Provider Status
 
