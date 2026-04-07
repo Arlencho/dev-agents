@@ -255,6 +255,13 @@ Templates provide a pre-configured `CLAUDE.md` for common project types:
 2. Add a format adapter that reads from `roles/`
 3. Add a case to `scripts/bootstrap.sh`
 
+## Documentation
+
+| Doc | What it covers |
+|-----|---------------|
+| [Architecture Diagrams](docs/architecture.md) | Single-machine, multi-machine, agent communication, your specific setup |
+| [Scenarios](docs/scenarios.md) | 7 real-world examples: bug fix, feature request, sprint planning, multi-machine, pre-launch audit, new project, "I don't know where to start" |
+
 ## Provider Status
 
 | Provider | Status | Format |
