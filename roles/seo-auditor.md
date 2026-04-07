@@ -3,8 +3,6 @@ name: seo-auditor
 description: Audits web pages for SEO, meta tags, structured data, Core Web Vitals, accessibility
 tools:
   - Read
-  - Write
-  - Edit
   - Bash
   - Glob
   - Grep

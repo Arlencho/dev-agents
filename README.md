@@ -32,7 +32,7 @@ dev-agents/
 │   ├── security-reviewer.md  # Security auditor — PR review, vulnerability scanning
 │   └── seo-auditor.md        # SEO auditor — meta tags, structured data, Core Web Vitals
 ├── templates/                # Project CLAUDE.md templates
-│   ├── go-nextjs-monorepo.md # Go + Next.js full-stack template
+│   ├── go-nextjs.md # Go + Next.js full-stack template
 │   └── python-fastapi.md     # Python FastAPI service template
 ├── providers/
 │   ├── claude/agents/        # Claude Code format (ready)
@@ -161,7 +161,7 @@ Templates provide a pre-configured `CLAUDE.md` for common project types:
 
 | Template | Stack | Use case |
 |----------|-------|----------|
-| `go-nextjs-monorepo` | Go + Next.js + PostgreSQL | Full-stack SaaS, APIs with web frontend |
+| `go-nextjs` | Go + Next.js + PostgreSQL | Full-stack SaaS, APIs with web frontend |
 | `python-fastapi` | Python + FastAPI + SQLAlchemy | Data services, ML APIs, microservices |
 
 ```bash

@@ -4,6 +4,15 @@ set -euo pipefail
 # Run a Claude agent on a remote machine via SSH
 # Usage: ./scripts/run-remote.sh <host> <repo-url> <agent> <task> [branch]
 #
+# WARNING: This script uses --dangerously-skip-permissions for unattended
+# execution. The agent can read/write/execute without prompts. Only run
+# on trusted machines with trusted repos.
+#
+# Prerequisites on remote machine:
+#   1. Claude Code installed (npm install -g @anthropic-ai/claude-code)
+#   2. Agents bootstrapped (./scripts/bootstrap.sh claude)
+#   3. GitHub SSH key configured
+#
 # Examples:
 #   ./scripts/run-remote.sh mac-mini-1 git@github.com:Arlencho/olympus-platform.git go-backend "fix auth bug #123"
 #   ./scripts/run-remote.sh mac-mini-2 git@github.com:Arlencho/olympus-platform.git web-frontend "build settings page" feat/settings

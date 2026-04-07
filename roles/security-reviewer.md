@@ -3,8 +3,6 @@ name: security-reviewer
 description: Reviews PRs and code for security vulnerabilities, compliance, and best practices
 tools:
   - Read
-  - Write
-  - Edit
   - Bash
   - Glob
   - Grep
