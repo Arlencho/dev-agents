@@ -144,14 +144,36 @@ EOF
 ~/dev/dev-agents/scripts/dispatch.sh git@github.com:Arlencho/repo.git /tmp/wave1.txt
 ```
 
-**Step 4: Monitor and report**
+**Step 4: Monitor, update status, and report**
 ```bash
 # Check if workers finished (branches pushed)
 gh pr list -R Arlencho/repo
 
 # Check CI status
 gh pr checks <pr-number> -R Arlencho/repo
+
+# Track issue lifecycle
+gh issue list -R Arlencho/repo --label "status:in-progress"   # actively being worked
+gh issue list -R Arlencho/repo --label "status:in-review"     # PR up, waiting CI/review
+gh issue list -R Arlencho/repo --label "status:qa"            # merged, needs verification
+gh issue list -R Arlencho/repo --label "status:blocked"       # stuck
 ```
+
+## Issue Lifecycle Enforcement
+
+All agents must move issues through statuses as they work:
+```
+Todo → In Progress → In Review → QA → Done
+```
+
+- **You (orchestrator)** set issues to "In Progress" when dispatching
+- **Dev agents** move to "In Review" when PR is created
+- **Dev agents** move to "QA" when PR is merged
+- **Only the human** marks "Done" after verifying in production
+- **Never skip stages** — Todo → Done is not allowed
+
+When monitoring progress, check if agents forgot to update status and fix it.
+See `docs/issue-lifecycle.md` for full details.
 
 ### Conversation flow example
 

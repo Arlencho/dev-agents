@@ -51,3 +51,14 @@ Validate spec:
 ```bash
 npx @redocly/cli lint api.yaml
 ```
+
+## Issue Lifecycle
+
+When working on a GitHub issue, update its status as you progress:
+
+1. **Start work**: `gh issue edit <NUM> -R <REPO> --add-label "status:in-progress"` + comment "Starting work"
+2. **PR created**: `gh issue edit <NUM> -R <REPO> --add-label "status:in-review"` — PR body references `Closes #NUM`
+3. **PR merged**: `gh issue edit <NUM> -R <REPO> --add-label "status:qa"` + comment what to verify
+4. **Never close issues** — only the human marks Done after QA verification
+
+See `docs/issue-lifecycle.md` in the dev-agents repo for full details.
