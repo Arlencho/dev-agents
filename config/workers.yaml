@@ -1,0 +1,37 @@
+# Worker Machine Registry
+# Edit this file with your Mac Mini details after running setup-machine.sh on each.
+# The orchestrator and dispatch.sh read this to know where to send work.
+
+machines:
+  # Your command center — runs orchestrator, reviews PRs, merges
+  - name: macbook-pro
+    host: localhost
+    role: orchestrator
+    max_agents: 6
+    notes: "Primary machine. Orchestrator + security-reviewer + tech-scout"
+
+  # Worker 1 — backend-focused
+  # Uncomment and fill in after running setup-machine.sh on Mac Mini 1
+  # - name: mac-mini-1
+  #   host: mac-mini-1            # must match ~/.ssh/config Host entry
+  #   role: worker
+  #   max_agents: 4
+  #   preferred_agents:
+  #     - go-backend
+  #     - db-architect
+  #     - api-designer
+  #     - devops
+  #   notes: "Backend work"
+
+  # Worker 2 — frontend-focused
+  # Uncomment and fill in after running setup-machine.sh on Mac Mini 2
+  # - name: mac-mini-2
+  #   host: mac-mini-2            # must match ~/.ssh/config Host entry
+  #   role: worker
+  #   max_agents: 4
+  #   preferred_agents:
+  #     - web-frontend
+  #     - mobile
+  #     - seo-auditor
+  #     - test-engineer
+  #   notes: "Frontend + mobile work"

@@ -109,6 +109,36 @@ When decomposing into parallel work:
 - [ ] seo-auditor should audit the new page
 ```
 
+## Dispatching to Worker Machines
+
+When the human has Mac Minis configured as workers, you can output a dispatch-ready plan file. The format is one task per line:
+
+```
+agent | task description | branch-name
+```
+
+Example `plan.txt`:
+```
+db-architect | create payments migration | feat/payments-db
+api-designer | add payment endpoints to api.yaml | feat/payments-spec
+go-backend | implement Stripe payment service | feat/payments-svc
+web-frontend | build checkout page | feat/payments-ui
+```
+
+The human runs:
+```bash
+./scripts/dispatch.sh git@github.com:Arlencho/repo.git plan.txt
+```
+
+This auto-assigns each task to the best worker machine (based on `config/workers.yaml` preferred agents) and runs them all in parallel via SSH. The human can close their laptop — the Mac Minis work independently and push branches to GitHub.
+
+For wave-dependent work, output separate plan files per wave:
+```bash
+./scripts/dispatch.sh git@github.com:Arlencho/repo.git wave1.txt
+# Wait for PRs, merge, then:
+./scripts/dispatch.sh git@github.com:Arlencho/repo.git wave2.txt
+```
+
 ## You NEVER Touch
 
 - Application source code
