@@ -8,10 +8,19 @@ A complete toolkit for running multiple AI coding agents in parallel across mach
 
 ## Quick Setup
 
+### New machine (full setup — installs everything)
 ```bash
 git clone git@github.com:Arlencho/dev-agents.git
 cd dev-agents
-chmod +x scripts/*.sh
+./scripts/setup-machine.sh
+```
+
+This installs Homebrew, Go, Node, Docker, Claude Code, bootstraps all 11 agents, and authenticates GitHub + GCP. Interactive — prompts for logins. Run once per machine, never again.
+
+### Existing machine (agents only)
+```bash
+git clone git@github.com:Arlencho/dev-agents.git
+cd dev-agents
 ./scripts/bootstrap.sh claude
 ```
 
