@@ -3,3 +3,11 @@
 !.env.example
 .DS_Store
 node_modules/
+
+# Agent logs (collected from workers)
+logs/*.log
+!logs/.gitkeep
+
+# Wave plan execution logs contain timestamps, keep .plan files
+wave-plans/*.log
+!wave-plans/.gitkeep

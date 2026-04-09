@@ -1,0 +1,26 @@
+# Issue-to-Agent Routing Table
+# Auto-suggest the right agent based on issue labels or title patterns.
+# Used by the orchestrator to quickly route incoming issues.
+
+# Label-based routing: exact match on GitHub issue labels
+label_routes:
+  "agent:go-backend": go-backend
+  "agent:web-frontend": web-frontend
+  "agent:db-architect": db-architect
+  "agent:test-engineer": test-engineer
+  "agent:devops": devops
+  "agent:api-designer": api-designer
+  "agent:security-reviewer": security-reviewer
+  "agent:seo-auditor": seo-auditor
+  "migration": db-architect
+  "security": security-reviewer
+  "performance": performance-engineer
+  "documentation": docs-writer
+  "compliance": production-auditor
+
+# Title pattern routing: regex match on issue title (first match wins)
+title_patterns:
+  "^fix:.*test": test-engineer
+  "^docs:": docs-writer
+  "^feat:.*api": api-designer
+  "^perf:": performance-engineer

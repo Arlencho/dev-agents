@@ -2,6 +2,22 @@
 # Edit this file with your Mac Mini details after running setup-machine.sh on each.
 # The orchestrator and dispatch.sh read this to know where to send work.
 
+# Provider preference per agent role.
+# dispatch.sh reads this to select the right CLI tool.
+# For now all map to claude — structure is ready for other providers.
+provider_preferences:
+  go-backend: claude
+  web-frontend: claude
+  db-architect: claude
+  api-designer: claude
+  devops: claude
+  test-engineer: claude
+  security-reviewer: claude
+  seo-auditor: claude
+  mobile: claude
+  tech-scout: claude
+  default: claude
+
 machines:
   # Your command center — runs orchestrator, reviews PRs, merges
   - name: macbook-pro

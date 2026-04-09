@@ -18,6 +18,9 @@ bootstrap: ## Install agents locally (usage: make bootstrap PROVIDER=claude)
 setup: ## Run machine setup
 	@./scripts/setup-machine.sh
 
+notify: ## Test notification (usage: make notify AGENT=go-backend WORKER=mac-mini-1 BRANCH=feat/test STATUS=success)
+	@./scripts/notify.sh $(AGENT) $(WORKER) $(BRANCH) $(STATUS)
+
 lint: ## Check sync + validate YAML
 	@echo "Checking roles/ vs providers/ sync..."
 	@./scripts/sync-providers.sh --check

@@ -40,6 +40,10 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG="$REPO_DIR/config/workers.yaml"
+ROUTING_CONFIG="$REPO_DIR/config/routing.yaml"
+LOGS_DIR="$REPO_DIR/logs"
+WAVE_PLANS_DIR="$REPO_DIR/wave-plans"
+NOTIFY_SCRIPT="$SCRIPT_DIR/notify.sh"
 
 # --------------------------------------------------
 # Usage
@@ -166,6 +170,39 @@ get_max_agents() {
         fi
     done < "$CONFIG"
     echo "4"  # default
+}
+
+# --------------------------------------------------
+# Get provider preference for an agent
+# --------------------------------------------------
+get_provider() {
+    local agent="$1"
+    local in_prefs=false
+    local default_provider="claude"
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// /}" ]] && continue
+
+        if [[ "$line" =~ ^[[:space:]]*provider_preferences: ]]; then
+            in_prefs=true
+            continue
+        fi
+        if [ "$in_prefs" = true ]; then
+            # Stop when we hit a non-indented line (next top-level key)
+            if [[ "$line" =~ ^[a-zA-Z] ]]; then
+                in_prefs=false
+                continue
+            fi
+            if [[ "$line" =~ ^[[:space:]]*${agent}:[[:space:]]*(.*) ]]; then
+                echo "${BASH_REMATCH[1]}"
+                return
+            fi
+            if [[ "$line" =~ ^[[:space:]]*default:[[:space:]]*(.*) ]]; then
+                default_provider="${BASH_REMATCH[1]}"
+            fi
+        fi
+    done < "$CONFIG"
+    echo "$default_provider"
 }
 
 # --------------------------------------------------
@@ -389,13 +426,16 @@ dispatch_task() {
     worker_info=$(find_worker "$agent" "$exclude_worker")
     IFS='|' read -r wname whost <<< "$worker_info"
 
+    local provider
+    provider=$(get_provider "$agent")
+
     local is_preferred=""
     preferred=$(get_preferred_agents "$wname")
     if ! echo "$preferred" | grep -q "^${agent}$"; then
         is_preferred=" (round-robin)"
     fi
 
-    echo -e "  ${CYAN}→${NC} $wname ($whost): ${BOLD}$agent${NC} — \"$task\" [$branch]$is_preferred" >&2
+    echo -e "  ${CYAN}→${NC} $wname ($whost): ${BOLD}$agent${NC} [${provider}] — \"$task\" [$branch]$is_preferred" >&2
 
     RESULT_WORKER[$idx]="$wname"
     RESULT_BRANCH[$idx]="$branch"
@@ -484,10 +524,12 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             RESULT_STATUS[$idx]="success"
             wave_success=$((wave_success + 1))
             echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$idx]} completed in ${duration}s"
+            [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "success" 2>/dev/null || true
         else
             RESULT_STATUS[$idx]="failed"
             FAILED_TASKS[$idx]=0
             echo -e "  ${RED}✗${NC} ${TASK_AGENT[$idx]} failed (exit $status) after ${duration}s"
+            [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true
         fi
     done
 
@@ -515,10 +557,12 @@ for wave_num in "${SORTED_WAVES[@]}"; do
                 if [ $retry_status -eq 0 ]; then
                     RESULT_STATUS[$idx]="success (retry $local_attempts)"
                     echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$idx]} succeeded on retry $local_attempts in ${duration}s"
+                    [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "success" 2>/dev/null || true
                     unset 'FAILED_TASKS[$idx]'
                     break
                 else
                     echo -e "  ${RED}✗${NC} ${TASK_AGENT[$idx]} retry $local_attempts failed after ${duration}s"
+                    [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true
                 fi
             done
         done
@@ -600,6 +644,84 @@ for wave_num in "${SORTED_WAVES[@]}"; do
 done
 
 # --------------------------------------------------
+# Collect logs from workers
+# --------------------------------------------------
+mkdir -p "$LOGS_DIR"
+echo ""
+echo "Collecting agent logs from workers..."
+
+declare -A RESULT_LOG
+for i in "${!TASK_AGENT[@]}"; do
+    if [ -n "${RESULT_WORKER[$i]:-}" ]; then
+        # Find the worker host
+        whost=""
+        for w in "${WORKER_ARRAY[@]}"; do
+            IFS='|' read -r wn wh <<< "$w"
+            if [ "$wn" = "${RESULT_WORKER[$i]}" ]; then
+                whost="$wh"
+                break
+            fi
+        done
+
+        if [ -n "$whost" ] && [ "$whost" != "localhost" ] && [ "$whost" != "127.0.0.1" ]; then
+            repo_name=$(basename "$REPO_URL" .git)
+            branch_safe="${TASK_BRANCH[$i]//\//-}"
+            # Find the most recent matching log on the worker
+            remote_log=$(ssh -o ConnectTimeout=5 "$whost" "ls -t ~/dev/agent-logs/${repo_name}-${branch_safe}-*.log 2>/dev/null | head -1" 2>/dev/null || echo "")
+            if [ -n "$remote_log" ]; then
+                local_log="$LOGS_DIR/$(basename "$remote_log")"
+                if scp -o ConnectTimeout=5 "$whost:$remote_log" "$local_log" 2>/dev/null; then
+                    RESULT_LOG[$i]="$local_log"
+                    echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$i]}: $(basename "$local_log")"
+                else
+                    echo -e "  ${YELLOW}!${NC} ${TASK_AGENT[$i]}: failed to copy log"
+                fi
+            else
+                echo -e "  ${YELLOW}-${NC} ${TASK_AGENT[$i]}: no log found on $whost"
+            fi
+        fi
+    fi
+done
+
+# --------------------------------------------------
+# Save wave plan state
+# --------------------------------------------------
+mkdir -p "$WAVE_PLANS_DIR"
+REPO_SLUG_SHORT=$(basename "$REPO_URL" .git)
+PLAN_DATE=$(date +%Y%m%d)
+
+# Save the plan file
+PLAN_STATE="$WAVE_PLANS_DIR/${REPO_SLUG_SHORT}-${PLAN_DATE}.plan"
+{
+    echo "# Wave plan for $REPO_SLUG_SHORT — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "# Generated by dispatch.sh"
+    echo ""
+    for i in "${!TASK_AGENT[@]}"; do
+        echo "${TASK_WAVE[$i]} | ${TASK_AGENT[$i]} | ${TASK_DESC[$i]} | ${TASK_BRANCH[$i]}"
+    done
+} > "$PLAN_STATE"
+
+# Save execution log
+EXEC_LOG="$WAVE_PLANS_DIR/${REPO_SLUG_SHORT}-${PLAN_DATE}.log"
+{
+    echo "# Execution log for $REPO_SLUG_SHORT — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "# Repo: $REPO_URL"
+    echo ""
+    printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s %s\n" "#" "Wave" "Agent" "Branch" "Worker" "Duration" "Status" "Log"
+    printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s %s\n" "---" "----" "-----------------" "-----------------------------" "-------------" "---------" "------------------------" "---"
+    for i in "${!TASK_AGENT[@]}"; do
+        printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s %s\n" \
+            "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "${TASK_BRANCH[$i]}" \
+            "${RESULT_WORKER[$i]:-n/a}" "${RESULT_DURATION[$i]:-n/a}" \
+            "${RESULT_STATUS[$i]:-unknown}" "${RESULT_LOG[$i]:-none}"
+    done
+} > "$EXEC_LOG"
+
+echo ""
+echo -e "Plan saved:  ${CYAN}$PLAN_STATE${NC}"
+echo -e "Exec log:    ${CYAN}$EXEC_LOG${NC}"
+
+# --------------------------------------------------
 # Final report
 # --------------------------------------------------
 OVERALL_END=$(date +%s)
@@ -615,8 +737,8 @@ echo -e "Tasks: ${GREEN}$TOTAL_SUCCESS/$TOTAL_TASKS succeeded${NC}, ${RED}$TOTAL
 echo ""
 
 # Per-task report
-printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s\n" "#" "Wave" "Agent" "Branch" "Worker" "Duration" "Status"
-printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s\n" "---" "----" "-----------------" "-----------------------------" "-------------" "---------" "------------------------"
+printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s %s\n" "#" "Wave" "Agent" "Branch" "Worker" "Duration" "Status" "Log"
+printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s %s\n" "---" "----" "-----------------" "-----------------------------" "-------------" "---------" "------------------------" "---"
 
 for i in "${!TASK_AGENT[@]}"; do
     status="${RESULT_STATUS[$i]:-unknown}"
@@ -625,16 +747,23 @@ for i in "${!TASK_AGENT[@]}"; do
     else
         status_colored="${RED}${status}${NC}"
     fi
+    log_path="${RESULT_LOG[$i]:-none}"
+    [ "$log_path" != "none" ] && log_path="$(basename "$log_path")"
     printf "%-4s %-5s %-18s %-30s %-14s %-10s " \
         "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "${TASK_BRANCH[$i]}" \
         "${RESULT_WORKER[$i]:-n/a}" "${RESULT_DURATION[$i]:-n/a}"
-    echo -e "$status_colored"
+    echo -e "$status_colored  $log_path"
 done
 
 echo ""
 
+if [ -d "$LOGS_DIR" ] && ls "$LOGS_DIR"/*.log >/dev/null 2>&1; then
+    echo -e "Logs collected in: ${CYAN}$LOGS_DIR/${NC}"
+fi
+
 # List branches/PRs
 REPO_SLUG=$(echo "$REPO_URL" | sed 's/.*://' | sed 's/\.git//')
+echo ""
 echo "Branches created:"
 for i in "${!TASK_BRANCH[@]}"; do
     if [[ "${RESULT_STATUS[$i]:-}" == success* ]]; then
@@ -644,3 +773,12 @@ done
 
 echo ""
 echo -e "Check PRs: ${CYAN}gh pr list -R $REPO_SLUG${NC}"
+
+# --------------------------------------------------
+# Commit wave plan state
+# --------------------------------------------------
+if git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$REPO_DIR" add "$PLAN_STATE" "$EXEC_LOG" 2>/dev/null || true
+    git -C "$REPO_DIR" commit -m "dispatch: save wave plan for ${REPO_SLUG_SHORT} ($(date +%Y-%m-%d))" \
+        "$PLAN_STATE" "$EXEC_LOG" 2>/dev/null || true
+fi

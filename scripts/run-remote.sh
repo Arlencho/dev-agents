@@ -17,14 +17,31 @@ set -euo pipefail
 #   ./scripts/run-remote.sh mac-mini-1 git@github.com:Arlencho/olympus-platform.git go-backend "fix auth bug #123"
 #   ./scripts/run-remote.sh mac-mini-2 git@github.com:Arlencho/olympus-platform.git web-frontend "build settings page" feat/settings
 
-HOST="${1:?Usage: run-remote.sh <host> <repo-url> <agent> <task> [branch]}"
+HOST="${1:?Usage: run-remote.sh <host> <repo-url> <agent> <task> [branch] [--log-dir <dir>]}"
 REPO_URL="${2:?Missing repo URL}"
 AGENT="${3:?Missing agent name}"
 TASK="${4:?Missing task description}"
 BRANCH="${5:-fix/${AGENT}-$(date +%s)}"
+shift 5 2>/dev/null || shift $#
+
+# Parse optional flags
+LOG_DIR="~/dev/agent-logs"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --log-dir)
+            LOG_DIR="${2:?--log-dir requires a path}"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
 
 REPO_NAME=$(basename "$REPO_URL" .git)
 WORK_DIR="~/dev/$REPO_NAME"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+LOG_FILE="${REPO_NAME}-${BRANCH//\//-}-${TIMESTAMP}.log"
 
 echo "=== Remote Agent Execution ==="
 echo "Host:   $HOST"
@@ -32,6 +49,7 @@ echo "Repo:   $REPO_NAME"
 echo "Agent:  $AGENT"
 echo "Branch: $BRANCH"
 echo "Task:   $TASK"
+echo "Log:    $LOG_DIR/$LOG_FILE"
 echo ""
 
 # Verify SSH connectivity
@@ -46,6 +64,9 @@ ssh -o ConnectTimeout=5 "$HOST" "echo 'Connected'" || {
 echo "Starting agent on $HOST..."
 ssh "$HOST" bash -s <<REMOTE_SCRIPT
 set -euo pipefail
+
+# Create log directory
+mkdir -p $LOG_DIR
 
 # Ensure repo exists
 if [ ! -d "$WORK_DIR" ]; then
@@ -70,17 +91,24 @@ command -v claude >/dev/null 2>&1 || {
     exit 1
 }
 
-# Run the agent
+# Run the agent with output capture
 echo "Starting claude --agent $AGENT..."
-claude --agent "$AGENT" --dangerously-skip-permissions "$TASK"
+echo "Logging to: $LOG_DIR/$LOG_FILE"
+claude --agent "$AGENT" --dangerously-skip-permissions "$TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
+AGENT_EXIT=\${PIPESTATUS[0]}
 
 # Push the branch
 echo "Pushing branch $BRANCH..."
 git push origin "$BRANCH" 2>/dev/null || echo "Nothing to push (no changes)"
 
+echo ""
+echo "Log saved: $LOG_DIR/$LOG_FILE"
 echo "Done on $HOST"
+exit \$AGENT_EXIT
 REMOTE_SCRIPT
 
+REMOTE_LOG_PATH="$LOG_DIR/$LOG_FILE"
 echo ""
 echo "=== Agent completed on $HOST ==="
+echo "Remote log: $HOST:$REMOTE_LOG_PATH"
 echo "Check: gh pr list -R $(echo $REPO_URL | sed 's/.*://' | sed 's/\.git//')"

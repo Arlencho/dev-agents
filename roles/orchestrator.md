@@ -203,7 +203,18 @@ claude --agent go-backend "task description"
 
 Or use the Agent tool to spawn parallel sub-agents within this session (no SSH needed).
 
+## Issue Routing
+
+When triaging issues, consult `config/routing.yaml` for automatic agent suggestions based on issue labels and title patterns. This saves time on obvious assignments:
+
+- Labels like `agent:go-backend` or `migration` map directly to agents
+- Title patterns like `^fix:.*test` route to `test-engineer`
+
+Use routing as a starting suggestion — override it when context demands a different agent.
+
 ## Output Format (for wave plans)
+
+Every wave plan MUST include a **dispatch-ready plan file** in a fenced code block. This is what gets fed directly to `dispatch.sh`. Format: `WAVE | AGENT | TASK_DESCRIPTION | BRANCH_NAME` (see `docs/plan-file-format.md` for full spec).
 
 ```
 ## Assessment
@@ -219,6 +230,17 @@ Or use the Agent tool to spawn parallel sub-agents within this session (no SSH n
 ## Wave 2 (depends on Wave 1)
   Machine: mac-mini-1
   - [ ] agent-role: "task description" → branch name
+
+## Dispatch Plan
+
+\`\`\`plan
+# Save as plan.txt, then: ./scripts/dispatch.sh <repo-url> plan.txt
+1 | db-architect   | create payments tables migration        | feat/payments-db
+1 | api-designer   | add payment endpoints to OpenAPI spec   | feat/payments-spec
+2 | go-backend     | implement payment service and handlers  | feat/payments-svc
+2 | web-frontend   | build checkout page with Stripe Elements| feat/payments-ui
+3 | test-engineer  | add payment flow integration tests      | feat/payments-tests
+\`\`\`
 
 ## Merge Order
 1. branch-a (no dependencies)

@@ -211,6 +211,36 @@ if [ "$ROLE" = "worker" ]; then
 EOF
     echo "  Machine config saved to ~/.claude/machine-role.json"
 
+    # Auto-register worker in workers.yaml if not already present
+    WORKERS_YAML="$DEV_AGENTS_DIR/config/workers.yaml"
+    if [ -f "$WORKERS_YAML" ]; then
+        if ! grep -q "name: $MACHINE_NAME" "$WORKERS_YAML"; then
+            echo ""
+            echo "  Registering $MACHINE_NAME in workers.yaml..."
+            cat >> "$WORKERS_YAML" <<WORKER_ENTRY
+
+  # Auto-registered by setup-machine.sh on $(date +%Y-%m-%d)
+  - name: $MACHINE_NAME
+    host: $MACHINE_NAME
+    role: worker
+    max_agents: 4
+    preferred_agents:
+      - go-backend
+      - web-frontend
+    notes: "Auto-registered $(date +%Y-%m-%d)"
+WORKER_ENTRY
+            # Commit and push
+            if git -C "$DEV_AGENTS_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+                git -C "$DEV_AGENTS_DIR" add "$WORKERS_YAML"
+                git -C "$DEV_AGENTS_DIR" commit -m "register worker: $MACHINE_NAME" "$WORKERS_YAML" 2>/dev/null || true
+                git -C "$DEV_AGENTS_DIR" push 2>/dev/null || echo "  WARNING: Could not push to remote (push manually later)"
+            fi
+            echo "  Worker registered in workers.yaml"
+        else
+            echo "  $MACHINE_NAME already registered in workers.yaml"
+        fi
+    fi
+
     # Copy Claude memory/settings from orchestrator if available
     echo ""
     echo "  Do you want to sync Claude settings from your MacBook?"
