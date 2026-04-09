@@ -61,18 +61,15 @@ ssh -o ConnectTimeout=5 "$HOST" "echo 'Connected'" || {
     exit 1
 }
 
-# Query learnings and prepend to task
-LEARNINGS=""
-if [ -x "$SCRIPT_DIR/learnings.sh" ]; then
-    LEARNINGS=$("$SCRIPT_DIR/learnings.sh" query "$REPO_NAME" --agent "$AGENT" --limit 10 2>/dev/null || true)
-fi
-if [ -n "$LEARNINGS" ]; then
-    TASK="[LEARNINGS FROM PREVIOUS SESSIONS — avoid repeating these mistakes]
-$LEARNINGS
+# Generate preamble (includes CLAUDE.md, learnings, parallel sessions, git state, issue context)
+PREAMBLE=$("$SCRIPT_DIR/preamble.sh" "$WORK_DIR" "$AGENT" "$BRANCH" 2>/dev/null || true)
+if [ -n "$PREAMBLE" ]; then
+    FULL_TASK="$PREAMBLE
 
-[TASK]
-$TASK"
-    echo "Injected $(echo "$LEARNINGS" | wc -l | tr -d ' ') learnings into prompt"
+YOUR TASK: $TASK"
+    echo "Injected session preamble into prompt"
+else
+    FULL_TASK="$TASK"
 fi
 
 # Copy guardrails to remote
@@ -127,7 +124,7 @@ command -v claude >/dev/null 2>&1 || {
 # Run the agent with output capture
 echo "Starting claude --agent $AGENT..."
 echo "Logging to: $LOG_DIR/$LOG_FILE"
-claude --agent "$AGENT" --dangerously-skip-permissions "$TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
+claude --agent "$AGENT" --dangerously-skip-permissions "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
 AGENT_EXIT=\${PIPESTATUS[0]}
 
 # Push the branch

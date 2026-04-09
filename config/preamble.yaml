@@ -1,0 +1,6 @@
+# Session preamble configuration
+claude_md_max_lines: 200        # Truncate CLAUDE.md after this many lines
+learnings_max: 10               # Max learnings to inject
+show_parallel_sessions: true    # Show other running agents on this machine
+show_git_state: true            # Show current branch + recent commits
+show_issue_context: true        # Fetch issue body if branch has issue number

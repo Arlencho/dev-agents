@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats
+.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -26,6 +26,9 @@ learnings: ## Query learnings (usage: make learnings PROJECT=x)
 
 learnings-stats: ## Show learnings stats across all projects
 	@./scripts/learnings.sh stats
+
+preamble: ## Generate preamble for a project (usage: make preamble REPO=/path AGENT=go-backend BRANCH=feat/x)
+	@./scripts/preamble.sh $(REPO) $(AGENT) $(BRANCH)
 
 lint: ## Check sync + validate YAML
 	@echo "Checking roles/ vs providers/ sync..."
