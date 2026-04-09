@@ -5,8 +5,8 @@
 blocked:
   - "rm -rf /$"
   - "rm -rf ~"
-  - "rm -rf /\\*"
-  - "rm -rf \\.$"
+  - "rm -rf /[*]"
+  - "rm -rf [.]$"
   - "DROP DATABASE"
   - "DROP SCHEMA"
   - "TRUNCATE.*CASCADE"
