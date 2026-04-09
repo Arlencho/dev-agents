@@ -54,6 +54,7 @@ usage() {
     echo "Flags:"
     echo "  --auto                       Auto-continue between waves (no prompt)"
     echo "  --retries N                  Max retries per task (default: 2)"
+    echo "  --review                     Run autoplan review before dispatching"
     echo "  --retry-on-different-worker  Retry failed tasks on a different worker"
     echo ""
     echo "Plan file format:"
@@ -75,6 +76,7 @@ shift 2
 AUTO_CONTINUE=false
 MAX_RETRIES=2
 RETRY_DIFFERENT_WORKER=false
+REVIEW_PLAN=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -85,6 +87,10 @@ while [ $# -gt 0 ]; do
         --retries)
             MAX_RETRIES="${2:?--retries requires a number}"
             shift 2
+            ;;
+        --review)
+            REVIEW_PLAN=true
+            shift
             ;;
         --retry-on-different-worker)
             RETRY_DIFFERENT_WORKER=true
@@ -99,6 +105,15 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# --------------------------------------------------
+# Autoplan review gate
+# --------------------------------------------------
+if [ "$REVIEW_PLAN" = true ] && [ "$PLAN_SOURCE" != "--interactive" ]; then
+    echo "Running autoplan review..."
+    "$SCRIPT_DIR/autoplan.sh" "$PLAN_SOURCE" || { echo "Plan review failed."; exit 1; }
+    echo ""
+fi
 
 # --------------------------------------------------
 # Parse workers.yaml (simple grep-based — no yq dependency)

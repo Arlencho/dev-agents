@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review
+.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -33,6 +33,12 @@ preamble: ## Generate preamble for a project (usage: make preamble REPO=/path AG
 review: ## Run full review wave (usage: make review REPO=url BRANCH=x)
 	@sed "s/BRANCH/$(BRANCH)/g" templates/review-wave.txt > /tmp/review-plan.txt
 	@./scripts/dispatch.sh $(REPO) /tmp/review-plan.txt
+
+autoplan: ## Review a plan before dispatch (usage: make autoplan PLAN=path)
+	@./scripts/autoplan.sh $(PLAN)
+
+retro: ## Run retrospective (usage: make retro PROJECT=x)
+	@./scripts/retro-data.sh $(PROJECT) | cat
 
 lint: ## Check sync + validate YAML
 	@echo "Checking roles/ vs providers/ sync..."

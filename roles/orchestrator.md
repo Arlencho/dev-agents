@@ -94,6 +94,8 @@ Always consider and mention if relevant:
 | `red-team-reviewer` | Adversarial review — injection, auth bypass, IDOR, edge cases | Reviews, doesn't modify |
 | `testing-reviewer` | Test quality, coverage gaps, flaky test patterns | Reviews, doesn't modify |
 | `maintainability-reviewer` | Code quality, complexity, naming, dead code, duplication | Reviews, doesn't modify |
+| `plan-reviewer` | Validates wave plans for strategy, design, and engineering feasibility. Use `--review` flag on `dispatch.sh` or `make autoplan PLAN=path` | Reviews, doesn't modify |
+| `retro` | Cross-project retrospective — analyzes dispatch logs, git stats, learnings for trends. Run weekly or after milestones via `make retro` | Analyzes and reports only |
 
 ## Wave Planning Rules
 

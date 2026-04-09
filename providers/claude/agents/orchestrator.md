@@ -87,6 +87,15 @@ Always consider and mention if relevant:
 | `security-reviewer` | Security audit, vulnerability check | Reviews, doesn't modify |
 | `seo-auditor` | SEO, meta tags, structured data | Public web pages only |
 | `tech-scout` | AI tooling updates, workflow improvements | Research, doesn't modify |
+| `investigate` | Structured debugging with 3-strike escalation. Use for persistent bugs, production incidents, flaky tests. | Bug being investigated |
+| `api-reviewer` | API contract correctness, versioning, backward compat | Reviews, doesn't modify |
+| `migration-reviewer` | DB migration safety, rollback capability, data loss risk | Reviews, doesn't modify |
+| `perf-reviewer` | Performance regressions, N+1 queries, unbounded queries | Reviews, doesn't modify |
+| `red-team-reviewer` | Adversarial review — injection, auth bypass, IDOR, edge cases | Reviews, doesn't modify |
+| `testing-reviewer` | Test quality, coverage gaps, flaky test patterns | Reviews, doesn't modify |
+| `maintainability-reviewer` | Code quality, complexity, naming, dead code, duplication | Reviews, doesn't modify |
+| `plan-reviewer` | Validates wave plans for strategy, design, and engineering feasibility. Use `--review` flag on `dispatch.sh` or `make autoplan PLAN=path` | Reviews, doesn't modify |
+| `retro` | Cross-project retrospective — analyzes dispatch logs, git stats, learnings for trends. Run weekly or after milestones via `make retro` | Analyzes and reports only |
 
 ## Wave Planning Rules
 
@@ -203,7 +212,18 @@ claude --agent go-backend "task description"
 
 Or use the Agent tool to spawn parallel sub-agents within this session (no SSH needed).
 
+## Issue Routing
+
+When triaging issues, consult `config/routing.yaml` for automatic agent suggestions based on issue labels and title patterns. This saves time on obvious assignments:
+
+- Labels like `agent:go-backend` or `migration` map directly to agents
+- Title patterns like `^fix:.*test` route to `test-engineer`
+
+Use routing as a starting suggestion — override it when context demands a different agent.
+
 ## Output Format (for wave plans)
+
+Every wave plan MUST include a **dispatch-ready plan file** in a fenced code block. This is what gets fed directly to `dispatch.sh`. Format: `WAVE | AGENT | TASK_DESCRIPTION | BRANCH_NAME` (see `docs/plan-file-format.md` for full spec).
 
 ```
 ## Assessment
@@ -219,6 +239,17 @@ Or use the Agent tool to spawn parallel sub-agents within this session (no SSH n
 ## Wave 2 (depends on Wave 1)
   Machine: mac-mini-1
   - [ ] agent-role: "task description" → branch name
+
+## Dispatch Plan
+
+\`\`\`plan
+# Save as plan.txt, then: ./scripts/dispatch.sh <repo-url> plan.txt
+1 | db-architect   | create payments tables migration        | feat/payments-db
+1 | api-designer   | add payment endpoints to OpenAPI spec   | feat/payments-spec
+2 | go-backend     | implement payment service and handlers  | feat/payments-svc
+2 | web-frontend   | build checkout page with Stripe Elements| feat/payments-ui
+3 | test-engineer  | add payment flow integration tests      | feat/payments-tests
+\`\`\`
 
 ## Merge Order
 1. branch-a (no dependencies)

@@ -23,6 +23,8 @@ provider_preferences:
   red-team-reviewer: claude
   testing-reviewer: claude
   maintainability-reviewer: claude
+  plan-reviewer: claude
+  retro: claude
   default: claude
 
 machines:
