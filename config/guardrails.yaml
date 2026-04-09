@@ -1,0 +1,33 @@
+# Safety guardrails for unattended agent execution
+# Used by scripts/guardrails.sh
+
+# Commands that are BLOCKED (agent exits with code 77)
+blocked:
+  - "rm -rf /$"
+  - "rm -rf ~"
+  - "rm -rf /\\*"
+  - "rm -rf \\.$"
+  - "DROP DATABASE"
+  - "DROP SCHEMA"
+  - "TRUNCATE.*CASCADE"
+  - "git push --force origin main"
+  - "git push --force origin master"
+  - "git push -f origin main"
+  - "git push -f origin master"
+  - "git reset --hard origin/main"
+  - "chmod 777"
+  - "chmod -R 777"
+  - ":(){ :|:& };:"
+  - "mkfs"
+  - "dd if=/dev"
+
+# Commands that are WARNED (logged but allowed)
+warned:
+  - "rm -rf"
+  - "git push --force"
+  - "git reset --hard"
+  - "DROP TABLE"
+  - "TRUNCATE"
+  - "sudo"
+  - "git checkout -- ."
+  - "git clean -fd"

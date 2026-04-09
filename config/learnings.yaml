@@ -1,0 +1,10 @@
+# Learnings system configuration
+# Agents accumulate failures and discoveries across sessions.
+# These get injected into future prompts to avoid repeating mistakes.
+
+# Max learnings injected into agent prompts
+max_inject: 10
+# Max age before pruning (days)
+max_age_days: 90
+# Severity filter for injection (include these and above)
+min_severity: low  # low, medium, high

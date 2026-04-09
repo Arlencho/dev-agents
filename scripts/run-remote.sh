@@ -38,6 +38,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_NAME=$(basename "$REPO_URL" .git)
 WORK_DIR="~/dev/$REPO_NAME"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
@@ -59,6 +60,33 @@ ssh -o ConnectTimeout=5 "$HOST" "echo 'Connected'" || {
     echo "Make sure SSH key is configured: ssh-copy-id $HOST"
     exit 1
 }
+
+# Query learnings and prepend to task
+LEARNINGS=""
+if [ -x "$SCRIPT_DIR/learnings.sh" ]; then
+    LEARNINGS=$("$SCRIPT_DIR/learnings.sh" query "$REPO_NAME" --agent "$AGENT" --limit 10 2>/dev/null || true)
+fi
+if [ -n "$LEARNINGS" ]; then
+    TASK="[LEARNINGS FROM PREVIOUS SESSIONS — avoid repeating these mistakes]
+$LEARNINGS
+
+[TASK]
+$TASK"
+    echo "Injected $(echo "$LEARNINGS" | wc -l | tr -d ' ') learnings into prompt"
+fi
+
+# Copy guardrails to remote
+GUARDRAILS_SCRIPT="$SCRIPT_DIR/guardrails.sh"
+GUARDRAILS_CONFIG="$SCRIPT_DIR/../config/guardrails.yaml"
+if [ -f "$GUARDRAILS_SCRIPT" ] && [ -f "$GUARDRAILS_CONFIG" ]; then
+    echo "Copying guardrails to $HOST..."
+    ssh "$HOST" "mkdir -p ~/dev/guardrails/config"
+    scp -q "$GUARDRAILS_SCRIPT" "$HOST:~/dev/guardrails/guardrails.sh"
+    scp -q "$GUARDRAILS_CONFIG" "$HOST:~/dev/guardrails/config/guardrails.yaml"
+    ssh "$HOST" "chmod +x ~/dev/guardrails/guardrails.sh"
+else
+    echo "WARNING: Guardrails not found locally, skipping safety hooks"
+fi
 
 # Execute on remote
 echo "Starting agent on $HOST..."
@@ -84,6 +112,11 @@ git checkout main
 git pull origin main
 git checkout -b "$BRANCH"
 
+# Install guardrails git hooks
+if [ -x ~/dev/guardrails/guardrails.sh ]; then
+    ~/dev/guardrails/guardrails.sh install "$WORK_DIR"
+fi
+
 # Verify claude is installed
 command -v claude >/dev/null 2>&1 || {
     echo "ERROR: Claude Code not installed on $HOST"
@@ -107,7 +140,18 @@ echo "Done on $HOST"
 exit \$AGENT_EXIT
 REMOTE_SCRIPT
 
+REMOTE_EXIT=$?
 REMOTE_LOG_PATH="$LOG_DIR/$LOG_FILE"
+
+# On failure, auto-record a learning from the last 3 log lines
+if [ "$REMOTE_EXIT" -ne 0 ] && [ -x "$SCRIPT_DIR/learnings.sh" ]; then
+    FAIL_TAIL=$(ssh "$HOST" "tail -3 $LOG_DIR/$LOG_FILE 2>/dev/null" || echo "no log available")
+    "$SCRIPT_DIR/learnings.sh" add "$REPO_NAME" "$AGENT" failure \
+        "Agent exited $REMOTE_EXIT. Last output: $FAIL_TAIL" \
+        --severity medium 2>/dev/null || true
+    echo "Recorded failure learning for $REPO_NAME/$AGENT"
+fi
+
 echo ""
 echo "=== Agent completed on $HOST ==="
 echo "Remote log: $HOST:$REMOTE_LOG_PATH"

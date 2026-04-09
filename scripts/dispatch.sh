@@ -525,6 +525,11 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             wave_success=$((wave_success + 1))
             echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$idx]} completed in ${duration}s"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "success" 2>/dev/null || true
+        elif [ $status -eq 77 ]; then
+            RESULT_STATUS[$idx]="BLOCKED"
+            FAILED_TASKS[$idx]=0
+            echo -e "  ${RED}■${NC} ${TASK_AGENT[$idx]} ${RED}BLOCKED by guardrails${NC} after ${duration}s (not retryable)"
+            [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "blocked" 2>/dev/null || true
         else
             RESULT_STATUS[$idx]="failed"
             FAILED_TASKS[$idx]=0
@@ -539,6 +544,11 @@ for wave_num in "${SORTED_WAVES[@]}"; do
         echo -e "${YELLOW}Retrying failed tasks (max $MAX_RETRIES retries)...${NC}"
 
         for idx in "${!FAILED_TASKS[@]}"; do
+            # Skip BLOCKED tasks — guardrail violations are not retryable
+            if [ "${RESULT_STATUS[$idx]}" = "BLOCKED" ]; then
+                echo -e "  ${RED}■${NC} ${TASK_AGENT[$idx]} — skipping retry (BLOCKED by guardrails)"
+                continue
+            fi
             local_attempts=0
             while [ $local_attempts -lt "$MAX_RETRIES" ]; do
                 local_attempts=$((local_attempts + 1))

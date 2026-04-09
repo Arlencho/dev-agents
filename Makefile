@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint
+.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -20,6 +20,12 @@ setup: ## Run machine setup
 
 notify: ## Test notification (usage: make notify AGENT=go-backend WORKER=mac-mini-1 BRANCH=feat/test STATUS=success)
 	@./scripts/notify.sh $(AGENT) $(WORKER) $(BRANCH) $(STATUS)
+
+learnings: ## Query learnings (usage: make learnings PROJECT=x)
+	@./scripts/learnings.sh query $(PROJECT)
+
+learnings-stats: ## Show learnings stats across all projects
+	@./scripts/learnings.sh stats
 
 lint: ## Check sync + validate YAML
 	@echo "Checking roles/ vs providers/ sync..."
