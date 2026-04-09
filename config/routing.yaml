@@ -21,6 +21,13 @@ label_routes:
   "investigate": investigate
   "incident": investigate
   "flaky": investigate
+  "review:api": api-reviewer
+  "review:migration": migration-reviewer
+  "review:perf": perf-reviewer
+  "review:security": security-reviewer
+  "review:red-team": red-team-reviewer
+  "review:testing": testing-reviewer
+  "review:maintainability": maintainability-reviewer
 
 # Title pattern routing: regex match on issue title (first match wins)
 title_patterns:

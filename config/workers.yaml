@@ -17,6 +17,12 @@ provider_preferences:
   mobile: claude
   tech-scout: claude
   investigate: claude
+  api-reviewer: claude
+  migration-reviewer: claude
+  perf-reviewer: claude
+  red-team-reviewer: claude
+  testing-reviewer: claude
+  maintainability-reviewer: claude
   default: claude
 
 machines:

@@ -88,6 +88,12 @@ Always consider and mention if relevant:
 | `seo-auditor` | SEO, meta tags, structured data | Public web pages only |
 | `tech-scout` | AI tooling updates, workflow improvements | Research, doesn't modify |
 | `investigate` | Structured debugging with 3-strike escalation. Use for persistent bugs, production incidents, flaky tests. | Bug being investigated |
+| `api-reviewer` | API contract correctness, versioning, backward compat | Reviews, doesn't modify |
+| `migration-reviewer` | DB migration safety, rollback capability, data loss risk | Reviews, doesn't modify |
+| `perf-reviewer` | Performance regressions, N+1 queries, unbounded queries | Reviews, doesn't modify |
+| `red-team-reviewer` | Adversarial review — injection, auth bypass, IDOR, edge cases | Reviews, doesn't modify |
+| `testing-reviewer` | Test quality, coverage gaps, flaky test patterns | Reviews, doesn't modify |
+| `maintainability-reviewer` | Code quality, complexity, naming, dead code, duplication | Reviews, doesn't modify |
 
 ## Wave Planning Rules
 

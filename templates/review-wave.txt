@@ -1,0 +1,10 @@
+# Review Wave -- dispatch all 7 reviewers in parallel
+# Usage: ./scripts/dispatch.sh <repo-url> templates/review-wave.txt
+# Replace BRANCH with the actual branch name
+1 | security-reviewer        | Review branch BRANCH for security vulnerabilities         | review/security-BRANCH
+1 | api-reviewer             | Review branch BRANCH for API contract issues              | review/api-BRANCH
+1 | migration-reviewer       | Review branch BRANCH for migration safety                 | review/migration-BRANCH
+1 | perf-reviewer            | Review branch BRANCH for performance regressions          | review/perf-BRANCH
+1 | red-team-reviewer        | Adversarial review of branch BRANCH                       | review/redteam-BRANCH
+1 | testing-reviewer         | Review branch BRANCH for test quality and coverage gaps   | review/testing-BRANCH
+1 | maintainability-reviewer | Review branch BRANCH for code quality                     | review/maintain-BRANCH
