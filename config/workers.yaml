@@ -16,6 +16,7 @@ provider_preferences:
   seo-auditor: claude
   mobile: claude
   tech-scout: claude
+  investigate: claude
   default: claude
 
 machines:

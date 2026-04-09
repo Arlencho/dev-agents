@@ -87,6 +87,7 @@ Always consider and mention if relevant:
 | `security-reviewer` | Security audit, vulnerability check | Reviews, doesn't modify |
 | `seo-auditor` | SEO, meta tags, structured data | Public web pages only |
 | `tech-scout` | AI tooling updates, workflow improvements | Research, doesn't modify |
+| `investigate` | Structured debugging with 3-strike escalation. Use for persistent bugs, production incidents, flaky tests. | Bug being investigated |
 
 ## Wave Planning Rules
 

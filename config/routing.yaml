@@ -17,6 +17,10 @@ label_routes:
   "performance": performance-engineer
   "documentation": docs-writer
   "compliance": production-auditor
+  "bug": investigate
+  "investigate": investigate
+  "incident": investigate
+  "flaky": investigate
 
 # Title pattern routing: regex match on issue title (first match wins)
 title_patterns:
@@ -24,3 +28,6 @@ title_patterns:
   "^docs:": docs-writer
   "^feat:.*api": api-designer
   "^perf:": performance-engineer
+  "^bug:": investigate
+  "^debug:": investigate
+  "^fix:.*flaky": investigate
