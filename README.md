@@ -15,7 +15,7 @@ cd dev-agents
 ./scripts/setup-machine.sh
 ```
 
-This installs Homebrew, Go, Node, Docker, Claude Code, bootstraps all 11 agents, and authenticates GitHub + GCP. Interactive — prompts for logins. Run once per machine, never again.
+This installs Homebrew, Go, Node, Docker, Claude Code, bootstraps all 12 agents, and authenticates GitHub + GCP. Interactive — prompts for logins. Run once per machine, never again.
 
 ### Existing machine (agents only)
 ```bash
@@ -39,7 +39,8 @@ dev-agents/
 │   ├── orchestrator.md       # Meta-agent — plans, delegates, tracks
 │   ├── tech-scout.md         # AI tooling monitor — competitive intelligence
 │   ├── security-reviewer.md  # Security auditor — PR review, vulnerability scanning
-│   └── seo-auditor.md        # SEO auditor — meta tags, structured data, Core Web Vitals
+│   ├── seo-auditor.md        # SEO auditor — meta tags, structured data, Core Web Vitals
+│   └── analytics-agent.md    # Data analyst — profiling, correlation, quality scoring, recommendations
 ├── templates/                # Project CLAUDE.md templates
 │   ├── go-nextjs.md # Go + Next.js full-stack template
 │   └── python-fastapi.md     # Python FastAPI service template
@@ -76,6 +77,7 @@ dev-agents/
 | `tech-scout` | Competitive intelligence | Monitors AI tooling releases, suggests workflow improvements |
 | `security-reviewer` | Security auditor | Reviews code for vulnerabilities, compliance, best practices |
 | `seo-auditor` | SEO auditor | Audits pages for meta tags, structured data, Core Web Vitals |
+| `analytics-agent` | Data analyst | Profiles data sources, correlates across systems, scores data quality, recommends fixes with evidence |
 
 ## When to Use Which Agent
 
@@ -279,3 +281,9 @@ Templates provide a pre-configured `CLAUDE.md` for common project types:
 | OpenAI | Placeholder | TBD |
 | Cursor | Placeholder | `.cursorrules` files |
 | Grok | Placeholder | TBD |
+
+## Real-World Use
+
+The `analytics-agent` was used to audit a production data platform (256K+ events across 6 Swedish government APIs). First audit scored the platform **34/100** on data quality and identified 10 specific gaps — municipality misattribution, polluted reference data, missing confidence indicators. The orchestrator then delegated fixes to the other agents in parallel waves. After three waves of parallel work, the re-score was **83.5/100**.
+
+The point isn't the score — it's that the agents found problems a human code review would have missed (a 57% misattribution rate hidden by a working-looking pipeline) and produced fixes that actually moved the number.
