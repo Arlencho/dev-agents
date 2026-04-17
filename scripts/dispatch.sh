@@ -345,7 +345,7 @@ FORMAT=$(detect_wave_format "${TASKS[0]}")
 # Build associative arrays for waves
 # WAVE_TASKS[wave_num] = "idx1,idx2,idx3" (indices into parallel arrays)
 declare -A WAVE_TASKS
-declare -a TASK_WAVE TASK_AGENT TASK_DESC TASK_BRANCH
+declare -a TASK_WAVE TASK_AGENT TASK_DESC TASK_BRANCH TASK_MODEL
 
 for i in "${!TASKS[@]}"; do
     task_line="${TASKS[$i]}"
@@ -369,6 +369,9 @@ for i in "${!TASKS[@]}"; do
     TASK_AGENT[$i]="$agent"
     TASK_DESC[$i]="$desc"
     TASK_BRANCH[$i]="$branch"
+    # Cache the model tier once per task — avoids re-parsing routing.yaml
+    # on every row of the exec-log and summary report loops.
+    TASK_MODEL[$i]="$(get_model "$agent")"
 
     if [ -n "${WAVE_TASKS[$wave]:-}" ]; then
         WAVE_TASKS[$wave]="${WAVE_TASKS[$wave]},$i"
@@ -481,8 +484,7 @@ dispatch_task() {
     local provider
     provider=$(get_provider "$agent")
 
-    local model
-    model=$(get_model "$agent")
+    local model="${TASK_MODEL[$idx]:-}"
 
     local is_preferred=""
     preferred=$(get_preferred_agents "$wname")
@@ -778,7 +780,7 @@ EXEC_LOG="$WAVE_PLANS_DIR/${REPO_SLUG_SHORT}-${PLAN_DATE}.log"
     printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s %-25s %s\n" "---" "----" "-----------------" "-------" "-----------------------------" "-------------" "---------" "------------------------" "---"
     for i in "${!TASK_AGENT[@]}"; do
         printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s %-25s %s\n" \
-            "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "$(get_model "${TASK_AGENT[$i]}")" "${TASK_BRANCH[$i]}" \
+            "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "${TASK_MODEL[$i]:-}" "${TASK_BRANCH[$i]}" \
             "${RESULT_WORKER[$i]:-n/a}" "${RESULT_DURATION[$i]:-n/a}" \
             "${RESULT_STATUS[$i]:-unknown}" "${RESULT_LOG[$i]:-none}"
     done
@@ -817,7 +819,7 @@ for i in "${!TASK_AGENT[@]}"; do
     log_path="${RESULT_LOG[$i]:-none}"
     [ "$log_path" != "none" ] && log_path="$(basename "$log_path")"
     printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s " \
-        "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "$(get_model "${TASK_AGENT[$i]}")" "${TASK_BRANCH[$i]}" \
+        "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "${TASK_MODEL[$i]:-}" "${TASK_BRANCH[$i]}" \
         "${RESULT_WORKER[$i]:-n/a}" "${RESULT_DURATION[$i]:-n/a}"
     echo -e "$status_colored  $log_path"
 done
