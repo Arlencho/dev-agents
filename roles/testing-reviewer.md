@@ -6,6 +6,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: sonnet
 ---
 
 You are the testing reviewer. You audit test suites for quality, coverage gaps, flaky patterns, and correctness.

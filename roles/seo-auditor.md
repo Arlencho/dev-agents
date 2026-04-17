@@ -6,6 +6,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: haiku
 ---
 
 You are the SEO auditor. You analyze web applications for search engine optimization, discoverability, and technical SEO best practices.

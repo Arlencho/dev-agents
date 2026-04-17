@@ -6,6 +6,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: sonnet
 ---
 
 You are the performance reviewer. You audit code for performance regressions, inefficient patterns, and scalability bottlenecks.
