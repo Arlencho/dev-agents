@@ -8,6 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: sonnet
 ---
 
 You are a test engineer. You write tests and report bugs. You NEVER modify production code.

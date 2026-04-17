@@ -1,6 +1,54 @@
 # Issue-to-Agent Routing Table
 # Auto-suggest the right agent based on issue labels or title patterns.
 # Used by the orchestrator to quickly route incoming issues.
+#
+# Also defines model tier routing per agent — dispatch.sh reads model_routing
+# to pick the right Claude tier for each role.
+
+# Model tier routing per agent role.
+# Uses tier aliases (opus/sonnet/haiku) so config stays current across
+# releases automatically. Only pin exact IDs (e.g. claude-opus-4-7) when
+# reproducibility is required — migration tests, regression bisects, benchmarks.
+#
+# Tier guidance:
+#   opus   — strategic/judgment-heavy: planning, adversarial review, cross-project analysis
+#   sonnet — implementation and routine review (default for dev work)
+#   haiku  — lightweight, mechanical, or high-volume tasks
+model_routing:
+  # High-reasoning roles — flagship tier
+  orchestrator:              opus
+  plan-reviewer:             opus
+  red-team-reviewer:         opus
+  retro:                     opus
+  security-reviewer:         opus
+  production-auditor:        opus
+  investigate:               opus
+
+  # Implementation and routine-review roles — balanced tier
+  go-backend:                sonnet
+  web-frontend:              sonnet
+  mobile:                    sonnet
+  db-architect:              sonnet
+  api-designer:              sonnet
+  devops:                    sonnet
+  test-engineer:             sonnet
+  data-engineer:             sonnet
+  performance-engineer:      sonnet
+  release-manager:           sonnet
+  tech-scout:                sonnet
+  analytics-agent:           sonnet
+  api-reviewer:              sonnet
+  migration-reviewer:        sonnet
+  perf-reviewer:             sonnet
+  testing-reviewer:          sonnet
+  maintainability-reviewer:  sonnet
+
+  # Lightweight roles — cheapest tier
+  docs-writer:               haiku
+  seo-auditor:               haiku
+
+  # Default when a role isn't listed above
+  default:                   sonnet
 
 # Label-based routing: exact match on GitHub issue labels
 label_routes:

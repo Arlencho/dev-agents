@@ -26,10 +26,17 @@ shift 5 2>/dev/null || shift $#
 
 # Parse optional flags
 LOG_DIR="~/dev/agent-logs"
+# Model tier or ID, set by dispatch.sh via AGENT_MODEL env var (e.g. opus,
+# sonnet, haiku, or an explicit model ID). Empty means use claude's default.
+MODEL="${AGENT_MODEL:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --log-dir)
             LOG_DIR="${2:?--log-dir requires a path}"
+            shift 2
+            ;;
+        --model)
+            MODEL="${2:?--model requires a value}"
             shift 2
             ;;
         *)
@@ -37,6 +44,13 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# Build --model flag for the remote claude invocation (empty if not set)
+if [ -n "$MODEL" ]; then
+    MODEL_FLAG="--model $MODEL"
+else
+    MODEL_FLAG=""
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_NAME=$(basename "$REPO_URL" .git)
@@ -48,6 +62,7 @@ echo "=== Remote Agent Execution ==="
 echo "Host:   $HOST"
 echo "Repo:   $REPO_NAME"
 echo "Agent:  $AGENT"
+echo "Model:  ${MODEL:-default}"
 echo "Branch: $BRANCH"
 echo "Task:   $TASK"
 echo "Log:    $LOG_DIR/$LOG_FILE"
@@ -122,9 +137,9 @@ command -v claude >/dev/null 2>&1 || {
 }
 
 # Run the agent with output capture
-echo "Starting claude --agent $AGENT..."
+echo "Starting claude --agent $AGENT ${MODEL_FLAG}..."
 echo "Logging to: $LOG_DIR/$LOG_FILE"
-claude --agent "$AGENT" --dangerously-skip-permissions "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
+claude --agent "$AGENT" ${MODEL_FLAG} --dangerously-skip-permissions "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
 AGENT_EXIT=\${PIPESTATUS[0]}
 
 # Push the branch

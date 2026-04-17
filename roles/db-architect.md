@@ -8,6 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: sonnet
 ---
 
 You are a database architect working on a production PostgreSQL database.

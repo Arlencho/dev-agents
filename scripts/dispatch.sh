@@ -221,6 +221,43 @@ get_provider() {
 }
 
 # --------------------------------------------------
+# Get model tier for an agent from routing.yaml
+# Returns tier alias (opus/sonnet/haiku) or explicit model ID.
+# Returns empty string if no routing config — caller should skip --model
+# and let claude use its default.
+# --------------------------------------------------
+get_model() {
+    local agent="$1"
+    [ -f "$ROUTING_CONFIG" ] || { echo ""; return; }
+    local in_routing=false
+    local default_model=""
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// /}" ]] && continue
+
+        if [[ "$line" =~ ^[[:space:]]*model_routing: ]]; then
+            in_routing=true
+            continue
+        fi
+        if [ "$in_routing" = true ]; then
+            # Stop when we hit a non-indented line (next top-level key)
+            if [[ "$line" =~ ^[a-zA-Z] ]]; then
+                in_routing=false
+                continue
+            fi
+            if [[ "$line" =~ ^[[:space:]]*${agent}:[[:space:]]*(.*) ]]; then
+                echo "${BASH_REMATCH[1]}"
+                return
+            fi
+            if [[ "$line" =~ ^[[:space:]]*default:[[:space:]]*(.*) ]]; then
+                default_model="${BASH_REMATCH[1]}"
+            fi
+        fi
+    done < "$ROUTING_CONFIG"
+    echo "$default_model"
+}
+
+# --------------------------------------------------
 # Load workers
 # --------------------------------------------------
 if [ ! -f "$CONFIG" ]; then
@@ -444,20 +481,25 @@ dispatch_task() {
     local provider
     provider=$(get_provider "$agent")
 
+    local model
+    model=$(get_model "$agent")
+
     local is_preferred=""
     preferred=$(get_preferred_agents "$wname")
     if ! echo "$preferred" | grep -q "^${agent}$"; then
         is_preferred=" (round-robin)"
     fi
 
-    echo -e "  ${CYAN}→${NC} $wname ($whost): ${BOLD}$agent${NC} [${provider}] — \"$task\" [$branch]$is_preferred" >&2
+    local model_label="${model:-default}"
+    echo -e "  ${CYAN}→${NC} $wname ($whost): ${BOLD}$agent${NC} [${provider}/${model_label}] — \"$task\" [$branch]$is_preferred" >&2
 
     RESULT_WORKER[$idx]="$wname"
     RESULT_BRANCH[$idx]="$branch"
 
-    # Run in subshell to capture exit code
+    # Run in subshell to capture exit code. Pass model via env var so
+    # run-remote.sh can forward --model to the remote claude invocation.
     (
-        "$SCRIPT_DIR/run-remote.sh" "$whost" "$REPO_URL" "$agent" "$task" "$branch"
+        AGENT_MODEL="$model" "$SCRIPT_DIR/run-remote.sh" "$whost" "$REPO_URL" "$agent" "$task" "$branch"
     ) &
     echo $!
 }
@@ -732,11 +774,11 @@ EXEC_LOG="$WAVE_PLANS_DIR/${REPO_SLUG_SHORT}-${PLAN_DATE}.log"
     echo "# Execution log for $REPO_SLUG_SHORT — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "# Repo: $REPO_URL"
     echo ""
-    printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s %s\n" "#" "Wave" "Agent" "Branch" "Worker" "Duration" "Status" "Log"
-    printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s %s\n" "---" "----" "-----------------" "-----------------------------" "-------------" "---------" "------------------------" "---"
+    printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s %-25s %s\n" "#" "Wave" "Agent" "Model" "Branch" "Worker" "Duration" "Status" "Log"
+    printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s %-25s %s\n" "---" "----" "-----------------" "-------" "-----------------------------" "-------------" "---------" "------------------------" "---"
     for i in "${!TASK_AGENT[@]}"; do
-        printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s %s\n" \
-            "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "${TASK_BRANCH[$i]}" \
+        printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s %-25s %s\n" \
+            "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "$(get_model "${TASK_AGENT[$i]}")" "${TASK_BRANCH[$i]}" \
             "${RESULT_WORKER[$i]:-n/a}" "${RESULT_DURATION[$i]:-n/a}" \
             "${RESULT_STATUS[$i]:-unknown}" "${RESULT_LOG[$i]:-none}"
     done
@@ -762,8 +804,8 @@ echo -e "Tasks: ${GREEN}$TOTAL_SUCCESS/$TOTAL_TASKS succeeded${NC}, ${RED}$TOTAL
 echo ""
 
 # Per-task report
-printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s %s\n" "#" "Wave" "Agent" "Branch" "Worker" "Duration" "Status" "Log"
-printf "%-4s %-5s %-18s %-30s %-14s %-10s %-25s %s\n" "---" "----" "-----------------" "-----------------------------" "-------------" "---------" "------------------------" "---"
+printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s %-25s %s\n" "#" "Wave" "Agent" "Model" "Branch" "Worker" "Duration" "Status" "Log"
+printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s %-25s %s\n" "---" "----" "-----------------" "-------" "-----------------------------" "-------------" "---------" "------------------------" "---"
 
 for i in "${!TASK_AGENT[@]}"; do
     status="${RESULT_STATUS[$i]:-unknown}"
@@ -774,8 +816,8 @@ for i in "${!TASK_AGENT[@]}"; do
     fi
     log_path="${RESULT_LOG[$i]:-none}"
     [ "$log_path" != "none" ] && log_path="$(basename "$log_path")"
-    printf "%-4s %-5s %-18s %-30s %-14s %-10s " \
-        "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "${TASK_BRANCH[$i]}" \
+    printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s " \
+        "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "$(get_model "${TASK_AGENT[$i]}")" "${TASK_BRANCH[$i]}" \
         "${RESULT_WORKER[$i]:-n/a}" "${RESULT_DURATION[$i]:-n/a}"
     echo -e "$status_colored  $log_path"
 done
