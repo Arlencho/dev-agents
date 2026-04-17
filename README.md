@@ -6,6 +6,29 @@ Portable, project-agnostic, provider-agnostic role definitions and tooling for A
 
 A complete toolkit for running multiple AI coding agents in parallel across machines and projects. Defines agent roles, project templates, orchestration scripts, and multi-machine runners. Works with Claude Code today, designed to support OpenAI, Cursor, Grok, and others.
 
+## What's New in v2 (April 2026)
+
+Aligned the harness with the current Anthropic / Claude Code ecosystem (see `docs/retros/` for the research that drove this). Changes are additive — existing plans and scripts keep working.
+
+- **Per-role model tier routing** (`config/routing.yaml` → `model_routing:`). Each role is pinned to `opus`, `sonnet`, or `haiku`. `dispatch.sh` reads this and forwards `--model <tier>` to the remote `claude` invocation. Published reference point: ~51% cost reduction vs. uniform Opus.
+- **Tier aliases, not version IDs.** Uses `opus` / `sonnet` / `haiku` so config doesn't churn when Anthropic ships a new version. Pin exact IDs (e.g. `claude-opus-4-7`) only when you need reproducibility (migration tests, benchmarks, regression bisects).
+- **Dual-use role files.** `roles/*.md` now carry a `model:` field in their YAML frontmatter. The SSH harness still treats `config/routing.yaml` as the source of truth, but the files are now directly consumable as native Claude Code subagents on any single machine.
+- **Exec logs record the tier used.** The per-task log in `wave-plans/*.log` and the final summary from `dispatch.sh` now include the model column — so `retro` can analyze cost/quality per tier.
+
+### Revert / roll back
+
+Every change is a separate commit on `feat/v2-anthropic-alignment`. To revert:
+- **Full rollback:** `git checkout main` (v2 lives on the feature branch; `main` is untouched until you merge)
+- **Revert one change:** `git revert <commit-sha>` — commits are independent
+- **Disable model routing without reverting:** delete or comment out the `model_routing:` block in `config/routing.yaml`. `get_model()` returns empty, `run-remote.sh` omits `--model`, and `claude` uses its default.
+
+### Known follow-ups (deferred from this round)
+
+- **Preamble prompt caching.** Needs refactoring how context is delivered to `claude` (currently concatenated into the user prompt). Claude Code auto-caches the system prompt and `CLAUDE.md` but not the user-prompt preamble.
+- **Replace `guardrails.sh` regex scanning with `PreToolUse` hooks** for deterministic pre-execution blocking.
+- **Idempotency keys on retries** in `dispatch.sh` to prevent double-commits on retried tasks.
+- **MCP memory server** for cross-agent state within a wave (currently state only flows via git).
+
 ## Quick Setup
 
 ### New machine (full setup — installs everything)
