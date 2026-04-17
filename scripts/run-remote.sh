@@ -136,7 +136,12 @@ command -v claude >/dev/null 2>&1 || {
     exit 1
 }
 
-# Run the agent with output capture
+# Run the agent with output capture.
+# MODEL_FLAG is deliberately unquoted so that when empty it contributes
+# zero args, and when set (e.g. "--model sonnet") word-splits into two.
+# A bash array would be cleaner but doesn't serialize through this
+# unquoted heredoc to the remote shell.
+# shellcheck disable=SC2086
 echo "Starting claude --agent $AGENT ${MODEL_FLAG}..."
 echo "Logging to: $LOG_DIR/$LOG_FILE"
 claude --agent "$AGENT" ${MODEL_FLAG} --dangerously-skip-permissions "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
