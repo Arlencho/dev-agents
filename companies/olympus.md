@@ -35,24 +35,44 @@ Budget-hit policy: Paperclip rejects new task dispatch. Existing in-flight tasks
 
 ## Agent roster
 
-Subset of `roles/` that Olympus actually uses. Adding a role here = enabling it for this company in Paperclip.
+### Live in Paperclip (hired 2026-04-28 via OLY-2 — CEO used `paperclip-create-agent` skill)
 
-| Role | File | Model tier | Used for |
-|---|---|---|---|
-| `orchestrator` | `roles/orchestrator.md` | opus | First conversation, planning, dispatch decisions |
-| `go-backend` | `roles/go-backend.md` | sonnet | `apps/api/` — Chi router, pgx, sqlc, Anthropic Go SDK |
-| `web-frontend` | `roles/web-frontend.md` | sonnet | `apps/web/` — Next.js App Router, Tailwind |
-| `db-architect` | `roles/db-architect.md` | sonnet | `apps/api/db/` — migrations, sqlc queries |
-| `api-designer` | `roles/api-designer.md` | sonnet | `api.yaml`, `packages/api-client/` |
-| `test-engineer` | `roles/test-engineer.md` | sonnet | Test files, `docs/qa/` |
-| `devops` | `roles/devops.md` | sonnet | `infra/`, `Makefile`, CI workflows |
-| `security-reviewer` | `roles/security-reviewer.md` | opus | Pre-merge security review |
-| `performance-engineer` | `roles/performance-engineer.md` | sonnet | Profiling, optimization |
-| `analytics-agent` | `roles/analytics-agent.md` | sonnet | Data quality, scoring |
-| `tech-scout` | `roles/tech-scout.md` | sonnet | Monthly tooling research |
-| `retro` | `roles/retro.md` | sonnet | Post-wave retrospectives |
+Each engineer's `AGENTS.md` is byte-for-byte verbatim from the listed role file. CTO has a custom 4.4 KB charter (no source file). All under Paperclip company `ec35552a-a808-46f3-acbe-4e6dec4969f1`.
 
-Mobile (`roles/mobile.md`) is intentionally excluded until `apps/mobile/` is scaffolded (see olympus-platform issue #43).
+| Title in Paperclip | Paperclip agent id | Paperclip role | Model | reportsTo | dev-agents source |
+|---|---|---|---|---|---|
+| Orchestrator | `bdbf8aad-5fd6-4336-9c6f-47e1b1d8dbe6` | ceo | opus | — (top) | (Paperclip-generated CEO instructions; mirrors `roles/orchestrator.md` discipline) |
+| CTO | `a54874c4-...` | cto | opus | Orchestrator | custom charter — not from a role file |
+| Backend Engineer | `7cc24e11-...` | engineer | sonnet | CTO | `roles/go-backend.md` |
+| Frontend Engineer | `c698ce1d-...` | engineer | sonnet | CTO | `roles/web-frontend.md` |
+| Database Engineer | `76b65114-...` | engineer | sonnet | CTO | `roles/db-architect.md` |
+| API Designer | `de5fe798-...` | designer | sonnet | CTO | `roles/api-designer.md` |
+| QA Engineer | `5c0cd279-...` | qa | sonnet | CTO | `roles/test-engineer.md` |
+| DevOps Engineer | `d7dd47a2-...` | devops | sonnet | CTO | `roles/devops.md` |
+| Security Engineer | `b940a8ce-...` | security | opus | CTO | `roles/security-reviewer.md` |
+
+### Not yet hired (queue when needed)
+
+These roles exist in `roles/` and would slot into the Olympus team when their domain becomes active:
+
+| Role file | When to hire | Tier |
+|---|---|---|
+| `roles/performance-engineer.md` | When perf becomes a focus (post-MVP) | sonnet |
+| `roles/analytics-agent.md` | When analytics surface ships | sonnet |
+| `roles/tech-scout.md` | Could replace the `paperclip-refresh` shell script — keep deferred for now | sonnet |
+| `roles/retro.md` | Could become a Paperclip Routine that posts retros after each wave | sonnet |
+| `roles/mobile.md` | When `apps/mobile/` is scaffolded (olympus-platform #43) | sonnet |
+
+**Do NOT hire** for Olympus today: CMO, UXDesigner. No marketing or design surface yet. Paperclip's CEO is instructed to defer those.
+
+### Org-chart short-circuits
+
+The CTO is the central point of failure for engineering execution. If CTO becomes overloaded, options:
+1. **Add a "Tech Lead" layer** between CTO and engineers (e.g., Backend Tech Lead + Frontend Tech Lead reporting to CTO)
+2. **Promote one engineer** to "Senior X" with permission to dispatch sibling engineers — flatter, less ceremony
+3. **Keep flat** — let CTO triage all engineering work; this is fine until throughput becomes a bottleneck
+
+Don't add layers prematurely. Monitor `Activity` log for CTO becoming the heartbeat-rate-limit.
 
 ## KPIs (orchestration-level — not product KPIs)
 
@@ -88,7 +108,9 @@ Net: Olympus → Paperclip integration is mostly *finishing what's started*, not
 
 - [x] Create company in Paperclip UI — done 2026-04-27 (id recorded in frontmatter)
 - [x] First end-to-end Paperclip task — OLY-1 "Audit PAPERCLIP.md against live config" completed cleanly via Orchestrator agent
-- [ ] Set monthly budget cap (currently unlimited; review Anthropic console first)
-- [ ] Convert one real Olympus wave-plan into Paperclip task defs as the first *implementation* task (not just audit)
+- [x] Build engineering team — done 2026-04-28 via OLY-2; 9 agents (CEO + CTO + 7 specialists), all `AGENTS.md` byte-for-byte verbatim
+- [ ] **Set monthly budget cap to €100/mo (10000 cents)** — see `PAPERCLIP.md` § 6.1 for rationale. UI: Costs → Olympus → cap.
+- [ ] Re-test the audit loop with delegation working — create OLY-3 "Re-audit PAPERCLIP.md" so the CEO routes to QA Engineer or Security Engineer
+- [ ] Convert one real Olympus wave-plan into Paperclip task defs as the first *implementation* task (writes product code, not just audits)
 - [ ] Wire post-task cleanup hook (the 76-worktree gap from 2026-04-27)
 - [ ] Decide: keep `dispatch.sh` for ad-hoc, or migrate fully to Paperclip after first implementation wave succeeds
