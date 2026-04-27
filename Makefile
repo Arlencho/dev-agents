@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro
+.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -46,3 +46,15 @@ lint: ## Check sync + validate YAML
 	@echo ""
 	@echo "Validating workers.yaml structure..."
 	@grep -q "machines:" config/workers.yaml && echo "  workers.yaml: OK" || (echo "  workers.yaml: MISSING machines: key" && exit 1)
+
+paperclip-up: ## Start local Paperclip (idempotent — installs first run, starts subsequently)
+	@./scripts/paperclip-up.sh
+
+paperclip-down: ## Stop local Paperclip server cleanly
+	@./scripts/paperclip-down.sh
+
+paperclip-status: ## Show Paperclip health, version, and instance dir
+	@./scripts/paperclip-status.sh
+
+paperclip-refresh: ## Fetch latest Paperclip releases, append to learnings/paperclip-changelog.md
+	@./scripts/paperclip-refresh.sh
