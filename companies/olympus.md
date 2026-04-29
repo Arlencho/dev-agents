@@ -4,7 +4,11 @@ status: active
 repo: ../olympus-platform
 paperclip_company_id: ec35552a-a808-46f3-acbe-4e6dec4969f1
 paperclip_issue_prefix: OLY
-budget_monthly_cents: 0  # unlimited; cap pending — see PAPERCLIP.md § 8
+budget_monthly_cents: 10000  # €100/mo, set 2026-04-28 — see PAPERCLIP.md § 6.1
+paperclip_project_id: 16a1b183-4800-4b35-95a6-f9c3730579e0  # Onboarding (default)
+paperclip_workspace_id: a7238075-4236-44ff-82c6-95a5bb9d60af
+github_repo: Arlencho/olympus-platform
+github_default_branch: main
 ---
 
 # Olympus — AI Travel Booking Platform
@@ -28,8 +32,8 @@ Source-of-truth product repo: [`olympus-platform/`](../../olympus-platform/) —
 
 | Line | Cap (EUR/mo) | Source |
 |---|---:|---|
-| Anthropic API (Claude Code agent runs) | TBD | `olympus-platform/docs/COST_INVENTORY.md` § 2.1 |
-| Total cross-provider | TBD | Set in Paperclip UI after company creation |
+| Anthropic API (Claude Code agent runs) | covered by total | `olympus-platform/docs/COST_INVENTORY.md` § 2.1 |
+| **Total cross-provider** (set 2026-04-28) | **€100** | Paperclip company `budgetMonthlyCents: 10000` |
 
 Budget-hit policy: Paperclip rejects new task dispatch. Existing in-flight tasks complete. Notification to Arlen via Paperclip UI.
 
@@ -109,8 +113,9 @@ Net: Olympus → Paperclip integration is mostly *finishing what's started*, not
 - [x] Create company in Paperclip UI — done 2026-04-27 (id recorded in frontmatter)
 - [x] First end-to-end Paperclip task — OLY-1 "Audit PAPERCLIP.md against live config" completed cleanly via Orchestrator agent
 - [x] Build engineering team — done 2026-04-28 via OLY-2; 9 agents (CEO + CTO + 7 specialists), all `AGENTS.md` byte-for-byte verbatim
-- [ ] **Set monthly budget cap to €100/mo (10000 cents)** — see `PAPERCLIP.md` § 6.1 for rationale. UI: Costs → Olympus → cap.
-- [ ] Re-test the audit loop with delegation working — create OLY-3 "Re-audit PAPERCLIP.md" so the CEO routes to QA Engineer or Security Engineer
+- [x] Set monthly budget cap to €100/mo — done 2026-04-28 via `PATCH /api/companies/<id>` `{budgetMonthlyCents: 10000}`
+- [x] Re-test the audit loop with delegation working — done 2026-04-28 via OLY-3 → CEO created child OLY-4 → assigned to QA Engineer; both completed in ~50s, zero IC work by CEO
+- [x] Connect Onboarding project to GitHub repo `Arlencho/olympus-platform` — done 2026-04-28 via `POST /api/projects/<id>/workspaces` (workspace `a7238075`, cwd = local checkout, repoUrl = github, ref = main)
 - [ ] Convert one real Olympus wave-plan into Paperclip task defs as the first *implementation* task (writes product code, not just audits)
 - [ ] Wire post-task cleanup hook (the 76-worktree gap from 2026-04-27)
 - [ ] Decide: keep `dispatch.sh` for ad-hoc, or migrate fully to Paperclip after first implementation wave succeeds
