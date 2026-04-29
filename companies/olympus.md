@@ -49,11 +49,36 @@ Each engineer's `AGENTS.md` is byte-for-byte verbatim from the listed role file.
 | CTO | `a54874c4-...` | cto | opus | Orchestrator | custom charter — not from a role file |
 | Backend Engineer | `7cc24e11-...` | engineer | sonnet | CTO | `roles/go-backend.md` |
 | Frontend Engineer | `c698ce1d-...` | engineer | sonnet | CTO | `roles/web-frontend.md` |
-| Database Engineer | `76b65114-...` | engineer | sonnet | CTO | `roles/db-architect.md` |
+| Database Engineer | `76b65114-...` | engineer | **opus** (Amendment A — 2026-04-29) | CTO | `roles/db-architect.md` |
 | API Designer | `de5fe798-...` | designer | sonnet | CTO | `roles/api-designer.md` |
-| QA Engineer | `5c0cd279-...` | qa | sonnet | CTO | `roles/test-engineer.md` |
+| QA Engineer | `5c0cd279-...` | qa | **opus** (test-first — 2026-04-29) | CTO | `roles/test-engineer.md` |
 | DevOps Engineer | `d7dd47a2-...` | devops | sonnet | CTO | `roles/devops.md` |
 | Security Engineer | `b940a8ce-...` | security | opus | CTO | `roles/security-reviewer.md` |
+| API Critic | `b16585ed-...` | critic | opus | CTO | `roles/api-critic.md` (NEW — see § Pairing matrix) |
+| Backend Critic | `b1dd31d7-...` | critic | opus | CTO | `roles/backend-critic.md` (NEW) |
+| Database Critic | `a5e50b32-...` | critic | opus | CTO | `roles/database-critic.md` (NEW) |
+| Frontend Critic | `81f04cfc-...` | critic | opus | CTO | `roles/frontend-critic.md` (NEW) |
+
+### Producer-Critic pairing matrix (heterogeneous, OLY-11 — 2026-04-29)
+
+The Critics report to CTO (for **independence**), but they **pair** with their producer counterpart on every implementation task. The pairing is invoked by the CEO routing playbook, not by a `reportsTo` edge — Paperclip's org chart is a tree and can't render peer edges.
+
+| Producer | Producer model | Critic | Critic model | Discipline scope |
+|---|---|---|---|---|
+| Frontend Engineer (`c698ce1d-...`) | sonnet | Frontend Critic (`81f04cfc-...`) | opus | Next.js / React / Tailwind / a11y / PRD `01-conventions.md` § 3.3 |
+| Backend Engineer (`7cc24e11-...`) | sonnet | Backend Critic (`b1dd31d7-...`) | opus | Go / Chi / pgx / sqlc / OpenAPI contract |
+| Database Engineer (`76b65114-...`) | **opus** (Amendment A) | Database Critic (`a5e50b32-...`) | opus | Postgres migrations + sqlc queries + index strategy |
+| API Designer (`de5fe798-...`) | sonnet | API Critic (`b16585ed-...`) | opus | `api.yaml` / generated TS client / response envelopes |
+| DevOps Engineer (`d7dd47a2-...`) | sonnet | (no critic by design) | — | Infra / CI; Security Engineer covers the review surface |
+
+Cross-cutting reviewers (peers, NOT discipline-paired):
+- **QA Engineer** (`5c0cd279-...`, opus) — test-first authorship for every implementation task; runs once per task, before any producer
+- **Security Engineer** (`b940a8ce-...`, opus) — red-teams every PR after the discipline Critic's loop; runs once per task, before CTO
+- **CTO** (`a54874c4-...`, opus) — final architectural gate; runs once per task, after Security
+
+**Hard rule (OLY-11 charter-level invariant): each Critic uses a different model from its paired producer.** This is the heterogeneity guarantee — same-model pairs share blind spots and lose ~30% of cross-error detection per Anthropic's 2025 multi-agent cookbook + the Reflexion / Constitutional AI literature. Do not "correct" any Critic to Sonnet to save cost.
+
+The Paperclip UI surfaces the pairing via each Critic's `title` field (e.g., `Frontend Critic ↔ Frontend Engineer`) — that's the visual hint on the org-chart card.
 
 ### Not yet hired (queue when needed)
 
