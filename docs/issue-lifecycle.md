@@ -2,6 +2,22 @@
 
 Every agent must move issues through the correct status as they work. This is not optional — the project board is how the team tracks progress.
 
+## Paperclip ↔ GitHub Mirror (top-of-chain only)
+
+When work is filed via Paperclip (the orchestration platform), the **CEO creates a corresponding GitHub issue at top of the chain** so the GitHub project board reflects active work. The label-flip discipline below applies to that GitHub issue throughout the chain.
+
+**Internal Paperclip routing tasks DO NOT mirror to GitHub:**
+
+- CTO triage tasks
+- QA reproduction tasks
+- Critic review tasks (Backend Critic, Frontend Critic, Database Critic, API Critic)
+- Security red-team tasks
+- PRD-only tasks that don't produce a PR
+
+These live in Paperclip's UI (`127.0.0.1:3100`) only. The GitHub project board is for **work the user/board cares about** — typically one GitHub issue per user-filed Paperclip task that will produce a PR.
+
+The label-flip cadence below applies to the top-of-chain GitHub issue. The PR opened by the producer must include `Closes #<N>` in the body — this wires auto-close on merge and triggers the `in-review → qa` transition.
+
 ## Statuses
 
 ```
