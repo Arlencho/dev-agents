@@ -111,15 +111,39 @@ Paperclip server runs at `http://localhost:3100`. Postgres is embedded on port `
 
 For production / always-on hosting, the recommended path is a small VPS (Hetzner / Contabo, ~€10–15/mo) — see `docs/paperclip-architecture.md` § "Hosting options".
 
-## 6. Recurring research
+## 6. Recurring research + routines
 
-The `tech-scout` role (defined in `roles/tech-scout.md`) is configured to monitor Paperclip releases monthly:
+Paperclip Routines run agents on a cron schedule. Two recurring routines ship with the standard org structure:
+
+### `tech-scout` — Paperclip release monitor (monthly)
+
+The `tech-scout` role (`roles/tech-scout.md`) monitors upstream Paperclip releases. Output appends a dated entry to `learnings/paperclip-changelog.md`.
 
 ```bash
 # Run on demand
 make paperclip-refresh
+```
 
-# Output: appends a dated entry to learnings/paperclip-changelog.md
+### `pr-sentinel` — GitHub PR queue triage (every 30 min)
+
+The `pr-sentinel` role (`roles/pr-sentinel.md`) scans the company's `github_repo` open PR list every 30 minutes via a Paperclip routine. Un-attached PRs (anything NOT on a `task/*` branch) are classified by branch prefix and routed into the appropriate review chain:
+
+- `dependabot/*` → DevOps Engineer (lightweight: CI green + semver bump check)
+- `feat/*`, `fix/*`, board-filed branches → CTO full producer-critic chain
+- `docs/*`, `chore/docs-*` → docs-writer + maintainability reviewer
+- Unknown / external contrib → CTO full chain + extra security scrutiny
+
+Sentinel posts an idempotent `[paperclip-sentinel: tracked-as OLY-N]` comment on every filed PR; subsequent scans skip already-tracked PRs. It NEVER reviews, approves, or merges — it discovers and routes only.
+
+Routine wiring (one-time, per company):
+
+```bash
+# 1. Hire the agent (use paperclip-create-agent skill — board approval required)
+# 2. Create a routine assigned to the new agent
+# 3. Add a schedule trigger:
+curl -X POST http://127.0.0.1:3100/api/routines/<routine-id>/triggers \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"schedule","enabled":true,"cronExpression":"*/30 * * * *","timezone":"Europe/Stockholm"}'
 ```
 
 The cadence (2,340 commits in 8 weeks → roughly weekly releases) means we pin a version and review monthly. Breaking changes get a `learnings/paperclip-breaking-<version>.md` postmortem before upgrading.

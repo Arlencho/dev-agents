@@ -50,6 +50,10 @@ graph TD
 
 > Solid edges are `reportsTo`. Dashed `<-..->` edges are pairing relationships used by the CEO's routing playbook on every implementation task. DevOps Engineer has no Critic by design — Security Engineer covers the review surface.
 
+### Routine-driven discovery (no pair)
+
+The **PR Sentinel** (`roles/pr-sentinel.md`, sonnet, reports to CTO) runs on a Paperclip routine every 30 minutes. It scans the GitHub PR queue, classifies un-attached PRs by branch prefix, and files Paperclip tasks for the appropriate review chain. It does NOT pair with a Critic — its output is routing tasks, not code, so there's nothing for a Critic to critique. It also doesn't review, approve, or merge — it discovers and routes; existing chain takes over. Without it, dependabot / direct-board / external-contrib PRs would sit unreviewed because the producer-critic chain only fires on Paperclip-filed work.
+
 ## ASCII view (terminal-friendly)
 
 ```

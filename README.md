@@ -219,6 +219,12 @@ To onboard a new product, follow the checklist in [`PAPERCLIP.md`](PAPERCLIP.md)
 | `security-reviewer` | opus (red-team) | Once per PR, AFTER critic loop |
 | `retro` | sonnet | Per-wave, post-merge |
 
+### Routine-driven discovery (cron-triggered, no Critic pair)
+
+| Agent | Model | Cadence | Purpose |
+|---|---|---|---|
+| `pr-sentinel` | sonnet | Every 30 min via Paperclip routine | Scans the GitHub PR queue, classifies un-attached PRs by branch prefix, files Paperclip tasks for the appropriate review chain. Discovery + routing only — never reviews, approves, or merges. Closes the gap where dependabot / direct-board / external-contrib PRs sat unreviewed because the producer-critic chain only fires on Paperclip-filed work. |
+
 ### Specialty reviewers (invoke as needed)
 
 `perf-reviewer`, `testing-reviewer`, `plan-reviewer`, `migration-reviewer`, `maintainability-reviewer`, `production-auditor`, `red-team-reviewer`, `api-reviewer`
