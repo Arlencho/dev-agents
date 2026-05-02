@@ -54,6 +54,13 @@ graph TD
 
 The **PR Sentinel** (`roles/pr-sentinel.md`, sonnet, reports to CTO) runs on a Paperclip routine every 30 minutes. It scans the GitHub PR queue, classifies un-attached PRs by branch prefix, and files Paperclip tasks for the appropriate review chain. It does NOT pair with a Critic — its output is routing tasks, not code, so there's nothing for a Critic to critique. It also doesn't review, approve, or merge — it discovers and routes; existing chain takes over. Without it, dependabot / direct-board / external-contrib PRs would sit unreviewed because the producer-critic chain only fires on Paperclip-filed work.
 
+**Two outputs per scan:**
+
+1. **Triage** — un-attached PRs are filed as Paperclip tasks routed to the appropriate reviewer chain (DevOps for dependabot, CTO full chain for substantive PRs, docs-writer for docs-only PRs, CTO + extra security scrutiny for external contrib).
+2. **Merge queue digest** — a single rolling Paperclip issue (`Merge Queue Digest — <company>`) is updated every scan with a snapshot of: ready-to-merge PRs (CI green + at least one APPROVE review), pending review (routing task in flight, no APPROVE yet), awaiting CI (approved but checks failing), and anomalies (PRs ready-to-merge for >24h, REQUEST-CHANGES blockers). The board reads this digest as the canonical "what should I merge next" signal.
+
+**Approval mechanism the digest depends on:** every reviewer agent that approves a PR MUST use `gh pr review <N> --approve` — not a plain `gh pr comment` — because comments don't register on GitHub's `review:approved` filter. The Sentinel charter encodes this rule and includes it in every routing task it files; existing reviewer agents (CEO, CTO, DevOps, Critics, Security) inherit the discipline as Sentinel-routed tasks arrive.
+
 ## ASCII view (terminal-friendly)
 
 ```

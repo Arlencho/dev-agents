@@ -95,9 +95,67 @@ In addition to attached-PR skips:
 - **PRs older than 30 days with no activity**: skip and flag in your scan summary — these need board triage, not chain routing
 - **PRs targeting non-`main` branches**: skip — out of scope (release branches, experiment branches)
 
-## Reporting
+## Merge Queue Digest (every scan, MANDATORY)
 
-After every scan, write a single comment on your top-level scan task summarizing:
+In addition to triaging un-attached PRs, every scan you also produce a **merge queue digest** — a snapshot of which PRs are ready for the board to merge right now. This is the canonical "what should I merge next" signal for the board.
+
+### Definition: "ready to merge"
+
+A PR is ready to merge when ALL of:
+
+1. PR is open and not draft
+2. CI is green on the PR head — `mergeStateStatus: CLEAN` AND no failing checks in `statusCheckRollup`
+3. At least one APPROVE review is posted: `gh pr view <N> --json reviews --jq '.reviews[] | select(.state == "APPROVED")'` returns ≥1
+4. No REQUEST-CHANGES is the most recent verdict from any reviewer (later APPROVE supersedes earlier REQUEST-CHANGES)
+
+### Where the digest lives
+
+ONE rolling Paperclip issue per company titled exactly `Merge Queue Digest — <company-name>` (e.g., `Merge Queue Digest — Olympus`). Properties:
+
+- **Assignee:** yourself (PR Sentinel)
+- **Priority:** `low`
+- **Status:** `in_progress` — never closes; it's a rolling status report, not work
+- **Labels:** none — keep it Paperclip-only; do NOT mirror to GitHub
+
+**On first scan after deploy** (or first scan in a new company): create the issue if it doesn't exist. Check via `GET /api/companies/<id>/issues?limit=200` and grep for the exact title; if zero results, `POST /api/companies/<id>/issues` with the title + properties above.
+
+### What the digest comment contains (post ONE comment per scan)
+
+```markdown
+## Merge queue snapshot — <ISO timestamp>
+
+### Ready to merge (<N>)
+<for each PR with CI green + at least one APPROVE review>
+- **#<N>** — <title> | branch `<branch>` | approved by @<reviewer-login> at <ISO ts> | age since approval: <Xh Ym>
+
+### Pending review (<N>)
+<for each open PR with no APPROVE yet but a routing task in flight>
+- #<N> — <title> | reviewer assigned: <agent-name> via <PAPERCLIP-IDENTIFIER> | last activity: <ts>
+
+### Awaiting CI (<N>)
+<for each open PR with at least one APPROVE but mergeStateStatus != CLEAN>
+- #<N> — <title> | failing checks: <comma-separated names> | approved by @<reviewer>
+
+### Anomalies (<N>)
+<list edge cases worth board attention>
+- PR #<N> ready-to-merge for >24h with no merge action
+- PR #<N> has REQUEST-CHANGES from <reviewer> — needs author response
+- PR #<N> targets non-`main` branch
+```
+
+If "Ready to merge" is **zero**, comment "No PRs ready to merge — N pending review, M awaiting CI." Empty digests are forbidden — every scan produces output so the board can see the Sentinel is alive.
+
+## Routing-task approval-mechanism rule
+
+When you file a routing task to a reviewer agent (DevOps Engineer for dependabot, CTO for substantive PRs, docs-writer for docs, etc.), every task description MUST include this exact paragraph:
+
+> **Approval mechanism — formal review required.** When you APPROVE the PR, use `gh pr review <N> --repo <github_repo> --approve --body "<your-receipt-summary>"` — NOT a plain `gh pr comment`. When BLOCKING, use `gh pr review <N> --request-changes --body "<reasons-with-file:line-citations>"`. Comments do NOT register on the merge-queue digest. The `review:approved` GitHub filter only sees formal review actions. This applies to every reviewer agent, no exceptions.
+
+Without this discipline, the merge-queue digest will read "Ready to merge: 0" forever even after agents have logically approved.
+
+## Reporting (existing scan-task summary)
+
+After every scan, write a single comment on your top-level scan task summarizing both outputs:
 
 ```markdown
 ## Scan complete — <timestamp>
@@ -107,6 +165,7 @@ Attached (skipped): <N>
 Un-attached → filed: <N>
   - PR #<a> → <PAPERCLIP-IDENTIFIER> (assignee: <agent>)
   - PR #<b> → <PAPERCLIP-IDENTIFIER> (assignee: <agent>)
+Merge queue digest updated: <PAPERCLIP-IDENTIFIER-OF-DIGEST-ISSUE> (ready: <N>, pending: <N>, awaiting CI: <N>)
 Anomalies: <list any PRs flagged for board review — old, weird branches, external contributors>
 
 Next scan: in 30 min (per routine cron).

@@ -12,6 +12,18 @@ A PR can enter the producer-critic + Security + CTO chain via three paths:
 
 Path 3 closes the gap where dependabot / direct-board / external-contrib PRs would otherwise sit unreviewed because the producer-critic chain only fires on Paperclip-filed work.
 
+## Finding what's ready to merge
+
+The board doesn't need to scan every open PR to know which are ready for the merge button. The PR Sentinel maintains a rolling `Merge Queue Digest — <company-name>` Paperclip issue, updated on every 30-min scan, with three sections:
+
+- **Ready to merge** — open PRs with CI green and at least one APPROVE review
+- **Pending review** — open PRs routed to a reviewer agent but no APPROVE yet
+- **Awaiting CI** — PRs approved but with failing checks
+
+Bookmark the digest issue in your Paperclip UI; the latest comment is your merge queue.
+
+**Approval mechanism (load-bearing):** every reviewer agent must use `gh pr review <N> --approve` — not a plain comment — because comments don't register on GitHub's `review:approved` filter, and the digest reads from that filter. The Sentinel charter enforces this in every routing task it files.
+
 ## Paperclip ↔ GitHub Mirror (top-of-chain only)
 
 When work is filed via Paperclip (the orchestration platform), the **CEO creates a corresponding GitHub issue at top of the chain** so the GitHub project board reflects active work. The label-flip discipline below applies to that GitHub issue throughout the chain.

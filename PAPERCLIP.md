@@ -124,16 +124,29 @@ The `tech-scout` role (`roles/tech-scout.md`) monitors upstream Paperclip releas
 make paperclip-refresh
 ```
 
-### `pr-sentinel` — GitHub PR queue triage (every 30 min)
+### `pr-sentinel` — GitHub PR queue triage + merge queue digest (every 30 min)
 
-The `pr-sentinel` role (`roles/pr-sentinel.md`) scans the company's `github_repo` open PR list every 30 minutes via a Paperclip routine. Un-attached PRs (anything NOT on a `task/*` branch) are classified by branch prefix and routed into the appropriate review chain:
+The `pr-sentinel` role (`roles/pr-sentinel.md`) scans the company's `github_repo` open PR list every 30 minutes via a Paperclip routine. Two outputs per scan:
+
+**Output 1: Triage** — un-attached PRs (anything NOT on a `task/*` branch) are classified by branch prefix and routed into the appropriate review chain:
 
 - `dependabot/*` → DevOps Engineer (lightweight: CI green + semver bump check)
 - `feat/*`, `fix/*`, board-filed branches → CTO full producer-critic chain
 - `docs/*`, `chore/docs-*` → docs-writer + maintainability reviewer
 - Unknown / external contrib → CTO full chain + extra security scrutiny
 
-Sentinel posts an idempotent `[paperclip-sentinel: tracked-as OLY-N]` comment on every filed PR; subsequent scans skip already-tracked PRs. It NEVER reviews, approves, or merges — it discovers and routes only.
+Sentinel posts an idempotent `[paperclip-sentinel: tracked-as OLY-N]` comment on every filed PR; subsequent scans skip already-tracked PRs.
+
+**Output 2: Merge queue digest** — a single rolling Paperclip issue per company titled `Merge Queue Digest — <company-name>` is updated each scan with the current snapshot:
+
+- Ready to merge (CI green + at least one APPROVE review) — the board reads this as the canonical "what should I merge next" signal
+- Pending review (routing task in flight, no APPROVE yet)
+- Awaiting CI (approved but checks failing)
+- Anomalies (>24h ready-to-merge with no action, REQUEST-CHANGES blockers, etc.)
+
+The digest depends on reviewer agents using `gh pr review --approve` (not comments) to mark approval. The Sentinel charter encodes this rule and includes it in every routing task it files.
+
+Sentinel NEVER reviews, approves, or merges — it discovers, routes, and reports only.
 
 Routine wiring (one-time, per company):
 
