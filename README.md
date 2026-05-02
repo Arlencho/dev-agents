@@ -1,44 +1,66 @@
 # Dev Agents
 
-Portable, project-agnostic, provider-agnostic role definitions and tooling for AI-powered parallel development.
+Portable, project-agnostic, provider-agnostic orchestration toolkit for AI-powered parallel development.
 
-## What This Is
+## What this is
 
-A complete toolkit for running multiple AI coding agents in parallel across machines and projects. Defines agent roles, project templates, orchestration scripts, and multi-machine runners. Works with Claude Code today, designed to support OpenAI, Cursor, Grok, and others.
+Source of truth for:
 
-## What's New in v2 (April 2026)
+1. **Agent role charters** (`roles/*.md`) — 30 provider-agnostic roles spanning engineers, reviewers, critics, ops, and meta-agents.
+2. **Heterogeneous producer-critic pattern** — every implementation task pairs a producer agent with an independent critic on a different model. Charter-level invariant.
+3. **Multi-product orchestration** (`companies/*.md`) — one manifest per product (Olympus, SafePlace, Aegis, RiosOperator, WearForRun) wiring agents, budgets, and runtime config.
+4. **Paperclip integration** — the `claude_local` adapter runs these agents under the Paperclip orchestration platform (`127.0.0.1:3100`) with task routing, board automation, and budget enforcement.
 
-Aligned the harness with the current Anthropic / Claude Code ecosystem (see `docs/retros/` for the research that drove this). Changes are additive — existing plans and scripts keep working.
+Works with Claude Code today; designed to extend to OpenAI, Cursor, Grok via the `providers/` adapter layer.
 
-- **Per-role model tier routing** (`config/routing.yaml` → `model_routing:`). Each role is pinned to `opus`, `sonnet`, or `haiku`. `dispatch.sh` reads this and forwards `--model <tier>` to the remote `claude` invocation. Published reference point: ~51% cost reduction vs. uniform Opus.
-- **Tier aliases, not version IDs.** Uses `opus` / `sonnet` / `haiku` so config doesn't churn when Anthropic ships a new version. Pin exact IDs (e.g. `claude-opus-4-7`) only when you need reproducibility (migration tests, benchmarks, regression bisects).
-- **Dual-use role files.** `roles/*.md` now carry a `model:` field in their YAML frontmatter. The SSH harness still treats `config/routing.yaml` as the source of truth, but the files are now directly consumable as native Claude Code subagents on any single machine.
-- **Exec logs record the tier used.** The per-task log in `wave-plans/*.log` and the final summary from `dispatch.sh` now include the model column — so `retro` can analyze cost/quality per tier.
+## What's new
 
-### Revert / roll back
+### Heterogeneous producer-critic adoption (OLY-11 — 2026-04-29)
 
-Every change is a separate commit on `feat/v2-anthropic-alignment`. To revert:
-- **Full rollback:** `git checkout main` (v2 lives on the feature branch; `main` is untouched until you merge)
-- **Revert one change:** `git revert <commit-sha>` — commits are independent
-- **Disable model routing without reverting:** delete or comment out the `model_routing:` block in `config/routing.yaml`. `get_model()` returns empty, `run-remote.sh` omits `--model`, and `claude` uses its default.
+Every implementation task now runs through a producer + critic pair on different models. Critics report to CTO for independence, but pair with their producer counterpart on every diff.
 
-### Known follow-ups (deferred from this round)
+**Pairing matrix:**
 
-- **Preamble prompt caching.** Needs refactoring how context is delivered to `claude` (currently concatenated into the user prompt). Claude Code auto-caches the system prompt and `CLAUDE.md` but not the user-prompt preamble.
-- **Replace `guardrails.sh` regex scanning with `PreToolUse` hooks** for deterministic pre-execution blocking.
-- **Idempotency keys on retries** in `dispatch.sh` to prevent double-commits on retried tasks.
-- **MCP memory server** for cross-agent state within a wave (currently state only flows via git).
+| Producer | Producer model | Critic | Critic model | Discipline |
+|---|---|---|---|---|
+| Frontend Engineer | sonnet | Frontend Critic | **opus** | Next.js / React / Tailwind / a11y |
+| Backend Engineer | sonnet | Backend Critic | **opus** | Go / Chi / pgx / sqlc / OpenAPI |
+| Database Engineer | **opus** (Amendment A) | Database Critic | opus | Postgres migrations / sqlc / index strategy |
+| API Designer | sonnet | API Critic | **opus** | `api.yaml` / generated TS client / response envelopes |
+| DevOps Engineer | sonnet | (none — by design) | — | Security Engineer covers review surface |
 
-## Quick Setup
+**Hard rule (charter-level invariant):** each Critic uses a different model from its paired producer. Same-model pairs lose ~30% of cross-error detection per Reflexion (Shinn 2023) and Constitutional AI (Bai 2022). Do **not** "correct" any Critic to Sonnet to save cost.
 
-### New machine (full setup — installs everything)
+**Cross-cutting reviewers** (peers, NOT discipline-paired):
+- **QA Engineer** (opus, test-first) — writes failing tests against PRD/contract before producer codes
+- **Security Engineer** (opus, red-team) — active attack attempts on every PR before CTO gate
+- **CTO** (opus) — final architectural gate (APPROVE-MERGE / BLOCK-FIX / BLOCK-ESCALATE)
+
+Full org chart with reporting + pairing edges: [`docs/olympus-org-chart.md`](docs/olympus-org-chart.md).
+
+### Backend Critic activation evidence (OLY-39, OLY-46, OLY-50)
+
+Across 3 activations on payment / state-machine code, Backend Critic caught CRITICAL bugs that **4 prior reviewers (Bugbot, Security ×3, QA, CTO architectural gate) all approved**:
+
+- `payment.go:425-441` — `Confirmed` overwrites `Failed` after Duffel order failure (state-machine invariant violation)
+- Cross-replica race in `RefundOrphan` + `ResolveOrphanManually`
+- Double-refund vulnerability via `ResolveOrphanManually` not gating `Status`
+
+All loops converged within the 2-loop ceiling. No CTO escalation. The executable-only critic charter (failing test diff + `file:line` citation, prose rejected) is load-bearing.
+
+### Per-role model tier routing (v2 — April 2026)
+
+`config/routing.yaml → model_routing:` pins each role to `opus`, `sonnet`, or `haiku`. Tier aliases (not version IDs) so config doesn't churn when Anthropic ships a new version. ~51% cost reduction vs uniform Opus.
+
+## Quick setup
+
+### New machine (full setup)
 ```bash
 git clone git@github.com:Arlencho/dev-agents.git
 cd dev-agents
 ./scripts/setup-machine.sh
 ```
-
-This installs Homebrew, Go, Node, Docker, Claude Code, bootstraps all 12 agents, and authenticates GitHub + GCP. Interactive — prompts for logins. Run once per machine, never again.
+Installs Homebrew, Go, Node, Docker, Claude Code; bootstraps all roles to `~/.claude/agents/`; authenticates GitHub + GCP. Interactive — prompts for logins.
 
 ### Existing machine (agents only)
 ```bash
@@ -47,266 +69,211 @@ cd dev-agents
 ./scripts/bootstrap.sh claude
 ```
 
-## Repo Structure
+### Paperclip orchestration platform
+```bash
+./scripts/paperclip-up.sh        # start local Paperclip on 127.0.0.1:3100
+./scripts/paperclip-status.sh    # health + version + companies + agents
+./scripts/paperclip-refresh.sh   # pull latest Paperclip release
+./scripts/paperclip-down.sh      # stop
+```
+Pinned version + release scan log: [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md).
+
+## Repo structure
 
 ```
 dev-agents/
-├── roles/                    # Provider-agnostic role definitions (source of truth)
-│   ├── go-backend.md         # Go API engineer
-│   ├── web-frontend.md       # Next.js/React engineer
-│   ├── mobile.md             # React Native/Expo engineer
-│   ├── db-architect.md       # Database architect
-│   ├── api-designer.md       # API contract owner
-│   ├── devops.md             # DevOps engineer
-│   ├── test-engineer.md      # Test engineer (never modifies prod code)
-│   ├── orchestrator.md       # Meta-agent — plans, delegates, tracks
-│   ├── tech-scout.md         # AI tooling monitor — competitive intelligence
-│   ├── security-reviewer.md  # Security auditor — PR review, vulnerability scanning
-│   ├── seo-auditor.md        # SEO auditor — meta tags, structured data, Core Web Vitals
-│   └── analytics-agent.md    # Data analyst — profiling, correlation, quality scoring, recommendations
-├── templates/                # Project CLAUDE.md templates
-│   ├── go-nextjs.md # Go + Next.js full-stack template
-│   └── python-fastapi.md     # Python FastAPI service template
+├── roles/                    # 30 role charters (provider-agnostic source of truth)
+│   ├── orchestrator.md       # Meta — plans, delegates, tracks (CEO)
+│   ├── # Engineers
+│   ├── go-backend.md  web-frontend.md  mobile.md
+│   ├── db-architect.md  api-designer.md  devops.md
+│   ├── # Critics (NEW — heterogeneous, opus-paired)
+│   ├── backend-critic.md  frontend-critic.md
+│   ├── database-critic.md  api-critic.md
+│   ├── # Cross-cutting reviewers
+│   ├── test-engineer.md  security-reviewer.md  retro.md
+│   ├── # Specialty reviewers
+│   ├── perf-reviewer.md  testing-reviewer.md  plan-reviewer.md
+│   ├── migration-reviewer.md  maintainability-reviewer.md
+│   ├── production-auditor.md  red-team-reviewer.md
+│   ├── # Domain
+│   ├── data-engineer.md  analytics-agent.md  performance-engineer.md
+│   ├── seo-auditor.md  release-manager.md  docs-writer.md
+│   ├── tech-scout.md  investigate.md
+│   └── api-reviewer.md
+├── companies/                # Per-product manifests (one per product)
+│   ├── olympus.md            # Olympus AI travel booking — primary, demo 2026-05-15
+│   ├── safeplace.md          # SafePlace — Swedish public-data platform
+│   ├── aegis.md  rios-operator.md  wearforrun.md
+├── wave-plans/               # Per-wave execution plans (one per wave)
+├── learnings/                # Retros + Paperclip release-tracker
+│   └── paperclip-changelog.md
+├── docs/
+│   ├── architecture.md
+│   ├── olympus-org-chart.md  # Reporting + pairing visualization
+│   ├── paperclip-architecture.md
+│   ├── issue-lifecycle.md
+│   ├── plan-file-format.md
+│   └── scenarios.md
+├── templates/                # Project CLAUDE.md scaffolds
+│   ├── go-nextjs.md  python-fastapi.md
 ├── providers/
-│   ├── claude/agents/        # Claude Code format (ready)
-│   ├── openai/               # OpenAI format (placeholder)
-│   ├── cursor/               # Cursor rules format (placeholder)
-│   └── grok/                 # Grok format (placeholder)
+│   ├── claude/agents/        # Claude Code symlinks (ready)
+│   ├── openai/  cursor/  grok/   # Placeholders
 └── scripts/
-    ├── bootstrap.sh          # Install agents on any machine
-    ├── run-remote.sh         # Run an agent on a remote machine via SSH
-    └── new-project.sh        # Scaffold a new project with agent infrastructure
+    ├── # Local agent harness
+    ├── bootstrap.sh  setup-machine.sh  new-project.sh
+    ├── dispatch.sh  run-remote.sh  workers-status.sh
+    ├── guardrails.sh  preamble.sh  notify.sh
+    ├── autoplan.sh  retro-data.sh  learnings.sh  sync-providers.sh
+    └── # Paperclip orchestration
+    └── paperclip-up.sh  paperclip-down.sh
+    └── paperclip-status.sh  paperclip-refresh.sh
 ```
 
-## Available Agents
+## How orchestration actually works
 
-### Development Agents (write code)
+Two execution paths — pick based on task scope:
 
-| Agent | Role | Scope |
-|-------|------|-------|
-| `go-backend` | Go API engineer | Handlers, services, providers, middleware |
-| `web-frontend` | Next.js/React engineer | Pages, components, styling, API integration |
-| `mobile` | React Native/Expo engineer | Screens, navigation, native features |
-| `db-architect` | Database architect | Migrations, SQL queries, sqlc |
-| `api-designer` | API contract owner | OpenAPI spec, type generation |
-| `devops` | DevOps engineer | Docker, CI/CD, deployment, scripts |
-| `test-engineer` | Test engineer | Unit, integration, E2E tests only |
+### Path A — Paperclip task (recommended for multi-step or product-scoped work)
 
-### Meta Agents (coordinate and review)
-
-| Agent | Role | Scope |
-|-------|------|-------|
-| `orchestrator` | **Default entry point** | Your tech lead colleague — routes tasks, plans work, spots blind spots |
-| `tech-scout` | Competitive intelligence | Monitors AI tooling releases, suggests workflow improvements |
-| `security-reviewer` | Security auditor | Reviews code for vulnerabilities, compliance, best practices |
-| `seo-auditor` | SEO auditor | Audits pages for meta tags, structured data, Core Web Vitals |
-| `analytics-agent` | Data analyst | Profiles data sources, correlates across systems, scores data quality, recommends fixes with evidence |
-
-## When to Use Which Agent
-
-**Default: Start with the orchestrator.** It's your tech lead colleague — it helps you figure out what to do, who should do it, and what you haven't thought of. Even for simple tasks, it'll confirm the right agent and flag blind spots.
-
-| Situation | Start with | Example |
-|-----------|-----------|---------|
-| **Not sure where to start** | `orchestrator` | "I need to add payments — what's the plan?" |
-| **Not sure which agent** | `orchestrator` | "Is this a backend or devops task?" |
-| **Multi-task goal** | `orchestrator` | "Close all P2 issues", "Build the booking feature" |
-| **What should I work on?** | `orchestrator` | "What's the highest priority work right now?" |
-| **One clear, focused task** | Go directly to the role agent | `claude --agent go-backend "fix auth bug #123"` |
-| **Weekly maintenance** | `tech-scout` | "What AI tooling updates should we adopt?" |
-| **Before merging a PR** | `security-reviewer` | "Review PR #301 for security issues" |
-| **Before a launch** | `seo-auditor` | "Audit all public pages for SEO" |
-| **New project** | `new-project.sh` script, then `orchestrator` | "Scaffold and plan the initial sprint" |
-
-**Rule of thumb**: When in doubt, ask the orchestrator. It'll either handle it or point you to the right agent.
-
-## Usage
-
-### Direct Agent (single-scope task)
-```bash
-cd ~/my-project
-claude --agent go-backend "implement the /users endpoint"
+```
+You file a task in Paperclip UI (or via API)
+        │
+        ▼
+CEO (Orchestrator, opus) receives → decomposes
+        │
+        ▼
+CTO (opus) routes → triages → spawns child sub-tasks
+        │
+        ▼
+QA Engineer (opus, test-first) writes failing tests against PRD
+        │
+        ▼
+Producer (Sonnet, or Opus for DB) implements
+        │
+        ▼
+Critic (Opus, paired) reviews diff — hard 2-loop ceiling, executable output only
+        │
+        ▼
+Security Engineer (opus, red-team) attacks the PR
+        │
+        ▼
+CTO architectural gate — APPROVE-MERGE / BLOCK-FIX / BLOCK-ESCALATE
+        │
+        ▼
+DevOps + CI ship
 ```
 
-### Orchestrator (multi-scope goal)
-```bash
-# Step 1: Orchestrator analyzes and produces a wave plan
-claude --agent orchestrator "close all P2 issues on this repo"
+Per-task discipline (worktree isolation, label-flip cadence, no-Co-Authored-By trailer, conventional commits) is enforced by each project's `CLAUDE.md` rules.
 
-# Step 2: Execute the plan — parallel agents per wave
-claude --agent go-backend "implement auth service"      # Terminal 1
-claude --agent web-frontend "build login page"          # Terminal 2
-claude --agent db-architect "create users migration"    # Terminal 3
-
-# Step 3: Merge in the order the orchestrator specified
-```
-
-### Without Claude Code (just planning)
-```bash
-# You can also use the orchestrator pattern manually in any Claude session:
-# "Break this into parallel tasks and tell me which agents to use"
-```
-
-### Remote Execution (Mac Minis)
-```bash
-# Run an agent on a remote machine
-./scripts/run-remote.sh mac-mini-1 git@github.com:Arlencho/olympus-platform.git go-backend "fix auth bug #123"
-```
-
-### Tech Scout (periodic)
-```bash
-# Run weekly to stay current
-claude --agent tech-scout "scan for AI tooling updates relevant to our workflow"
-```
-
-### Security Review
-```bash
-# Review a specific PR
-claude --agent security-reviewer "review PR #301 for security issues"
-
-# Full codebase audit
-claude --agent security-reviewer "audit the entire codebase for vulnerabilities"
-```
-
-### SEO Audit
-```bash
-claude --agent seo-auditor "audit all public pages for SEO issues"
-```
-
-### New Project
-```bash
-# Scaffold a new project with AI agent infrastructure
-./scripts/new-project.sh go-nextjs my-new-saas
-cd my-new-saas
-claude --agent go-backend "scaffold the API with health check and auth"
-```
-
-## Complete Workflow Guide
-
-Here's how a typical development session looks from start to finish:
-
-### 1. Start with the Orchestrator
-```bash
-cd ~/my-project
-claude --agent orchestrator "I need to add a payment system with Stripe"
-```
-
-The orchestrator will:
-- Analyze what's needed (API endpoints, database tables, frontend pages)
-- Tell you which agents to use
-- Produce a wave plan with merge order
-- Flag things you haven't considered ("you'll also need webhook handling")
-
-### 2. Execute the Plan
-The orchestrator outputs something like:
-```
-Wave 1 (parallel):
-  - db-architect: "create payments migration" → branch feat/payments-db
-  - api-designer: "add payment endpoints to api.yaml" → branch feat/payments-spec
-
-Wave 2 (after Wave 1 merges):
-  - go-backend: "implement payment service with Stripe" → branch feat/payments-api
-
-Wave 3 (after Wave 2 merges):
-  - web-frontend: "build checkout page" → branch feat/payments-ui
-  - test-engineer: "add payment flow tests" → branch feat/payments-tests
-```
-
-Run Wave 1 agents in parallel:
-```bash
-claude --agent db-architect "create payments migration with orders table"   # Terminal 1
-claude --agent api-designer "add POST /payments and webhook endpoints"      # Terminal 2
-```
-
-### 3. Merge and Continue
-Merge Wave 1 PRs, then start Wave 2:
-```bash
-claude --agent go-backend "implement Stripe payment service"
-```
-
-### 4. Review Before Merging
-```bash
-claude --agent security-reviewer "review the payment implementation for security issues"
-```
-
-### 5. Post-Launch
-```bash
-claude --agent seo-auditor "audit the new checkout page for SEO"
-claude --agent tech-scout "any new Stripe SDK features we should adopt?"
-```
-
-### Multi-Machine Parallel (advanced)
-Same workflow but across machines:
-```bash
-# From your MacBook — dispatch to Mac Minis
-./scripts/run-remote.sh mac-mini-1 git@github.com:Arlencho/repo.git go-backend "implement payment service"
-./scripts/run-remote.sh mac-mini-2 git@github.com:Arlencho/repo.git web-frontend "build checkout page"
-```
-
----
-
-## Multi-Machine Setup
-
-1. Clone this repo on every machine (MacBook, Mac Minis, etc.)
-2. Run `./scripts/bootstrap.sh claude`
-3. `git pull` to update agents everywhere
-
-The bootstrap symlinks agents to `~/.claude/agents/` — available in every project on that machine.
-
-## Project Templates
-
-Templates provide a pre-configured `CLAUDE.md` for common project types:
-
-| Template | Stack | Use case |
-|----------|-------|----------|
-| `go-nextjs` | Go + Next.js + PostgreSQL | Full-stack SaaS, APIs with web frontend |
-| `python-fastapi` | Python + FastAPI + SQLAlchemy | Data services, ML APIs, microservices |
+### Path B — Direct agent invocation (for one-off, single-scope, ad-hoc work)
 
 ```bash
-./scripts/new-project.sh go-nextjs my-project
+# In any project directory
+claude --agent go-backend "fix auth bug #123"
+claude --agent web-frontend "build login page"
+claude --agent security-reviewer "review PR #301"
 ```
 
-## Parallel Development Rules
+Use direct invocation when:
+- The task is one clear, focused unit of work
+- You're iterating live and don't want the full producer-critic loop
+- You're outside any product's Paperclip company
+
+## Multi-product orchestration
+
+Each product lives under `companies/` with its own manifest (paperclip company id, budget cap, agent roster, deploy targets). Olympus is primary (May 15 demo); others (SafePlace, Aegis, etc.) are tracked but lower-cadence.
+
+When you ask the Orchestrator a question, the active product context comes from `cwd` matching one of the manifests. Cross-product orchestration is intentionally manual — there is no global queue.
+
+## Available agents (full roster)
+
+### Engineers (write code)
+
+| Agent | Model | Scope |
+|---|---|---|
+| `go-backend` | sonnet | Handlers, services, providers, middleware |
+| `web-frontend` | sonnet | Pages, components, styling, API integration |
+| `mobile` | sonnet | Screens, navigation, native features |
+| `db-architect` | **opus** (Amendment A) | Migrations, sqlc queries, index strategy |
+| `api-designer` | sonnet | OpenAPI spec, type generation, response envelopes |
+| `devops` | sonnet | Docker, CI/CD, deployment, scripts |
+
+### Critics (review diffs — opus-paired)
+
+| Agent | Pairs with | Output rule |
+|---|---|---|
+| `backend-critic` | `go-backend` | Failing test diff + `file:line` citation only |
+| `frontend-critic` | `web-frontend` | Same — executable critique, prose rejected |
+| `database-critic` | `db-architect` | Migration diff, query plan, index analysis |
+| `api-critic` | `api-designer` | Contract violation, response-shape diff |
+
+### Cross-cutting reviewers
+
+| Agent | Model | Cadence |
+|---|---|---|
+| `test-engineer` | **opus** (test-first) | Once per implementation task, BEFORE producer |
+| `security-reviewer` | opus (red-team) | Once per PR, AFTER critic loop |
+| `retro` | sonnet | Per-wave, post-merge |
+
+### Specialty reviewers (invoke as needed)
+
+`perf-reviewer`, `testing-reviewer`, `plan-reviewer`, `migration-reviewer`, `maintainability-reviewer`, `production-auditor`, `red-team-reviewer`, `api-reviewer`
+
+### Meta + domain
+
+`orchestrator` (CEO), `tech-scout`, `analytics-agent`, `data-engineer`, `performance-engineer`, `seo-auditor`, `release-manager`, `docs-writer`, `investigate`
+
+## Parallel development rules
 
 1. Break work into non-conflicting tasks (different files/directories)
-2. Assign each task to the right agent role
-3. Each agent works on its own git branch
-4. `api.yaml` changes merge FIRST (everything depends on the contract)
-5. Database migrations merge BEFORE code that uses them
-6. Tests merge LAST
-7. **No two agents touch the same files**
+2. Each agent works on its own git worktree (`scripts/task-worktree.sh`)
+3. `api.yaml` changes merge FIRST (everything depends on the contract)
+4. Database migrations merge BEFORE code that uses them
+5. Tests merge LAST
+6. **No two agents touch the same files**
+7. **Conventional Commits**, no `Co-Authored-By:` trailer (board directive OLY-4)
+8. **No direct push to `main`** — all changes via PR
 
-## Adding Agents
+## Adding a role
 
-1. Create `roles/<name>.md` with the role definition
-2. Copy to `providers/claude/agents/<name>.md`
-3. Run `./scripts/bootstrap.sh claude` to relink
-4. Commit and push — all machines get it on `git pull`
+1. Create `roles/<name>.md` with YAML frontmatter (`name`, `description`, `model`)
+2. If it's a Critic, follow the `executable-output-only` charter pattern from `backend-critic.md`
+3. Run `./scripts/sync-providers.sh` to relink to `providers/claude/agents/`
+4. Run `./scripts/bootstrap.sh claude` on each machine after `git pull`
 
-## Adding Providers
+## Adding a product (`companies/`)
 
-1. Create `providers/<name>/` directory
-2. Add a format adapter that reads from `roles/`
-3. Add a case to `scripts/bootstrap.sh`
+1. Create `companies/<name>.md` with YAML frontmatter (paperclip ids, repo, budget, demo date)
+2. Hire agents in Paperclip via `paperclip-create-agent` skill or `POST /api/companies/<id>/agent-hires`
+3. Each agent's `AGENTS.md` bundle is byte-for-byte verbatim from the source role file (sync via `./scripts/sync-providers.sh`)
 
-## Documentation
+## Provider status
 
-| Doc | What it covers |
-|-----|---------------|
-| [Architecture Diagrams](docs/architecture.md) | Single-machine, multi-machine, agent communication, your specific setup |
-| [Scenarios](docs/scenarios.md) | 7 real-world examples: bug fix, feature request, sprint planning, multi-machine, pre-launch audit, new project, "I don't know where to start" |
-
-## Provider Status
-
-| Provider | Status | Format |
-|----------|--------|--------|
-| Claude Code | Ready | Markdown with YAML frontmatter in `~/.claude/agents/` |
+| Provider | Status | Adapter |
+|---|---|---|
+| Claude Code (local) | Ready | Markdown + YAML frontmatter in `~/.claude/agents/` |
+| Claude Code (Paperclip-orchestrated) | Ready | `claude_local` adapter, runs under Paperclip on `127.0.0.1:3100` |
 | OpenAI | Placeholder | TBD |
 | Cursor | Placeholder | `.cursorrules` files |
 | Grok | Placeholder | TBD |
 
-## Real-World Use
+## Documentation
 
-The `analytics-agent` was used to audit a production data platform (256K+ events across 6 Swedish government APIs). First audit scored the platform **34/100** on data quality and identified 10 specific gaps — municipality misattribution, polluted reference data, missing confidence indicators. The orchestrator then delegated fixes to the other agents in parallel waves. After three waves of parallel work, the re-score was **83.5/100**.
+| Doc | What it covers |
+|---|---|
+| [`docs/olympus-org-chart.md`](docs/olympus-org-chart.md) | Mermaid + ASCII visualization of reporting + pairing edges (Paperclip's tree UI can't draw peer edges; this is canonical) |
+| [`docs/paperclip-architecture.md`](docs/paperclip-architecture.md) | Paperclip platform architecture — companies, agents, issues, runs, adapters |
+| [`docs/architecture.md`](docs/architecture.md) | Single-machine, multi-machine, agent communication topology |
+| [`docs/issue-lifecycle.md`](docs/issue-lifecycle.md) | Paperclip issue states (backlog → todo → in_progress → in_review → done) + label-flip discipline |
+| [`docs/plan-file-format.md`](docs/plan-file-format.md) | Wave-plan markdown format |
+| [`docs/scenarios.md`](docs/scenarios.md) | Real-world examples — bug fix, feature request, sprint planning, multi-machine, pre-launch audit |
+| [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md) | Weekly Paperclip release scan log (OLY-5 routine) |
 
-The point isn't the score — it's that the agents found problems a human code review would have missed (a 57% misattribution rate hidden by a working-looking pipeline) and produced fixes that actually moved the number.
+## Real-world results
+
+- **Backend Critic activations (OLY-39, OLY-46, OLY-50)** — caught 3 CRITICAL/HIGH bugs in payment + state-machine code that Bugbot, Security (3 rounds), QA, and CTO architectural gate all approved. Validation evidence for the heterogeneity invariant and executable-only critic charter.
+- **Analytics-agent audit (SafePlace)** — first pass scored a production data platform 34/100 on data quality across 256K events / 6 Swedish government APIs; identified 10 specific gaps (municipality misattribution at 57%, polluted reference data, missing confidence indicators). After 3 waves of parallel orchestrator-led fixes, re-score was 83.5/100.
+
+The point isn't the score — it's that the agents catch problems human review misses, and the producer-critic pattern catches what single-reviewer pipelines miss.
