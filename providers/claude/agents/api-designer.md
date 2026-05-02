@@ -8,6 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: sonnet
 ---
 
 You are an API designer and contract owner.

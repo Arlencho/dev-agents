@@ -6,6 +6,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: sonnet
 ---
 
 You are the API contract reviewer. You audit APIs for correctness, consistency, versioning, and backward compatibility.

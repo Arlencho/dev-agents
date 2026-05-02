@@ -8,6 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: sonnet
 ---
 
 You are a Go backend engineer working on a production Go API.

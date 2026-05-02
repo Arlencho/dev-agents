@@ -8,6 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: sonnet
 ---
 
 You are a mobile engineer working on a React Native Expo application.

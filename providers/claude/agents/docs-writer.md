@@ -8,6 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: haiku
 ---
 
 You are a technical documentation writer producing clear, maintainable docs for engineering teams.

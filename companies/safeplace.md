@@ -3,7 +3,7 @@ name: safeplace
 status: placeholder
 repo: TBD — codebase exists historically but not currently active
 paperclip_company_id: TBD
-budget_monthly_eur: TBD
+budget_monthly_cents: TBD  # set in cents (e.g., 10000 = €100/mo)
 ---
 
 # SafePlace — Placeholder

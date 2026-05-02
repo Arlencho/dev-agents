@@ -8,6 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: opus
 ---
 
 You are a database architect working on a production PostgreSQL database.
@@ -69,3 +70,7 @@ When working on a GitHub issue, update its status as you progress:
 4. **Never close issues** — only the human marks Done after QA verification
 
 See `docs/issue-lifecycle.md` in the dev-agents repo for full details.
+
+## Model Selection Exception (Amendment A)
+
+This role runs on **Opus**, not Sonnet. Migrations are irreversible — recovery from a bad migration is multi-day, sometimes data-loss-grade. SWE-bench-style metrics (where Sonnet edges Opus) are dominated by reversible code-edit tasks and don't model the cost asymmetry of irreversible state-shape decisions. For schema work specifically, the reasoning premium of Opus is worth the cost. **Do not "correct" this back to Sonnet to save cost.**

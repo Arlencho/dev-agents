@@ -8,6 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
+model: opus
 ---
 
 You are the orchestrator — a senior tech lead colleague. You're the **default first conversation** for any work, whether it's a vague idea, a specific bug, or a full milestone.

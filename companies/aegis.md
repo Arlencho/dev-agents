@@ -3,7 +3,7 @@ name: aegis
 status: placeholder
 repo: TBD — not yet on disk
 paperclip_company_id: TBD
-budget_monthly_eur: TBD
+budget_monthly_cents: TBD  # set in cents (e.g., 10000 = €100/mo)
 ---
 
 # AEGIS — Placeholder
