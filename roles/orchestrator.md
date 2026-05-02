@@ -187,7 +187,7 @@ See `docs/issue-lifecycle.md` for full details.
 
 ### Conversation flow example
 
-The human says: "I need to build the payments feature for Olympus"
+The human says: "I need to build the payments feature"
 
 You respond:
 1. Analyze what's needed (endpoints, DB, UI, webhooks)

@@ -8,16 +8,16 @@ Source of truth for:
 
 1. **Agent role charters** (`roles/*.md`) — 30 provider-agnostic roles spanning engineers, reviewers, critics, ops, and meta-agents.
 2. **Heterogeneous producer-critic pattern** — every implementation task pairs a producer agent with an independent critic on a different model. Charter-level invariant.
-3. **Multi-product orchestration** (`companies/*.md`) — one manifest per product (Olympus, SafePlace, Aegis, RiosOperator, WearForRun) wiring agents, budgets, and runtime config.
+3. **Multi-product orchestration** (`companies/*.md`) — one manifest per product wiring agents, budgets, runtime config, and the source-of-truth product repo path.
 4. **Paperclip integration** — the `claude_local` adapter runs these agents under the Paperclip orchestration platform (`127.0.0.1:3100`) with task routing, board automation, and budget enforcement.
 
 Works with Claude Code today; designed to extend to OpenAI, Cursor, Grok via the `providers/` adapter layer.
 
 ## What's new
 
-### Heterogeneous producer-critic adoption (OLY-11 — 2026-04-29)
+### Heterogeneous producer-critic pattern
 
-Every implementation task now runs through a producer + critic pair on different models. Critics report to CTO for independence, but pair with their producer counterpart on every diff.
+Every implementation task runs through a producer + critic pair on different models. Critics report to CTO for independence, but pair with their producer counterpart on every diff.
 
 **Pairing matrix:**
 
@@ -25,30 +25,30 @@ Every implementation task now runs through a producer + critic pair on different
 |---|---|---|---|---|
 | Frontend Engineer | sonnet | Frontend Critic | **opus** | Next.js / React / Tailwind / a11y |
 | Backend Engineer | sonnet | Backend Critic | **opus** | Go / Chi / pgx / sqlc / OpenAPI |
-| Database Engineer | **opus** (Amendment A) | Database Critic | opus | Postgres migrations / sqlc / index strategy |
+| Database Engineer | **opus** (DB exception) | Database Critic | opus | Postgres migrations / sqlc / index strategy |
 | API Designer | sonnet | API Critic | **opus** | `api.yaml` / generated TS client / response envelopes |
 | DevOps Engineer | sonnet | (none — by design) | — | Security Engineer covers review surface |
 
-**Hard rule (charter-level invariant):** each Critic uses a different model from its paired producer. Same-model pairs lose ~30% of cross-error detection per Reflexion (Shinn 2023) and Constitutional AI (Bai 2022). Do **not** "correct" any Critic to Sonnet to save cost.
+**Hard rule (charter-level invariant):** each Critic uses a different model from its paired producer. Same-model pairs lose ~30% of cross-error detection per Reflexion (Shinn 2023) and Constitutional AI (Bai 2022). Do **not** "correct" any Critic to Sonnet to save cost. The Database pair is the documented exception (irreversibility premium on migrations) — see [`docs/org-chart.md`](docs/org-chart.md).
 
 **Cross-cutting reviewers** (peers, NOT discipline-paired):
 - **QA Engineer** (opus, test-first) — writes failing tests against PRD/contract before producer codes
 - **Security Engineer** (opus, red-team) — active attack attempts on every PR before CTO gate
 - **CTO** (opus) — final architectural gate (APPROVE-MERGE / BLOCK-FIX / BLOCK-ESCALATE)
 
-Full org chart with reporting + pairing edges: [`docs/olympus-org-chart.md`](docs/olympus-org-chart.md).
+Full org chart with reporting + pairing edges: [`docs/org-chart.md`](docs/org-chart.md).
 
-### Backend Critic activation evidence (OLY-39, OLY-46, OLY-50)
+### Production evidence — Backend Critic activations
 
-Across 3 activations on payment / state-machine code, Backend Critic caught CRITICAL bugs that **4 prior reviewers (Bugbot, Security ×3, QA, CTO architectural gate) all approved**:
+Across the first 3 Backend Critic activations on payment / state-machine code in a live product company, the critic caught CRITICAL bugs that **4 prior reviewers (Bugbot, Security in 3 rounds, QA, CTO architectural gate) all approved**:
 
-- `payment.go:425-441` — `Confirmed` overwrites `Failed` after Duffel order failure (state-machine invariant violation)
-- Cross-replica race in `RefundOrphan` + `ResolveOrphanManually`
-- Double-refund vulnerability via `ResolveOrphanManually` not gating `Status`
+- State-machine invariant violation: `Confirmed` status overwrites `Failed` after a downstream provider failure
+- Cross-replica race in refund + manual-resolve admin actions
+- Double-refund vulnerability: manual-resolve path didn't gate `Status` → subsequent refund call passed the duplicate-action guard
 
-All loops converged within the 2-loop ceiling. No CTO escalation. The executable-only critic charter (failing test diff + `file:line` citation, prose rejected) is load-bearing.
+All loops converged within the 2-loop ceiling. No CTO escalation. The executable-only critic charter (failing test diff + `file:line` citation, prose rejected) is load-bearing — it's what stops critics from producing LGTM noise.
 
-### Per-role model tier routing (v2 — April 2026)
+### Per-role model tier routing
 
 `config/routing.yaml → model_routing:` pins each role to `opus`, `sonnet`, or `haiku`. Tier aliases (not version IDs) so config doesn't churn when Anthropic ships a new version. ~51% cost reduction vs uniform Opus.
 
@@ -101,16 +101,16 @@ dev-agents/
 │   ├── seo-auditor.md  release-manager.md  docs-writer.md
 │   ├── tech-scout.md  investigate.md
 │   └── api-reviewer.md
-├── companies/                # Per-product manifests (one per product)
-│   ├── olympus.md            # Olympus AI travel booking — primary, demo 2026-05-15
-│   ├── safeplace.md          # SafePlace — Swedish public-data platform
-│   ├── aegis.md  rios-operator.md  wearforrun.md
-├── wave-plans/               # Per-wave execution plans (one per wave)
-├── learnings/                # Retros + Paperclip release-tracker
+├── companies/                # Per-product manifests (one file per product)
+│   └── # Each manifest: charter, paperclip company id, budget cap, agent
+│       # roster (subset of roles/), KPIs, escalation rules, repo path.
+│       # See any existing manifest as a template.
+├── wave-plans/               # Per-wave execution plans (one per wave per product)
+├── learnings/                # Retros + Paperclip release-tracker + per-company logs
 │   └── paperclip-changelog.md
 ├── docs/
 │   ├── architecture.md
-│   ├── olympus-org-chart.md  # Reporting + pairing visualization
+│   ├── org-chart.md          # Producer-critic reporting + pairing visualization
 │   ├── paperclip-architecture.md
 │   ├── issue-lifecycle.md
 │   ├── plan-file-format.md
@@ -183,9 +183,11 @@ Use direct invocation when:
 
 ## Multi-product orchestration
 
-Each product lives under `companies/` with its own manifest (paperclip company id, budget cap, agent roster, deploy targets). Olympus is primary (May 15 demo); others (SafePlace, Aegis, etc.) are tracked but lower-cadence.
+Each product lives under `companies/` with its own manifest (paperclip company id, budget cap, agent roster, deploy targets). Each manifest pins the source-of-truth product repo path so agents know where to find the product's `CLAUDE.md` and PRDs.
 
 When you ask the Orchestrator a question, the active product context comes from `cwd` matching one of the manifests. Cross-product orchestration is intentionally manual — there is no global queue.
+
+To onboard a new product, follow the checklist in [`PAPERCLIP.md`](PAPERCLIP.md) § 8 ("Standing up a new company").
 
 ## Available agents (full roster)
 
@@ -196,7 +198,7 @@ When you ask the Orchestrator a question, the active product context comes from 
 | `go-backend` | sonnet | Handlers, services, providers, middleware |
 | `web-frontend` | sonnet | Pages, components, styling, API integration |
 | `mobile` | sonnet | Screens, navigation, native features |
-| `db-architect` | **opus** (Amendment A) | Migrations, sqlc queries, index strategy |
+| `db-architect` | **opus** (DB exception) | Migrations, sqlc queries, index strategy |
 | `api-designer` | sonnet | OpenAPI spec, type generation, response envelopes |
 | `devops` | sonnet | Docker, CI/CD, deployment, scripts |
 
@@ -233,7 +235,7 @@ When you ask the Orchestrator a question, the active product context comes from 
 4. Database migrations merge BEFORE code that uses them
 5. Tests merge LAST
 6. **No two agents touch the same files**
-7. **Conventional Commits**, no `Co-Authored-By:` trailer (board directive OLY-4)
+7. **Conventional Commits**, no `Co-Authored-By:` trailer (commits should not attribute work to bots)
 8. **No direct push to `main`** — all changes via PR
 
 ## Adding a role
@@ -263,17 +265,17 @@ When you ask the Orchestrator a question, the active product context comes from 
 
 | Doc | What it covers |
 |---|---|
-| [`docs/olympus-org-chart.md`](docs/olympus-org-chart.md) | Mermaid + ASCII visualization of reporting + pairing edges (Paperclip's tree UI can't draw peer edges; this is canonical) |
+| [`docs/org-chart.md`](docs/org-chart.md) | Mermaid + ASCII visualization of reporting + pairing edges (Paperclip's tree UI can't draw peer edges; this is canonical) |
 | [`docs/paperclip-architecture.md`](docs/paperclip-architecture.md) | Paperclip platform architecture — companies, agents, issues, runs, adapters |
 | [`docs/architecture.md`](docs/architecture.md) | Single-machine, multi-machine, agent communication topology |
 | [`docs/issue-lifecycle.md`](docs/issue-lifecycle.md) | Paperclip issue states (backlog → todo → in_progress → in_review → done) + label-flip discipline |
 | [`docs/plan-file-format.md`](docs/plan-file-format.md) | Wave-plan markdown format |
 | [`docs/scenarios.md`](docs/scenarios.md) | Real-world examples — bug fix, feature request, sprint planning, multi-machine, pre-launch audit |
-| [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md) | Weekly Paperclip release scan log (OLY-5 routine) |
+| [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md) | Weekly Paperclip release scan log |
 
 ## Real-world results
 
-- **Backend Critic activations (OLY-39, OLY-46, OLY-50)** — caught 3 CRITICAL/HIGH bugs in payment + state-machine code that Bugbot, Security (3 rounds), QA, and CTO architectural gate all approved. Validation evidence for the heterogeneity invariant and executable-only critic charter.
-- **Analytics-agent audit (SafePlace)** — first pass scored a production data platform 34/100 on data quality across 256K events / 6 Swedish government APIs; identified 10 specific gaps (municipality misattribution at 57%, polluted reference data, missing confidence indicators). After 3 waves of parallel orchestrator-led fixes, re-score was 83.5/100.
+- **Backend Critic activations** — first 3 activations on payment + state-machine code in a live product company caught 3 CRITICAL/HIGH bugs that Bugbot, Security (3 rounds), QA, and CTO architectural gate had all approved. Validation evidence for the heterogeneity invariant and the executable-only critic charter.
+- **Analytics-agent audit** — first pass scored a production data platform 34/100 on data quality across 256K events / 6 Swedish government APIs; identified 10 specific gaps (e.g., 57% municipality misattribution, polluted reference data, missing confidence indicators). After 3 waves of parallel orchestrator-led fixes, re-score was 83.5/100.
 
 The point isn't the score — it's that the agents catch problems human review misses, and the producer-critic pattern catches what single-reviewer pipelines miss.

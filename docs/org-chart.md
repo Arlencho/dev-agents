@@ -1,9 +1,9 @@
-# Olympus Org Chart — Reporting + Pairing
+# Producer-Critic Org Chart — Reporting + Pairing
 
 > Reporting hierarchy lives in Paperclip's tree-based org chart UI at `127.0.0.1:3100`.
 > **Pairing relationships are NOT renderable in Paperclip's tree UI** — they live here.
 
-The Olympus team adopted the **Heterogeneous Producer-Critic with Test-First Critique + Architectural Gate** pattern on 2026-04-29 (per [OLY-11](../companies/olympus.md)). Critics report to CTO for **independence**, but pair with their producer counterpart on every implementation task. Paperclip's org chart can't draw peer pair edges (no tree UI can) — this document is the canonical pairing reference.
+The standard team structure for any company in `companies/` uses the **Heterogeneous Producer-Critic with Test-First Critique + Architectural Gate** pattern. Critics report to CTO for **independence**, but pair with their producer counterpart on every implementation task. Paperclip's org chart can't draw peer pair edges (no tree UI can) — this document is the canonical pairing reference.
 
 ## Mermaid view (reporting + pairing)
 
@@ -26,7 +26,7 @@ graph TD
     FEC["Frontend Critic<br/><i>Opus</i>"]:::opus
     BE["Backend Engineer<br/><i>Sonnet</i>"]:::sonnet
     BEC["Backend Critic<br/><i>Opus</i>"]:::opus
-    DB["Database Engineer<br/><i>Opus — Amendment A</i>"]:::opus
+    DB["Database Engineer<br/><i>Opus — DB exception</i>"]:::opus
     DBC["Database Critic<br/><i>Opus</i>"]:::opus
     API["API Designer<br/><i>Sonnet</i>"]:::sonnet
     APIC["API Critic<br/><i>Opus</i>"]:::opus
@@ -87,7 +87,7 @@ graph TD
 
    ┌────────────────────┐                          ┌────────────────────┐
    │ Database Engineer  │ ◄──── pairs ────►        │ Database Critic    │
-   │ Opus (Amendment A) │                          │ Opus               │
+   │ Opus (DB exception)│                          │ Opus               │
    └────────────────────┘                          └────────────────────┘
 
    ┌────────────────────┐                          ┌────────────────────┐
@@ -96,15 +96,17 @@ graph TD
    └────────────────────┘                          └────────────────────┘
 ```
 
-## Pairing matrix (canonical, machine-readable)
+## Pairing matrix (canonical)
 
-| Producer | Producer ID | Producer model | Critic | Critic ID | Critic model | Discipline scope |
-|---|---|---|---|---|---|---|
-| Frontend Engineer | `c698ce1d-0f8b-4d34-8791-253f702b27c3` | Sonnet | Frontend Critic | `81f04cfc-b8c1-46bb-89cf-6bb0a857b92a` | **Opus** | Next.js / React / Tailwind / a11y / PRD `01-conventions.md` § 3.3 |
-| Backend Engineer | `7cc24e11-4ea6-4df8-942e-998f84f0d28e` | Sonnet | Backend Critic | `b1dd31d7-622a-4dfe-854b-eca55d56c453` | **Opus** | Go / Chi / pgx / sqlc / OpenAPI contract |
-| Database Engineer | `76b65114-02f9-4b90-8803-90aba21bdb9d` | **Opus** (Amendment A) | Database Critic | `a5e50b32-b664-45fe-9ff2-ca242029879b` | **Opus** | Postgres migrations + sqlc queries + index strategy |
-| API Designer | `de5fe798-7d06-467c-8c15-fdbf9dd1a4d8` | Sonnet | API Critic | `b16585ed-01ab-4ba8-9d43-2f3b6b045516` | **Opus** | `api.yaml` / generated TS client / response envelopes |
-| DevOps Engineer | `d7dd47a2-97c1-4d1a-9ffc-abe1e0f6236e` | Sonnet | (none — by design) | — | — | Infra / CI; Security Engineer covers review surface |
+| Producer | Producer model | Critic | Critic model | Discipline scope |
+|---|---|---|---|---|
+| Frontend Engineer (`roles/web-frontend.md`) | Sonnet | Frontend Critic (`roles/frontend-critic.md`) | **Opus** | Next.js / React / Tailwind / a11y |
+| Backend Engineer (`roles/go-backend.md`) | Sonnet | Backend Critic (`roles/backend-critic.md`) | **Opus** | Go / Chi / pgx / sqlc / OpenAPI contract |
+| Database Engineer (`roles/db-architect.md`) | **Opus** (DB exception) | Database Critic (`roles/database-critic.md`) | **Opus** | Postgres migrations + sqlc queries + index strategy |
+| API Designer (`roles/api-designer.md`) | Sonnet | API Critic (`roles/api-critic.md`) | **Opus** | `api.yaml` / generated TS client / response envelopes |
+| DevOps Engineer (`roles/devops.md`) | Sonnet | (none — by design) | — | Infra / CI; Security Engineer covers review surface |
+
+The concrete Paperclip agent IDs for each producer/critic in a given company are recorded in that company's manifest (`companies/<name>.md`), not here — IDs are per-deployment.
 
 ## Per-task flow (how the pair is invoked)
 
@@ -123,24 +125,26 @@ Task arrives
 
 ## Heterogeneity invariant (non-negotiable)
 
-> **Every Critic uses a different model from its paired producer.** Charter-level invariant per [OLY-11](../companies/olympus.md). Reflexion (Shinn 2023) and Constitutional AI (Bai 2022): same-model pairs collapse to ~30% reduced cross-error detection vs heterogeneous pairs. Do NOT "correct" any Critic to Sonnet to save cost — Tier-1 budget already accounts for the 4 Opus Critics.
+> **Every Critic uses a different model from its paired producer.** Same-model pairs collapse to ~30% reduced cross-error detection vs heterogeneous pairs (Reflexion — Shinn 2023; Constitutional AI — Bai 2022; Anthropic 2025 multi-agent cookbook). Do NOT "correct" any Critic to Sonnet to save cost.
 
-The exception (Database) keeps both pair members on Opus because:
-- Database Engineer was upgraded to Opus per Amendment A (irreversibility premium on migrations) — see [`companies/olympus.md`](../companies/olympus.md) § "Producer-Critic pairing matrix"
-- Cross-model heterogeneity sacrificed for reasoning depth on irreversible state changes
-- The "different agent / different system prompt / different recent-context" sub-heterogeneity is preserved
+### Database exception (both on Opus)
+
+The Database pair keeps both members on Opus because:
+
+- **Irreversibility premium on migrations.** Database Engineer is upgraded to Opus to give reasoning depth on schema changes that can't be cheaply rolled back.
+- **Cross-model heterogeneity is sacrificed** for reasoning depth on irreversible state changes — a deliberate trade-off, not a violation.
+- **Sub-heterogeneity is preserved**: different agent identity, different system prompt (producer charter vs critic charter), different recent-context window. The pair still catches issues a single agent would miss.
+
+This exception applies only to the Database pair. All other producer-critic pairs MUST cross models.
 
 ## Why pairing isn't a `reportsTo` edge
 
 Tree UIs (Paperclip / Workday / Lattice / BambooHR) all share this limitation: they render parent-child reporting only. Peer pairing is a working relationship, not a reporting relationship. Making the Critic report to its producer would compromise independence — a Critic that reports to the engineer they're critiquing is a toothless Critic.
 
 The pairing therefore lives in three places, in priority order:
-1. **Each Critic's charter** at `dev-agents/roles/<critic>.md` — verbatim "pairs with [Engineer]" hard-rule paragraph
+
+1. **Each Critic's charter** at `roles/<critic>.md` — verbatim "pairs with [Engineer]" hard-rule paragraph
 2. **The CEO's routing playbook** — invokes the pair on every implementation task
 3. **Each Critic's `title` field** in Paperclip — visible on the org-chart card as `Backend Critic ↔ Backend Engineer` etc. (best Paperclip can do)
 
 This document is the durable visual reference for everything Paperclip can't show.
-
-## Last updated
-
-2026-04-29 — Step 3 of OLY-11 producer-critic adoption complete. 4 critic agents hired and active (live in Paperclip company `ec35552a-a808-46f3-acbe-4e6dec4969f1`). Pilots OLY-16 (#693) and OLY-17 (#694) in flight.

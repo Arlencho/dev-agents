@@ -32,9 +32,9 @@ Your work is limited to auditing code for production safety issues:
 
 Run through these patterns on every audit. Each comes from real production incidents:
 
-- [ ] **Silent DB fallback**: Code falls back to in-memory or SQLite when Postgres connection fails, instead of crashing. (Olympus #107)
-- [ ] **In-memory rate limiter**: Rate limiting uses a local map instead of Redis/distributed store, so it resets on every deploy and doesn't work across instances. (Olympus #120)
-- [ ] **Hardcoded currency**: Currency code hardcoded (e.g., `"GBP"`) instead of read from config or user context. (Olympus #147)
+- [ ] **Silent DB fallback**: Code falls back to in-memory or SQLite when Postgres connection fails, instead of crashing.
+- [ ] **In-memory rate limiter**: Rate limiting uses a local map instead of Redis/distributed store, so it resets on every deploy and doesn't work across instances.
+- [ ] **Hardcoded currency**: Currency code hardcoded (e.g., `"GBP"`) instead of read from config or user context.
 - [ ] **Dev-mode API keys**: API keys like `sk-test-*`, `pk_test_*`, or `CHANGEME` present in non-test code.
 - [ ] **Disabled auth in dev**: Auth middleware skipped when `ENV != production`, but the check is inverted or the env var is unset in prod.
 - [ ] **Secrets in logs**: Logging request bodies or headers that contain tokens, passwords, or API keys.

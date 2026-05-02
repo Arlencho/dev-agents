@@ -124,8 +124,8 @@ Big feature across your MacBook Pro + 2 Mac Minis.
 
 ```bash
 # From MacBook Pro
-./scripts/run-remote.sh mac-mini-1 git@github.com:Arlencho/olympus-platform.git go-backend "add mobile API endpoints"
-./scripts/run-remote.sh mac-mini-2 git@github.com:Arlencho/olympus-platform.git mobile "scaffold Expo project"
+./scripts/run-remote.sh mac-mini-1 git@github.com:<owner>/<repo>.git go-backend "add mobile API endpoints"
+./scripts/run-remote.sh mac-mini-2 git@github.com:<owner>/<repo>.git mobile "scaffold Expo project"
 
 # Meanwhile, on MacBook Pro
 claude --agent security-reviewer "review incoming PRs for security"

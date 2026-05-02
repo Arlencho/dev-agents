@@ -24,33 +24,33 @@ Todo → In Progress → In Review → QA → Done
 ### When you START working on an issue:
 ```bash
 # Move to "In Progress"
-gh issue edit <NUMBER> -R Arlencho/olympus-platform --add-label "status:in-progress"
+gh issue edit <NUMBER> -R <owner>/<repo> --add-label "status:in-progress"
 ```
 Also comment: "Starting work on this."
 
 ### When you CREATE a PR:
 ```bash
 # Move to "In Review"
-gh issue edit <NUMBER> -R Arlencho/olympus-platform --add-label "status:in-review"
+gh issue edit <NUMBER> -R <owner>/<repo> --add-label "status:in-review"
 ```
 The PR body should reference: `Closes #NUMBER`
 
 ### When PR is MERGED:
 ```bash
 # Move to "QA"
-gh issue edit <NUMBER> -R Arlencho/olympus-platform --add-label "status:qa"
+gh issue edit <NUMBER> -R <owner>/<repo> --add-label "status:qa"
 ```
 Comment: "Merged and deployed. Needs verification: [describe what to check]"
 
 ### When VERIFIED in production:
 ```bash
 # Move to "Done" — human does this after verifying
-gh issue close <NUMBER> -R Arlencho/olympus-platform
+gh issue close <NUMBER> -R <owner>/<repo>
 ```
 
 ### When BLOCKED:
 ```bash
-gh issue edit <NUMBER> -R Arlencho/olympus-platform --add-label "status:blocked"
+gh issue edit <NUMBER> -R <owner>/<repo> --add-label "status:blocked"
 ```
 Comment: "Blocked by: [reason]. Waiting on: [what/who]"
 
@@ -67,14 +67,14 @@ Comment: "Blocked by: [reason]. Waiting on: [what/who]"
 Check progress by status:
 ```bash
 # What's in progress right now?
-gh issue list -R Arlencho/olympus-platform --label "status:in-progress"
+gh issue list -R <owner>/<repo> --label "status:in-progress"
 
 # What's waiting for review?
-gh issue list -R Arlencho/olympus-platform --label "status:in-review"
+gh issue list -R <owner>/<repo> --label "status:in-review"
 
 # What's merged but needs QA?
-gh issue list -R Arlencho/olympus-platform --label "status:qa"
+gh issue list -R <owner>/<repo> --label "status:qa"
 
 # What's blocked?
-gh issue list -R Arlencho/olympus-platform --label "status:blocked"
+gh issue list -R <owner>/<repo> --label "status:blocked"
 ```

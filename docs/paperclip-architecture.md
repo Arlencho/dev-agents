@@ -46,7 +46,7 @@ wave-plan.md ──► paperclip task definitions (per company)
 - Pull-based — agents pick up work whenever they're ready (laptop closed → resume on wake)
 - Atomic checkout — one task, one agent, no races
 - Budget caps per company, enforced at dispatch
-- Multi-company isolation — Olympus tasks can't read AEGIS state
+- Multi-company isolation — one company's tasks can't read another company's state
 - Lifecycle hooks — task-complete → cleanup runs deterministically
 - UI dashboard at `localhost:3100` — see what's running across all companies
 
@@ -62,7 +62,7 @@ wave-plan.md ──► paperclip task definitions (per company)
 | Quick one-off dispatch, single company, you're at the keyboard | **SSH-push** (`make dispatch`) |
 | Multi-company work in flight, need budget caps, want async pickup | **Paperclip** |
 | Production / always-on agents, governance required | **Paperclip** |
-| Migrating an existing wave-plan to test Paperclip | **Paperclip** (do this for next Olympus wave-plan) |
+| Migrating an existing wave-plan to test Paperclip | **Paperclip** |
 | Network-flaky environment where SSH stalls | **Paperclip** |
 
 ## 3. What stays in dev-agents (unchanged)
@@ -111,20 +111,20 @@ These are the *language-agnostic* parts of the harness — they describe **what*
 ### 5.3 Hybrid
 - Laptop dev (interactive) + VPS prod (long-running)
 - Two separate Paperclip instances; same `dev-agents/` repo references both
-- Companies can be split: Olympus on VPS, sandbox on laptop
+- Companies can be split: production company on VPS, sandbox on laptop
 
 ## 6. Integration sequence — first end-to-end
 
 This is the path to validate Paperclip with one real wave:
 
-1. **Pin a version** — note `2026.427.0` in `PAPERCLIP.md` § 1
-2. **Create Olympus as company #1** in the Paperclip UI (or via API)
-3. **Set budget cap** — match `docs/COST_INVENTORY.md` LLM line for Olympus
+1. **Pin a version** — note the current version in `PAPERCLIP.md` § 1
+2. **Create your first company** in the Paperclip UI (or via API) — manifest in `companies/<name>.md`
+3. **Set budget cap** — based on your expected agent cadence
 4. **Import roles** — `roles/*.md` → Paperclip agent types (one-time sync)
 5. **Convert one wave-plan** — pick the smallest open wave-plan in `wave-plans/` and convert its issues into Paperclip task defs
-6. **Wire one Claude Code agent** to heartbeat on the Olympus company
+6. **Wire one Claude Code agent** to heartbeat on the company
 7. **Dispatch the task** — agent checks out, runs, reports
-8. **Verify cleanup** — task-complete hook removes the worktree (the gap from 2026-04-27)
+8. **Verify cleanup** — task-complete hook removes the worktree
 9. **Capture lessons** — `learnings/paperclip-rollout-week1.md`
 
 After this works, repeat with rios-operator. After that, plan AEGIS / WearForRun / SafePlace as their codebases come online.
