@@ -135,6 +135,73 @@ Fetch comments and author in a single call: `gh pr view <N> --json comments,auth
   ⚠ PR #<N> self-author-blocked: reviewer account == PR author (`Arlencho`). Last comment-form verdict: <one-line summary> at <ts>. Board action required — agents cannot post a formal GitHub review.
   ```
 
+## Draft auto-flip pass (every scan)
+
+In addition to the un-attached PR scan and the Merge Queue Digest, every scan you also run a **draft auto-flip pass** to catch producer-shipped PRs that are still in draft state.
+
+**Why this exists (OLY-367):** CLAUDE.md instructs producers to "open a draft PR after the first commit, flip to ready only when acceptance criteria are met." The sweep queries only non-draft PRs. When a producer marks their Paperclip task `in_review` (= done signal) but forgets to flip the PR, the draft sits invisible to the sweep for hours. This pass closes that gap by flipping eligible drafts under board authority.
+
+### Detection — draft + in_review
+
+Fetch all open draft PRs targeting `main`:
+
+```bash
+gh pr list --repo <github_repo> --state open --json number,title,url,headRefName,isDraft,mergeStateStatus \
+  --jq '.[] | select(.isDraft == true and .baseRefName == "main")'
+```
+
+For each result:
+
+1. Parse the branch name for `task/oly-NNN`, `task/<uuid>`, or `task/<short-id>` pattern. If the branch does not start with `task/`: skip (not a Paperclip-managed producer PR — do NOT auto-flip unrecognized drafts).
+2. Extract the task identifier from the branch name (the part after `task/`).
+3. Look up the Paperclip task:
+   - If identifier looks like a UUID: `GET /api/issues/<uuid>` directly.
+   - If identifier looks like `oly-NNN`: `GET /api/companies/<id>/issues?identifierPrefix=OLY-NNN&limit=1`
+   - Fallback: `gh pr view <N> --json closingIssuesReferences,body` and search for `OLY-NNN` in the PR body.
+4. If the Paperclip task cannot be resolved: skip. Never auto-flip unverified drafts.
+5. If `task.status != "in_review"`: skip — producer hasn't signalled done yet (e.g., `in_progress` means still working).
+6. If `mergeStateStatus != "CLEAN"`: skip — CI is not green. Do NOT flip a broken PR; preserve draft state while CI catches up.
+
+### Auto-flip action
+
+When ALL conditions are met (`isDraft == true`, branch is `task/*`, task is `in_review`, CI is `CLEAN`):
+
+1. `gh pr ready <N> -R <github_repo>` — marks the PR ready for review under board authority.
+2. File a CTO Loop 1 architectural-gate routing task:
+   ```json
+   POST /api/companies/<id>/issues
+   {
+     "title": "CTO Loop 1 architectural gate: PR #<N> (<pr-title>)",
+     "priority": "high",
+     "status": "todo",
+     "projectId": "<from-company-manifest>",
+     "assigneeAgentId": "<CTO-agent-id>",
+     "description": "## Filed by PR Sentinel — draft auto-flip (OLY-367)\n\n**Trigger:** PR #<N> was a draft whose parent Paperclip task `<task-identifier>` moved to `in_review`. CI is `CLEAN`. Auto-flipped to ready at `<timestamp>`.\n\n**PR:** <pr-url>\n**Branch:** <branch-name>\n**Parent task:** <task-identifier> (status: in_review)\n\n## What you do\n\nThis is Loop 1 of the CTO architectural gate review. Route through the full producer-critic + Security chain as normal.\n\n**Approval mechanism — formal review required.** Use `gh pr review <N> --repo <github_repo> --approve --body \"<receipt>\"` — NOT a plain `gh pr comment`. Comments do NOT register on the merge-queue digest."
+   }
+   ```
+3. Post a sweep-receipt comment on the PR:
+   ```bash
+   gh pr comment <N> --repo <github_repo> --body "[paperclip-sentinel: auto-flipped]
+
+   Auto-flipped to ready by sweep at <timestamp>. Parent task <task-identifier> is \`in_review\` and CI is \`CLEAN\`. CTO Loop 1 task filed."
+   ```
+4. Increment `auto_flip_count` for this scan's summary.
+
+### Dedup / idempotency
+
+- If `[paperclip-sentinel: auto-flipped]` already exists on the PR AND an open CTO routing task with `PR #<N>` in the title exists (status `todo` or `in_progress`): skip — already routed.
+- Do not re-flip PRs that have already been flipped and received a CTO verdict; the BLOCK-FIX re-route pass handles that path.
+
+### What NOT to flip
+
+| Condition | Action |
+|---|---|
+| Branch doesn't start with `task/` | Skip — not a Paperclip producer PR |
+| Paperclip task cannot be resolved | Skip — can't verify intent |
+| Task status ≠ `in_review` | Skip — producer still working |
+| `mergeStateStatus` ≠ `CLEAN` | Skip — CI not green; wait |
+| Already auto-flipped + routing task open | Skip — idempotent |
+
 ## BLOCK-FIX re-route pass (every scan)
 
 In addition to the un-attached PR scan and the Merge Queue Digest, every scan you also run a **fix-commit detection pass** to auto-file CTO Loop N+1 review tasks when a producer has pushed a fix-commit on a BLOCK-FIX'd PR but the re-review task hasn't been filed yet.
@@ -328,6 +395,10 @@ Attached (skipped): <N>
 Un-attached → filed: <N>
   - PR #<a> → <PAPERCLIP-IDENTIFIER> (assignee: <agent>)
   - PR #<b> → <PAPERCLIP-IDENTIFIER> (assignee: <agent>)
+Draft auto-flips: <N> flipped, <N> skipped (task not in_review), <N> skipped (CI not clean), <N> skipped (branch not task/)
+  - PR #<a> → auto-flipped, CTO Loop 1 task <PAPERCLIP-IDENTIFIER>
+  - PR #<b> → skipped (mergeStateStatus=unstable)
+  - PR #<c> → skipped (task status=in_progress)
 BLOCK-FIX re-routes: <N> filed, <N> skipped (already routed), <N> skipped (no fix-commit yet)
   - PR #<a> → <PAPERCLIP-IDENTIFIER> (Loop <M>, fix-commit <sha8> at <ts>)
   - PR #<b> → skipped (open CTO task <PAPERCLIP-IDENTIFIER> already exists)
