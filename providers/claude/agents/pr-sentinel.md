@@ -117,7 +117,45 @@ ONE rolling Paperclip issue per company titled exactly `Merge Queue Digest — <
 - **Status:** `in_progress` — never closes; it's a rolling status report, not work
 - **Labels:** none — keep it Paperclip-only; do NOT mirror to GitHub
 
-**On first scan after deploy** (or first scan in a new company): create the issue if it doesn't exist. Check via `GET /api/companies/<id>/issues?limit=200` and grep for the exact title; if zero results, `POST /api/companies/<id>/issues` with the title + properties above.
+### Digest lookup-or-create (idempotent — run on EVERY scan before writing any comment)
+
+Query all three active statuses separately to avoid pagination truncation and status-transition races:
+
+```
+digests_todo     = GET /api/companies/<id>/issues?status=todo&limit=200
+digests_progress = GET /api/companies/<id>/issues?status=in_progress&limit=200
+digests_review   = GET /api/companies/<id>/issues?status=in_review&limit=200
+all_digests      = union of above three, filtered to items where title_normalized == "merge queue digest — <company-name>"
+```
+
+**Title normalization** (`title_normalized`): lowercase, collapse runs of whitespace to a single space, replace every em-dash (—) and en-dash (–) with ASCII hyphen (-). This catches capitalization drift and copy-paste dash variants without changing the canonical title stored in Paperclip.
+
+**Case A — zero results:** create the canonical issue and use it:
+```json
+POST /api/companies/<id>/issues
+{
+  "title": "Merge Queue Digest — Olympus",
+  "priority": "low",
+  "status": "in_progress",
+  "assigneeAgentId": "<pr-sentinel-agent-id>"
+}
+```
+
+**Case B — exactly one result:** use it. This is steady-state.
+
+**Case C — two or more results (duplicates):** self-heal, then continue:
+1. Sort `all_digests` by `createdAt` ascending; `canonical = all_digests[0]` (oldest = authoritative).
+2. For every other issue in `all_digests[1:]`: `PATCH /api/issues/<id>` with `{ "status": "done" }`.
+   - **NO comment, NO body text.** A local-board comment triggers another agent wake — silence is mandatory. (See `feedback_no_op_close_no_comment.md`.)
+3. Use `canonical` for this scan's snapshot comment.
+
+**Status guard:** if `canonical.status` is `done` or `cancelled` (rare — manual board close), treat as Case A: create a fresh digest and use it.
+
+**Cold-start smoke check:** on every scan, emit to stdout (NOT as a Paperclip comment):
+```
+[pr-sentinel smoke] active digest issues found: <N>. Using <canonical-issue-id>.
+```
+This surfaces in Paperclip run logs without triggering a re-wake.
 
 ### What the digest comment contains (post ONE comment per scan)
 

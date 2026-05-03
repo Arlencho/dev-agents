@@ -41,10 +41,13 @@ A PR is **attached** (skip) if any of these are true:
 1. Branch starts with `task/oly-*` or `task/<uuid>` — Paperclip-managed; already in the chain
 2. PR body contains a `[paperclip-sentinel: tracked-as OLY-N]` comment — already filed by you in a prior run
 3. The PR is referenced as `executionWorkspace` for any in-flight Paperclip task (cross-check via Paperclip API: `GET /api/companies/<id>/issues?status=in_progress` and look for matching branch/PR-number)
+4. PR author login matches a reviewer-agent account (currently `Arlencho` on Olympus) AND at least one PR comment matches a chain-verdict pattern (`## CTO architectural gate`, `## Critic verdict`, `## Security verdict`, `BLOCK-CLOSE`, `NEEDS-WORK`) — GitHub blocks formal `CHANGES_REQUESTED` reviews on the author's own PRs; treat this comment-form verdict as the formal verdict. **Do not re-route.** Surface in the digest Anomalies section instead. See **Self-author block** below.
 
 Otherwise, the PR is **un-attached** and you triage + route it.
 
 ## Triage by branch prefix
+
+> **Pre-condition:** Before applying the routing matrix, run the self-author check (see **Self-author block** section). If the PR is self-author-blocked, skip this table entirely — do not file a task.
 
 | Branch prefix | PR type | Routing |
 |---|---|---|
@@ -95,6 +98,43 @@ In addition to attached-PR skips:
 - **PRs older than 30 days with no activity**: skip and flag in your scan summary — these need board triage, not chain routing
 - **PRs targeting non-`main` branches**: skip — out of scope (release branches, experiment branches)
 
+## Self-author block
+
+When the PR author login matches a reviewer-agent account (currently `Arlencho` on Olympus), GitHub returns `Review: Can not request changes on your own pull request`. Reviewer agents fall back to a plain `gh pr comment`, which leaves `reviews: []` — so every subsequent Sentinel scan sees an un-reviewed PR and re-routes it, producing duplicate chain invocations with identical verdicts.
+
+> **Precedent — OLY-86 / OLY-92 / OLY-96 / PR #639 (2026-05-02):** PR #639 (`pr-1041-redteam`) was routed three times in 24 h and received three identical CTO BLOCK-CLOSE verdicts before being closed-as-superseded under the architectural gate. Every loop iteration fired because `reviews: []` — all verdicts were comment-form and invisible to the `review:approved` GitHub filter. This rule closes that gap.
+
+### Detection
+
+Fetch comments and author in a single call: `gh pr view <N> --json comments,author`. The PR triggers the self-author block when ALL of:
+
+1. `author.login` matches the reviewer-agent account (currently `Arlencho`)
+2. At least one PR comment body matches any of:
+   - `## CTO architectural gate`
+   - `## Critic verdict`
+   - `## Security verdict`
+   - the substring `BLOCK-CLOSE`
+   - the substring `NEEDS-WORK`
+
+### Action when block is triggered
+
+- **Do NOT file a new routing task.** The chain has already run; re-routing repeats the same verdict with no new information.
+- **Update (or post) a comment on the PR** using this exact format:
+
+  ```bash
+  gh pr comment <N> --repo <github_repo> --body "[paperclip-sentinel: self-author-blocked]
+
+  This PR is authored under the same GitHub account (\`Arlencho\`) as the reviewer agents. GitHub prevents agents from posting formal CHANGES_REQUESTED reviews on the author's own PR. The existing comment-form verdict from the review chain is the final verdict. **Board action required: review the verdict and close or merge.** The Sentinel will not re-route this PR."
+  ```
+
+  Post this comment only once — dedup on the `[paperclip-sentinel: self-author-blocked]` marker the same way you dedup the tracking comment.
+
+- **Surface in the digest Anomalies section** (see template below):
+
+  ```
+  ⚠ PR #<N> self-author-blocked: reviewer account == PR author (`Arlencho`). Last comment-form verdict: <one-line summary> at <ts>. Board action required — agents cannot post a formal GitHub review.
+  ```
+
 ## Merge Queue Digest (every scan, MANDATORY)
 
 In addition to triaging un-attached PRs, every scan you also produce a **merge queue digest** — a snapshot of which PRs are ready for the board to merge right now. This is the canonical "what should I merge next" signal for the board.
@@ -117,7 +157,45 @@ ONE rolling Paperclip issue per company titled exactly `Merge Queue Digest — <
 - **Status:** `in_progress` — never closes; it's a rolling status report, not work
 - **Labels:** none — keep it Paperclip-only; do NOT mirror to GitHub
 
-**On first scan after deploy** (or first scan in a new company): create the issue if it doesn't exist. Check via `GET /api/companies/<id>/issues?limit=200` and grep for the exact title; if zero results, `POST /api/companies/<id>/issues` with the title + properties above.
+### Digest lookup-or-create (idempotent — run on EVERY scan before writing any comment)
+
+Query all three active statuses separately to avoid pagination truncation and status-transition races:
+
+```
+digests_todo     = GET /api/companies/<id>/issues?status=todo&limit=200
+digests_progress = GET /api/companies/<id>/issues?status=in_progress&limit=200
+digests_review   = GET /api/companies/<id>/issues?status=in_review&limit=200
+all_digests      = union of above three, filtered to items where title_normalized == "merge queue digest — <company-name>"
+```
+
+**Title normalization** (`title_normalized`): lowercase, collapse runs of whitespace to a single space, replace every em-dash (—) and en-dash (–) with ASCII hyphen (-). This catches capitalization drift and copy-paste dash variants without changing the canonical title stored in Paperclip.
+
+**Case A — zero results:** create the canonical issue and use it:
+```json
+POST /api/companies/<id>/issues
+{
+  "title": "Merge Queue Digest — Olympus",
+  "priority": "low",
+  "status": "in_progress",
+  "assigneeAgentId": "<pr-sentinel-agent-id>"
+}
+```
+
+**Case B — exactly one result:** use it. This is steady-state.
+
+**Case C — two or more results (duplicates):** self-heal, then continue:
+1. Sort `all_digests` by `createdAt` ascending; `canonical = all_digests[0]` (oldest = authoritative).
+2. For every other issue in `all_digests[1:]`: `PATCH /api/issues/<id>` with `{ "status": "done" }`.
+   - **NO comment, NO body text.** A local-board comment triggers another agent wake — silence is mandatory. (See `feedback_no_op_close_no_comment.md`.)
+3. Use `canonical` for this scan's snapshot comment.
+
+**Status guard:** if `canonical.status` is `done` or `cancelled` (rare — manual board close), treat as Case A: create a fresh digest and use it.
+
+**Cold-start smoke check:** on every scan, emit to stdout (NOT as a Paperclip comment):
+```
+[pr-sentinel smoke] active digest issues found: <N>. Using <canonical-issue-id>.
+```
+This surfaces in Paperclip run logs without triggering a re-wake.
 
 ### What the digest comment contains (post ONE comment per scan)
 
@@ -141,6 +219,7 @@ ONE rolling Paperclip issue per company titled exactly `Merge Queue Digest — <
 - PR #<N> ready-to-merge for >24h with no merge action
 - PR #<N> has REQUEST-CHANGES from <reviewer> — needs author response
 - PR #<N> targets non-`main` branch
+- PR #<N> self-author-blocked: reviewer account == PR author (`Arlencho`) — comment-form verdict exists but formal review impossible; board action required (close or merge)
 ```
 
 If "Ready to merge" is **zero**, comment "No PRs ready to merge — N pending review, M awaiting CI." Empty digests are forbidden — every scan produces output so the board can see the Sentinel is alive.
