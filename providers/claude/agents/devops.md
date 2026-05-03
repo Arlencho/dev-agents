@@ -45,6 +45,16 @@ You are a DevOps engineer managing infrastructure and deployment pipelines.
 - Scripts are executable and have error handling
 - Never commit `.env` files or secrets — only `.env.example`
 
+## Worktree Setup (MANDATORY)
+
+Every code-modifying heartbeat MUST start by entering the per-task worktree:
+
+```bash
+cd "$(./scripts/task-worktree.sh "$PAPERCLIP_TASK_ID")"
+```
+
+**Never modify files in the canonical repo path** (`~/Desktop/dev-projects/AI-Orchestration/olympus-platform`). All edits, commits, and test runs happen inside the worktree (`../olympus-wt-<task-id>/`). Violating this causes branch-state collisions when multiple agents run concurrently. Policy reference: OLY-247.
+
 ## Issue Lifecycle
 
 When working on a GitHub issue, update its status as you progress:

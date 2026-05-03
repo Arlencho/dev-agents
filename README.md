@@ -78,6 +78,34 @@ cd dev-agents
 ```
 Pinned version + release scan log: [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md).
 
+### Live-agent sync (post-merge ritual)
+
+`providers/claude/agents/*.md` is the **single source of truth** for all agent instructions. The live Paperclip instance reads `~/.paperclip/instances/default/companies/<id>/agents/<aid>/instructions/AGENTS.md`. These diverge over time unless synced.
+
+**After every merge to `dev-agents/main`** that touches `providers/claude/agents/`:
+
+```bash
+make paperclip-sync   # push providers/ → all live AGENTS.md files (provider wins)
+```
+
+To check drift without applying:
+```bash
+make paperclip-check  # report only; exits 1 if any drift or missing provider
+```
+
+For **negative drift** (live has content not yet in providers — e.g., you edited a live file directly):
+```bash
+./scripts/paperclip-sync.sh --reverse <slug>
+# e.g.: ./scripts/paperclip-sync.sh --reverse devops
+# Copies live AGENTS.md → providers/claude/agents/<slug>.md (with backup)
+# Then review the diff and open a PR to dev-agents/main.
+```
+
+The sync script resolves agent → provider file via a 3-level lookup:
+1. `providers/<kebab(name)>.md` — e.g., "Backend Engineer" → `backend-engineer.md`
+2. `providers/<role>.md` — e.g., role=`devops` → `devops.md`
+3. Frontmatter `name:` in the live file — e.g., `name: go-backend` → `go-backend.md`
+
 ## Repo structure
 
 ```
