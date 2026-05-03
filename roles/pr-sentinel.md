@@ -135,6 +135,90 @@ Fetch comments and author in a single call: `gh pr view <N> --json comments,auth
   ⚠ PR #<N> self-author-blocked: reviewer account == PR author (`Arlencho`). Last comment-form verdict: <one-line summary> at <ts>. Board action required — agents cannot post a formal GitHub review.
   ```
 
+## BLOCK-FIX re-route pass (every scan)
+
+In addition to the un-attached PR scan and the Merge Queue Digest, every scan you also run a **fix-commit detection pass** to auto-file CTO Loop N+1 review tasks when a producer has pushed a fix-commit on a BLOCK-FIX'd PR but the re-review task hasn't been filed yet.
+
+**Why this exists (OLY-322):** When the CTO blocks a PR with BLOCK-FIX and the producer pushes a fix commit, without this automation the re-review task must be filed manually. This pass eliminates that dead-time lag (~5-10 min per fix loop, scaling linearly with concurrent fix-loops in flight).
+
+### Step 1 — Find BLOCK-FIX'd PRs with new commits
+
+For each open, non-draft PR fetch full detail:
+
+```bash
+gh pr view <N> --repo <github_repo> --json number,title,url,headRefOid,commits,comments,author,baseRefName
+```
+
+Then:
+
+1. Collect all **verdict comments**: `comments[]` entries whose body contains `## CTO architectural gate`. Sort by `createdAt` ascending.
+2. If **no** verdict comments exist: skip — PR is still in initial review, not a re-route scenario.
+3. `latest_verdict = verdict_comments[-1]` (most recent).
+4. If `latest_verdict.body` does **NOT** contain the substring `BLOCK-FIX`: skip — latest verdict is APPROVE-MERGE, BLOCK-CLOSE, or other. No re-review needed.
+5. Record `blockfix_at = latest_verdict.createdAt`.
+6. `latest_commit = commits[-1]` (last element in the commits array — newest commit on the branch).
+7. If `latest_commit.committedDate <= blockfix_at`: skip — producer has not pushed a fix yet.
+
+**Fix-commit defined permissively:** ANY new commit since the BLOCK-FIX timestamp counts — doc tweaks, typo fixes, etc. The cost of a false-positive re-read (2 min for CTO) is far lower than a false-negative (real fix sits unreviewed for hours).
+
+### Step 2 — Check for an already-open CTO re-review task
+
+Before filing, confirm no task already exists for this PR post-fix. Run both queries (status race protection):
+
+```
+GET /api/companies/<id>/issues?assigneeAgentId=<CTO-agent-id>&status=todo&limit=200
+GET /api/companies/<id>/issues?assigneeAgentId=<CTO-agent-id>&status=in_progress&limit=200
+```
+
+Filter results: title contains `PR #<N>` AND `createdAt > blockfix_at`.
+
+**If any such issue exists: skip — already routed.**
+
+**SHA pinning (belt-and-braces):** also check open CTO task titles for the first 8 characters of `latest_commit.oid`. If found: skip.
+
+### Step 3 — Bound check (anti-deadlock)
+
+Count ALL verdict comments on this PR whose body contains `BLOCK-FIX` or `APPROVE-MERGE` (historic, not just latest). Call this `N_verdicts`.
+
+If `N_verdicts >= 5` in the last 24 hours:
+- **Do NOT file another routing task.**
+- Add to the next digest Anomalies section: `⚠ PR #<N> fix-loop bound hit: <N_verdicts> CTO verdicts in 24h — possible producer/CTO deadlock. Board action required.`
+- Skip this PR.
+
+### Step 4 — File CTO Loop N+1 task
+
+`N+1 = N_verdicts + 1` (e.g., if two prior verdicts exist — one BLOCK-FIX, fix pushed, now filing re-review — this is Loop 3).
+
+```json
+POST /api/companies/<id>/issues
+{
+  "title": "CTO Loop <N+1> architectural gate: PR #<prNumber> (fix-commit <sha8> at <committedDate>)",
+  "priority": "high",
+  "status": "todo",
+  "projectId": "<from-company-manifest>",
+  "assigneeAgentId": "<CTO-agent-id>",
+  "description": "## Filed by PR Sentinel — BLOCK-FIX re-route (OLY-322)\n\n**Trigger:** Producer pushed fix-commit `<sha8>` at `<committedDate>` on PR #<prNumber> after CTO BLOCK-FIX verdict at `<blockfix_at>`.\n\n**PR:** <pr-url>\n**Branch:** <branch>\n**Fix-commit:** `<full-sha>` — `<commit-message-first-line>`\n**Prior CTO verdicts on this PR:** <N_verdicts> (BLOCK-FIX + APPROVE-MERGE count)\n\n## Original BLOCK-FIX comment (excerpt)\n\n> <first 400 chars of latest_verdict.body>\n\n## What you do\n\nThis is Loop <N+1> of the CTO architectural gate review. The producer has addressed your prior BLOCK-FIX verdict. Review the diff **since the BLOCK-FIX comment** (not the full PR diff) and issue your next verdict:\n\n- `APPROVE-MERGE` — changes are addressed, ready to merge\n- `BLOCK-FIX` — still has issues (describe with file:line citations)\n- `BLOCK-CLOSE` — unfixable; PR should be closed\n\n## Hard constraints\n\n- Do NOT merge — board (Arlen) clicks merge\n- Review diff ONLY since `<blockfix_at>` to avoid re-litigating already-approved sections: `gh pr diff <N> --repo <github_repo>` shows the full diff; focus your verdict on changes introduced after the prior BLOCK-FIX\n- Use formal review actions: `gh pr review <N> --repo <github_repo> --request-changes --body \"...\"` for BLOCK-FIX; `gh pr review <N> --repo <github_repo> --approve --body \"...\"` for APPROVE-MERGE\n\n**Approval mechanism — formal review required.** Use `gh pr review` — NOT a plain `gh pr comment`. Comments do NOT register on the merge-queue digest."
+}
+```
+
+Where `sha8` = first 8 characters of `latest_commit.oid`.
+
+### Per-scan dedup set
+
+Maintain a `seen_prs` set for this scan run. Before filing, check if `pr.number` is already in `seen_prs`. If so, skip (cosmic-ray protection). After filing or skipping, add to `seen_prs`.
+
+### BLOCK-FIX re-route dedup table
+
+| Check | Condition | Action |
+|---|---|---|
+| No verdict comments | `verdict_comments = []` | Skip |
+| Latest verdict not BLOCK-FIX | `latest_verdict` lacks `BLOCK-FIX` | Skip |
+| No fix-commit yet | `latest_commit.committedDate <= blockfix_at` | Skip — producer hasn't acted |
+| Already-routed task exists | Open CTO task with PR# created after blockfix_at | Skip — no-op |
+| SHA already in open task title | `sha8` in open CTO task title | Skip — sha-pinned dedup |
+| Deadlock bound hit | `N_verdicts >= 5` in last 24h | Anomaly, no filing |
+| Duplicate in same scan | `pr.number in seen_prs` | Skip |
+
 ## Merge Queue Digest (every scan, MANDATORY)
 
 In addition to triaging un-attached PRs, every scan you also produce a **merge queue digest** — a snapshot of which PRs are ready for the board to merge right now. This is the canonical "what should I merge next" signal for the board.
@@ -244,8 +328,12 @@ Attached (skipped): <N>
 Un-attached → filed: <N>
   - PR #<a> → <PAPERCLIP-IDENTIFIER> (assignee: <agent>)
   - PR #<b> → <PAPERCLIP-IDENTIFIER> (assignee: <agent>)
+BLOCK-FIX re-routes: <N> filed, <N> skipped (already routed), <N> skipped (no fix-commit yet)
+  - PR #<a> → <PAPERCLIP-IDENTIFIER> (Loop <M>, fix-commit <sha8> at <ts>)
+  - PR #<b> → skipped (open CTO task <PAPERCLIP-IDENTIFIER> already exists)
+  - PR #<c> → skipped (no fix-commit since BLOCK-FIX at <ts>)
 Merge queue digest updated: <PAPERCLIP-IDENTIFIER-OF-DIGEST-ISSUE> (ready: <N>, pending: <N>, awaiting CI: <N>)
-Anomalies: <list any PRs flagged for board review — old, weird branches, external contributors>
+Anomalies: <list any PRs flagged for board review — old, weird branches, external contributors, fix-loop bound hits>
 
 Next scan: in 30 min (per routine cron).
 ```
