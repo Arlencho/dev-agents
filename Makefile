@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh
+.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -58,3 +58,9 @@ paperclip-status: ## Show Paperclip health, version, and instance dir
 
 paperclip-refresh: ## Fetch latest Paperclip releases, append to learnings/paperclip-changelog.md
 	@./scripts/paperclip-refresh.sh
+
+paperclip-sync: ## Sync providers/claude/agents/ → live Paperclip AGENTS.md (apply mode)
+	@./scripts/paperclip-sync.sh --apply
+
+paperclip-check: ## Report drift between providers/ and live Paperclip agents (check mode)
+	@./scripts/paperclip-sync.sh --check
