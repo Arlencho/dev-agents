@@ -146,9 +146,11 @@ In addition to the un-attached PR scan and the Merge Queue Digest, every scan yo
 Fetch all open draft PRs targeting `main`:
 
 ```bash
-gh pr list --repo <github_repo> --state open --json number,title,url,headRefName,isDraft,mergeStateStatus \
-  --jq '.[] | select(.isDraft == true and .baseRefName == "main")'
+gh pr list --repo <github_repo> --state open --base main --json number,title,url,headRefName,isDraft,statusCheckRollup \
+  --jq '.[] | select(.isDraft == true)'
 ```
+
+Note: `--base main` filters at the API level (declarative — cannot silently break if a field is renamed in `--json`). `statusCheckRollup` is the canonical CI signal — `mergeStateStatus` is unreliable for drafts, which typically report `BLOCKED` or `UNSTABLE` even when CI is green.
 
 For each result:
 
@@ -160,11 +162,11 @@ For each result:
    - Fallback: `gh pr view <N> --json closingIssuesReferences,body` and search for `OLY-NNN` in the PR body.
 4. If the Paperclip task cannot be resolved: skip. Never auto-flip unverified drafts.
 5. If `task.status != "in_review"`: skip — producer hasn't signalled done yet (e.g., `in_progress` means still working).
-6. If `mergeStateStatus != "CLEAN"`: skip — CI is not green. Do NOT flip a broken PR; preserve draft state while CI catches up.
+6. If `statusCheckRollup` contains any check whose `conclusion` (or `state` for legacy commit statuses) is not `SUCCESS` / `NEUTRAL` / `SKIPPED`: skip — CI is not green. Do NOT flip a broken PR; preserve draft state while CI catches up. Drafts almost never report `mergeStateStatus: CLEAN` (typically `BLOCKED` or `UNSTABLE`); inspect the rollup directly.
 
 ### Auto-flip action
 
-When ALL conditions are met (`isDraft == true`, branch is `task/*`, task is `in_review`, CI is `CLEAN`):
+When ALL conditions are met (`isDraft == true`, branch is `task/*`, task is `in_review`, all checks in `statusCheckRollup` are green):
 
 1. `gh pr ready <N> -R <github_repo>` — marks the PR ready for review under board authority.
 2. File a CTO Loop 1 architectural-gate routing task:
@@ -176,7 +178,7 @@ When ALL conditions are met (`isDraft == true`, branch is `task/*`, task is `in_
      "status": "todo",
      "projectId": "<from-company-manifest>",
      "assigneeAgentId": "<CTO-agent-id>",
-     "description": "## Filed by PR Sentinel — draft auto-flip (OLY-367)\n\n**Trigger:** PR #<N> was a draft whose parent Paperclip task `<task-identifier>` moved to `in_review`. CI is `CLEAN`. Auto-flipped to ready at `<timestamp>`.\n\n**PR:** <pr-url>\n**Branch:** <branch-name>\n**Parent task:** <task-identifier> (status: in_review)\n\n## What you do\n\nThis is Loop 1 of the CTO architectural gate review. Route through the full producer-critic + Security chain as normal.\n\n**Approval mechanism — formal review required.** Use `gh pr review <N> --repo <github_repo> --approve --body \"<receipt>\"` — NOT a plain `gh pr comment`. Comments do NOT register on the merge-queue digest."
+     "description": "## Filed by PR Sentinel — draft auto-flip (OLY-367)\n\n**Trigger:** PR #<N> was a draft whose parent Paperclip task `<task-identifier>` moved to `in_review`. CI is green (all `statusCheckRollup` checks SUCCESS/NEUTRAL/SKIPPED). Auto-flipped to ready at `<timestamp>`.\n\n**PR:** <pr-url>\n**Branch:** <branch-name>\n**Parent task:** <task-identifier> (status: in_review)\n\n## What you do\n\nThis is Loop 1 of the CTO architectural gate review. Route through the full producer-critic + Security chain as normal.\n\n**Approval mechanism — formal review required.** Use `gh pr review <N> --repo <github_repo> --approve --body \"<receipt>\"` — NOT a plain `gh pr comment`. Comments do NOT register on the merge-queue digest."
    }
    ```
 3. Post a sweep-receipt comment on the PR:
