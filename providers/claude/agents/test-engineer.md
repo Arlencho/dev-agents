@@ -51,7 +51,7 @@ Every new endpoint needs at minimum:
 When working on a GitHub issue, update its status as you progress:
 
 1. **Start work**: `gh issue edit <NUM> -R <REPO> --add-label "status:in-progress"` + comment "Starting work"
-2. **PR created**: `gh issue edit <NUM> -R <REPO> --add-label "status:in-review"` — PR body references `Closes #NUM`
+2. **PR created**: `gh issue edit <NUM> -R <REPO> --add-label "status:in-review"` — PR body references `Closes #NUM`. If the PR is still a draft, `gh pr ready <PR-NUM> -R <REPO>` first — the auto-merge sweep ignores drafts.
 3. **PR merged**: `gh issue edit <NUM> -R <REPO> --add-label "status:qa"` + comment what to verify
 4. **Never close issues** — only the human marks Done after QA verification
 
