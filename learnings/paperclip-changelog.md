@@ -4,6 +4,27 @@ Tracking log produced by the weekly release scan (OLY-5 routine). Each entry is 
 
 ---
 
+## 2026-05-11 — Scan by Orchestrator (OLY-1119)
+
+| Field | Value |
+|---|---|
+| Pinned version | `2026.427.0` |
+| Latest version | `v2026.428.0` (released 2026-04-28) |
+| Releases ahead of pinned | **1** |
+| Flagged releases | **None** (no body matches BREAKING / migrate / deprecat across the 5 most recent releases) |
+
+### Delta since 2026-05-04 scan
+
+**No new upstream releases** — `v2026.428.0` is still the head; same 1-release gap as last week. The 5 most recent tags (`v2026.428.0`, `v2026.427.0`, `v2026.416.0`, `v2026.403.0`, `v2026.325.0`) are unchanged from the previous entry.
+
+### Recommendation
+
+Hold pinned at `2026.427.0`. The `v2026.428.0` upgrade case (block-in-place on failed `stranded_issue_recovery`, productivity review service) is still the same as 2026-05-04: a useful but non-urgent housekeeping batch — defer to a post-demo window. No CEO action required this week.
+
+> Next scan due: ~2026-05-18 (weekly cadence). Re-run if upstream cuts a new release before then.
+
+---
+
 ## 2026-05-04 — Scan by Orchestrator (OLY-419)
 
 | Field | Value |
