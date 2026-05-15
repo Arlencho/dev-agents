@@ -177,6 +177,53 @@ Per-task token estimate (observed in production): CEO triage ~10K tok, CTO triag
 
 Per-agent caps are also possible (opus tiers cost ~5× sonnet). Default: one company-level cap, then refine per-agent only if a specific agent becomes a hotspot.
 
+## 6.1a Cost-safe defaults (post-2026-05-13 incident)
+
+**Background.** On 2026-05-12 the Olympus 14-agent fleet was flipped to `heartbeat.enabled: true, intervalSec: 300` on every agent for the May 15 London demo. `budgetMonthlyCents` was 0 (unlimited) on all 14. Combined with a producer→critic→QA→Security→CTO chain that runs Opus on 5 of the 6 review stages, the fleet burned a **full month of the human's Anthropic budget in ~3 days**. Postmortem captured in `learnings/paperclip-cost-runaway-2026-05-13.md`.
+
+**Fix.** `paperclip-up.sh` now calls `paperclip-apply-safe-defaults.sh` automatically on every startup. It applies these per-agent defaults to the Olympus company unconditionally:
+
+| Setting | Old (incident) | Safe default |
+|---|---|---|
+| `heartbeat.enabled` | `true` on all 14 | **`false`** — wake only on explicit assignment |
+| `heartbeat.intervalSec` | `300` (5 min) | `1800` (30 min) when later enabled |
+| `heartbeat.maxConcurrentRuns` | `5` | `2` |
+| `heartbeat.wakeOnDemand` | `true` | `true` (unchanged — preserves responsiveness) |
+| `budgetMonthlyCents` | `0` (unlimited) | Per-agent cap, total **€215/mo ceiling** |
+
+Per-agent budget caps (lower bound for the agent's role × model):
+
+| Agent | Model | Monthly cap |
+|---|---|---:|
+| Orchestrator | — | €0 (no LLM) |
+| CTO | Opus | €30 |
+| Backend Engineer | Sonnet | €15 |
+| Frontend Engineer | Sonnet | €15 |
+| DevOps Engineer | Sonnet | €10 |
+| Database Engineer | Sonnet | €10 |
+| API Designer | Sonnet | €10 |
+| Backend Critic | Opus | €20 |
+| Frontend Critic | Opus | €20 |
+| Database Critic | Opus | €15 |
+| API Critic | Opus | €15 |
+| QA Engineer | Opus | €20 |
+| Security Engineer | Opus | €20 |
+| PR Sentinel | Sonnet | €5 |
+
+**Total fleet ceiling: €215/mo** (≈ what a solo developer should spend on background agent work, with headroom for occasional ramps).
+
+**Day-to-day workflow.** Heartbeat is OFF on every agent at server start. To wake a specific agent for active work:
+
+```bash
+make paperclip-agent-on AGENT="Frontend Engineer"
+# … do the work, ship the PR …
+make paperclip-agent-off AGENT="Frontend Engineer"
+```
+
+Inspect current state any time with `make paperclip-agent-status` (add `STATUS_FLAGS=--recent` to see `lastHeartbeatAt`).
+
+**Override.** For workflows that genuinely need the full autonomous fleet (rare — and risky), pass `--skip-safe-defaults` to `paperclip-up.sh`. The cost ceiling no longer applies; manually re-apply defaults with `make paperclip-safe-defaults` when done.
+
 ## 6.2 API gotchas (learned in production)
 
 When automating Paperclip via API rather than UI:

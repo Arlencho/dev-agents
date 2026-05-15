@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check
+.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -64,3 +64,15 @@ paperclip-sync: ## Sync providers/claude/agents/ → live Paperclip AGENTS.md (a
 
 paperclip-check: ## Report drift between providers/ and live Paperclip agents (check mode)
 	@./scripts/paperclip-sync.sh --check
+
+paperclip-safe-defaults: ## Re-apply cost-safe defaults (heartbeat=OFF + budget caps) to all agents
+	@./scripts/paperclip-apply-safe-defaults.sh
+
+paperclip-agent-status: ## Show heartbeat + budget state per agent (use STATUS_FLAGS=--recent for last-seen)
+	@./scripts/paperclip-agent.sh status $(STATUS_FLAGS)
+
+paperclip-agent-on: ## Enable heartbeat for one agent (usage: make paperclip-agent-on AGENT="Frontend Engineer")
+	@./scripts/paperclip-agent.sh on "$(AGENT)"
+
+paperclip-agent-off: ## Disable heartbeat for one agent (usage: make paperclip-agent-off AGENT="Frontend Engineer")
+	@./scripts/paperclip-agent.sh off "$(AGENT)"

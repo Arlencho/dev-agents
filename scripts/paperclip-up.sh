@@ -19,11 +19,14 @@ die() { log "ERROR: $*"; exit 1; }
 
 INSTANCE_DIR="${HOME}/.paperclip/instances/default"
 HEALTH_URL="http://127.0.0.1:3100/api/health"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BG=0
+SKIP_DEFAULTS=0
 
 for arg in "$@"; do
   case "$arg" in
     --bg) BG=1 ;;
+    --skip-safe-defaults) SKIP_DEFAULTS=1 ;;
     --help|-h)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'
       exit 0
@@ -32,10 +35,30 @@ for arg in "$@"; do
   esac
 done
 
+# Apply cost-safe per-agent defaults (heartbeat=OFF + budget caps) on every
+# startup. Prevents the 2026-05-13 incident where the 14-agent fleet polled
+# 24/7 with unlimited budgets and burned a month of Anthropic spend in 3 days.
+# Override with --skip-safe-defaults for advanced workflows that need full
+# autonomy (rare — and risky).
+apply_safe_defaults() {
+  if [[ "$SKIP_DEFAULTS" == "1" ]]; then
+    log "skipping safe-defaults (--skip-safe-defaults passed)"
+    return 0
+  fi
+  local script="$SCRIPT_DIR/paperclip-apply-safe-defaults.sh"
+  if [[ ! -x "$script" ]]; then
+    log "WARNING: $script not executable — skipping safe defaults"
+    return 0
+  fi
+  log "applying safe defaults (heartbeat=OFF + per-agent budget caps)…"
+  "$script" || log "WARNING: safe-defaults script returned non-zero"
+}
+
 # Already running?
 if curl -sf "$HEALTH_URL" >/dev/null 2>&1; then
   VERSION="$(curl -sf "$HEALTH_URL" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
   log "already running: version=$VERSION at http://127.0.0.1:3100"
+  apply_safe_defaults
   exit 0
 fi
 
@@ -43,6 +66,8 @@ fi
 if [[ ! -d "$INSTANCE_DIR" ]]; then
   log "first run — invoking npx paperclipai onboard --yes"
   npx --yes paperclipai onboard --yes
+  # First-run path: caller may not have created agents yet. Skip defaults
+  # this round; they'll apply on the next paperclip-up after agents exist.
   exit 0
 fi
 
@@ -61,10 +86,21 @@ if [[ "$BG" == "1" ]]; then
     sleep 1
     if curl -sf "$HEALTH_URL" >/dev/null 2>&1; then
       log "health check passed"
+      apply_safe_defaults
       exit 0
     fi
   done
   die "server did not become healthy within 30s — check $INSTANCE_DIR/logs/"
 else
+  # Foreground mode: can't apply defaults after exec — would replace this
+  # process. Run defaults in a backgrounded subshell that waits for health,
+  # then patches.
+  (
+    for _ in {1..30}; do
+      sleep 1
+      curl -sf "$HEALTH_URL" >/dev/null 2>&1 && break
+    done
+    apply_safe_defaults
+  ) &
   exec npx --yes paperclipai start
 fi
