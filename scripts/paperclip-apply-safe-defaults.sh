@@ -42,22 +42,9 @@ fi
 #
 # Total: 21,500 cents = €215/month if every agent hits cap simultaneously.
 # Realistic monthly spend at these caps: €30–€80/mo across the fleet.
-declare -A BUDGET=(
-  ["Orchestrator"]=0           # no LLM — coordinator only
-  ["CTO"]=3000                 # Opus, gates everything → €30/mo
-  ["Backend Engineer"]=1500    # Sonnet → €15
-  ["Frontend Engineer"]=1500   # Sonnet → €15
-  ["DevOps Engineer"]=1000     # Sonnet → €10
-  ["Database Engineer"]=1000   # Sonnet → €10
-  ["API Designer"]=1000        # Sonnet → €10
-  ["Backend Critic"]=2000      # Opus → €20
-  ["Frontend Critic"]=2000     # Opus → €20
-  ["Database Critic"]=1500     # Opus → €15
-  ["API Critic"]=1500          # Opus → €15
-  ["QA Engineer"]=2000         # Opus → €20
-  ["Security Engineer"]=2000   # Opus → €20
-  ["PR Sentinel"]=500          # Sonnet, sweeps frequently → €5
-)
+#
+# Note: The actual budget mapping lives in the Python section below
+# (for Bash 3.2 compatibility on macOS).
 
 # Get the live agent list.
 AGENTS_JSON="$(curl -sf "$API/companies/$COMPANY_ID/agents")" \

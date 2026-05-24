@@ -1,0 +1,55 @@
+<!--
+Local PR Sentinel — macOS launchd configuration
+
+INSTALLATION (recommended):
+  cd dev-agents
+  make local-sentinel-install
+
+This will:
+  - Copy this plist to ~/Library/LaunchAgents/
+  - Load it with launchctl
+
+After installation the sentinel will run automatically every 30 minutes.
+
+USEFUL COMMANDS:
+  make local-sentinel-status
+  make local-sentinel-logs
+  make local-sentinel-uninstall
+
+Log file: ~/Library/Logs/local-pr-sentinel.log
+
+-->
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.arlen.local-pr-sentinel</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-c</string>
+        <string>cd /Users/arlenrios/Desktop/dev-projects/AI-Orchestration/dev-agents &amp;&amp; ./scripts/local-pr-sentinel.sh &gt;&gt; ~/Library/Logs/local-pr-sentinel.log 2&gt;&amp;1</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>1800</integer>   <!-- 30 minutes -->
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/arlenrios/Library/Logs/local-pr-sentinel.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/arlenrios/Library/Logs/local-pr-sentinel.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off
+.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -76,3 +76,24 @@ paperclip-agent-on: ## Enable heartbeat for one agent (usage: make paperclip-age
 
 paperclip-agent-off: ## Disable heartbeat for one agent (usage: make paperclip-agent-off AGENT="Frontend Engineer")
 	@./scripts/paperclip-agent.sh off "$(AGENT)"
+
+fleet-status: ## Unified dashboard: Paperclip agents, heartbeat states, local Ollama, Sentinel activity (the single command you want)
+	@./scripts/fleet-status.sh
+
+local-sentinel: ## Run the local (zero-cost) PR Sentinel once (uses olympus-coder via Ollama)
+	@./scripts/local-pr-sentinel.sh
+
+local-sentinel-dry: ## Dry-run the local PR Sentinel (see what it would do without filing anything)
+	@./scripts/local-pr-sentinel.sh --dry-run
+
+local-sentinel-install: ## Install the Local PR Sentinel as a background macOS service (launchd, every 30 min)
+	@./scripts/local-sentinel-install.sh
+
+local-sentinel-uninstall: ## Remove the background service
+	@./scripts/local-sentinel-uninstall.sh
+
+local-sentinel-status: ## Check if the launchd service is loaded
+	@launchctl list | grep -E 'local-pr-sentinel|PID' || echo "Service not loaded"
+
+local-sentinel-logs: ## Tail the local sentinel log file
+	@tail -f ~/Library/Logs/local-pr-sentinel.log

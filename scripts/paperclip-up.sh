@@ -75,7 +75,7 @@ fi
 log "existing instance found at $INSTANCE_DIR — starting server"
 if [[ "$BG" == "1" ]]; then
   mkdir -p "$INSTANCE_DIR/logs"
-  nohup npx --yes paperclipai start \
+  nohup npx --yes paperclipai run \
     >"$INSTANCE_DIR/logs/server.out.log" \
     2>"$INSTANCE_DIR/logs/server.err.log" \
     </dev/null &
@@ -102,5 +102,5 @@ else
     done
     apply_safe_defaults
   ) &
-  exec npx --yes paperclipai start
+  exec npx --yes paperclipai run
 fi
