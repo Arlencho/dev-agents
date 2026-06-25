@@ -91,8 +91,8 @@ VERDICT: APPROVE
 VERDICT: REVISE (followed by SUGGESTIONS:)
 VERDICT: REJECT (followed by REASONS:)"
 
-    # Run the plan-reviewer agent
-    REVIEW_OUTPUT=$(claude --agent "$REPO_DIR/providers/claude/agents/plan-reviewer.md" --print "$FULL_PROMPT" 2>/dev/null || echo "VERDICT: APPROVE")
+    # Run the CTO agent for plan review (plan-reviewer folded into CTO, lean-roster 2026-06)
+    REVIEW_OUTPUT=$(claude --agent "$REPO_DIR/providers/claude/agents/cto.md" --print "$FULL_PROMPT" 2>/dev/null || echo "VERDICT: APPROVE")
 
     echo "$REVIEW_OUTPUT"
     echo ""

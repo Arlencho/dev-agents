@@ -4,27 +4,35 @@
 #
 # Also defines model tier routing per agent — dispatch.sh reads model_routing
 # to pick the right Claude tier for each role.
+#
+# Lean roster (refactor/lean-roster, 2026-06): 18 active roles. The redundant
+# "reviewer" layer and niche meta-roles were archived to roles/_archived/.
+# Their review coverage folds into the 4 Critics + Security + CTO gate.
+# See roles/_archived/README.md to reactivate any of them.
 
 # Model tier routing per agent role.
 # Uses tier aliases (opus/sonnet/haiku) so config stays current across
-# releases automatically. Only pin exact IDs (e.g. claude-opus-4-7) when
-# reproducibility is required — migration tests, regression bisects, benchmarks.
+# releases automatically. Only pin exact IDs when reproducibility is required.
 #
 # Tier guidance:
-#   opus   — strategic/judgment-heavy: planning, adversarial review, cross-project analysis
-#   sonnet — implementation and routine review (default for dev work)
+#   opus   — strategic/judgment-heavy: planning, adversarial critique, gate
+#   sonnet — implementation and routine work (default for dev work)
 #   haiku  — lightweight, mechanical, or high-volume tasks
 model_routing:
   # High-reasoning roles — flagship tier
   orchestrator:              opus
-  plan-reviewer:             opus
-  red-team-reviewer:         opus
+  cto:                       opus
   retro:                     opus
   security-reviewer:         opus
-  production-auditor:        opus
   investigate:               opus
 
-  # Implementation and routine-review roles — balanced tier
+  # Critics — adversarial review, always a different model from their producer
+  backend-critic:            opus
+  frontend-critic:           opus
+  database-critic:           opus
+  api-critic:                opus
+
+  # Implementation roles — balanced tier
   go-backend:                sonnet
   web-frontend:              sonnet
   mobile:                    sonnet
@@ -32,20 +40,9 @@ model_routing:
   api-designer:              sonnet
   devops:                    sonnet
   test-engineer:             sonnet
-  data-engineer:             sonnet
-  performance-engineer:      sonnet
-  release-manager:           sonnet
-  tech-scout:                sonnet
-  analytics-agent:           sonnet
-  api-reviewer:              sonnet
-  migration-reviewer:        sonnet
-  perf-reviewer:             sonnet
-  testing-reviewer:          sonnet
-  maintainability-reviewer:  sonnet
 
   # Lightweight roles — cheapest tier
   docs-writer:               haiku
-  seo-auditor:               haiku
 
   # Default when a role isn't listed above
   default:                   sonnet
@@ -59,30 +56,25 @@ label_routes:
   "agent:devops": devops
   "agent:api-designer": api-designer
   "agent:security-reviewer": security-reviewer
-  "agent:seo-auditor": seo-auditor
   "migration": db-architect
   "security": security-reviewer
-  "performance": performance-engineer
   "documentation": docs-writer
-  "compliance": production-auditor
   "bug": investigate
   "investigate": investigate
   "incident": investigate
   "flaky": investigate
-  "review:api": api-reviewer
-  "review:migration": migration-reviewer
-  "review:perf": perf-reviewer
+  # Critic review labels (the surviving review system)
+  "review:backend": backend-critic
+  "review:frontend": frontend-critic
+  "review:database": database-critic
+  "review:api": api-critic
   "review:security": security-reviewer
-  "review:red-team": red-team-reviewer
-  "review:testing": testing-reviewer
-  "review:maintainability": maintainability-reviewer
 
 # Title pattern routing: regex match on issue title (first match wins)
 title_patterns:
   "^fix:.*test": test-engineer
   "^docs:": docs-writer
   "^feat:.*api": api-designer
-  "^perf:": performance-engineer
   "^bug:": investigate
   "^debug:": investigate
   "^fix:.*flaky": investigate

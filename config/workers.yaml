@@ -6,24 +6,25 @@
 # dispatch.sh reads this to select the right CLI tool.
 # For now all map to claude — structure is ready for other providers.
 provider_preferences:
+  # Producers
   go-backend: claude
   web-frontend: claude
   db-architect: claude
   api-designer: claude
   devops: claude
   test-engineer: claude
-  security-reviewer: claude
-  seo-auditor: claude
   mobile: claude
-  tech-scout: claude
+  # Critics + gate
+  backend-critic: claude
+  frontend-critic: claude
+  database-critic: claude
+  api-critic: claude
+  security-reviewer: claude
+  cto: claude
+  # Meta / ops
+  orchestrator: claude
   investigate: claude
-  api-reviewer: claude
-  migration-reviewer: claude
-  perf-reviewer: claude
-  red-team-reviewer: claude
-  testing-reviewer: claude
-  maintainability-reviewer: claude
-  plan-reviewer: claude
+  docs-writer: claude
   retro: claude
   default: claude
 
