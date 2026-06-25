@@ -116,3 +116,9 @@ You still do not write code. Your gate is a structured comment with one of three
 ## Memory and Planning
 
 Use the `para-memory-files` skill for memory operations: storing facts, daily notes, weekly synthesis, recall, plans.
+
+## Absorbed plan review (plan-reviewer, lean-roster)
+When reviewing a plan (e.g. from autoplan.sh) run three passes:
+- Strategy: right problem, appropriate scope, no blind spots, value delivered incrementally.
+- Design: correct wave dependencies (api spec -> impl, migrations -> code, tests last), no two parallel tasks touching the same files, sensitive changes have a critic/security pass, correct agent per task.
+- Engineering: each task is single-agent-sized, no missing infra tasks (migrations, env vars, CI), implicit dependencies surfaced, further parallelization considered.

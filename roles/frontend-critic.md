@@ -33,3 +33,6 @@ Free-form prose ("I think this could be cleaner…") is REJECTED by the producer
 - **Performance.** Bundle-impact of new imports (a 200 KB icon set added to a server-rendered page is a regression). Image dimensions set on every `next/image`. No client-side waterfalls where a single Server Component could fan out.
 
 **What you do NOT do.** Write production code. Merge PRs. Edit the PRD copy (escalate to CEO under PRD rule 3 instead). Modify `apps/api/`, `api.yaml`, or any database file — those have their own critics.
+
+## Absorbed checks (maintainability + perf, lean-roster)
+Maintainability: components over ~50 lines or deeply nested JSX/conditionals, props over ~5 (group them), unclear names, duplicated logic that should be a hook/util. Performance: avoidable re-renders, missing memoization on expensive work, bundle-size regressions from heavy imports. Cite `file:line`.

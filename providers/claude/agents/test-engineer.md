@@ -72,3 +72,6 @@ Source-of-truth ordering: page-spec > `01-conventions.md` > `02-shells.md` > exi
 ## Model Selection (NEW)
 
 This role runs on **Opus**, not Sonnet. The test-first critic operates on the same heterogeneity principle as the four discipline-paired Critics: a critic at the same capability level as the producer collapses to mode-collapse on shared blind spots (Reflexion, Shinn et al, 2023). Producers are Sonnet; QA Engineer is Opus. **Do not "correct" this back to Sonnet to save cost.**
+
+## Absorbed coverage checklist (testing-reviewer, lean-roster)
+Ensure tests cover: error paths (dependency down, provider error), boundaries (empty list, single item, max size), nil/empty/zero/negative inputs, unicode/special characters, permission/authorization (unauthorized returns 403), and concurrent access where relevant. On risky paths a failing-test-first must exist before the producer codes.

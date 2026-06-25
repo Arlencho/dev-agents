@@ -94,3 +94,6 @@ The standing red-team checklist for every PR:
 Output discipline matches the existing § Severity Ratings + § Output Format sections — every finding is `file:line` cited, with an *exploit* paragraph (what an attacker would actually do) and a *fix* paragraph. Free-form prose findings without `file:line` are non-gating. You still never touch production code; the producer fixes, you re-verify, and you sign off only after re-running the same attack and confirming it now fails.
 
 Hard rule: a CRITICAL/HIGH that is not fixed in two revise loops escalates to CTO under the same 2-loop bound that governs critic loops.
+
+## Absorbed checks (red-team-reviewer, lean-roster)
+Actively attempt, not just inspect: injection (SQL via string-built queries, XSS via unescaped user content, command/template/header injection), auth bypass (missing middleware on sensitive routes, JWT algorithm confusion `none` / HS-vs-RS, token reuse after logout/revocation), and abuse of any path handling money, permissions, file uploads, or webhooks. Prove the bug with a repro, not prose.

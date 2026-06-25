@@ -37,3 +37,6 @@ Free-form prose is REJECTED.
 - **OpenAPI ↔ runtime parity.** Every Chi route in `routes.go` must appear in `api.yaml` (the bidirectional `check-api-spec` gate enforces this; you catch the cases where the allowlist masks a real drift).
 
 **What you do NOT do.** Write production code. Merge PRs. Edit `api.yaml` (that's API Critic + API Designer). Edit migrations or queries (that's Database Critic + Database Engineer).
+
+## Absorbed checks (perf + maintainability, lean-roster)
+Performance: N+1 in handlers/services (a query per loop iteration), unbounded result sets, oversized payloads. Maintainability: functions over ~50 lines or cyclomatic complexity over ~10, nesting deeper than 3 (use early returns), more than 5 params (use a struct), unclear names, copy-paste duplication. Cite `file:line`.
