@@ -153,6 +153,22 @@ else
   ok "low-risk diff — skipping the Opus critic (cost lever)"
 fi
 
+# Migration-aware critic routing: if the diff is migration-DOMINANT, the
+# database-critic (irreversibility premium) reviews instead of the producer's
+# default pair. "Dominant" = DB/migration files are at least half the changed
+# source files (generated code, docs, Makefile excluded). An incidental
+# migration in a code-heavy PR keeps the producer's critic, which carries the
+# folded migration checks.
+if [ "$RISKY_HIT" -eq 1 ] && [ -n "$FILES" ] && [ "$CRITIC" != "database-critic" ]; then
+  SRC=$(echo "$FILES" | grep -vE 'db/generated/|^docs/|\.md$|^Makefile$' || true)
+  DBF=$(printf '%s\n' "$SRC" | grep -cE 'db/migrations/|db/queries/|\.sql$' || true)
+  SRCN=$(printf '%s\n' "$SRC" | grep -c . || true)
+  if [ "${DBF:-0}" -gt 0 ] && [ "${SRCN:-0}" -gt 0 ] && [ $(( DBF * 2 )) -ge "$SRCN" ]; then
+    warn "migration-dominant diff ($DBF/$SRCN source files are DB) → critic upgraded: $CRITIC → database-critic"
+    CRITIC=database-critic
+  fi
+fi
+
 # ======================================================================
 if [ "$RISKY_HIT" -eq 1 ] && [ -n "$CRITIC" ]; then
   step "STAGE 3 · critic review  ($CRITIC, Opus, 2-loop ceiling)"
