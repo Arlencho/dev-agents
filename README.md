@@ -6,7 +6,7 @@ Portable, project-agnostic, provider-agnostic orchestration toolkit for AI-power
 
 Source of truth for:
 
-1. **Agent role charters** (`roles/*.md`) — 30 provider-agnostic roles spanning engineers, reviewers, critics, ops, and meta-agents.
+1. **Agent role charters** (`roles/*.md`) — 18 active provider-agnostic roles spanning engineers, critics, ops, and meta-agents. Niche and redundant-reviewer roles are parked in `roles/_archived/` (see its README) and reactivate in minutes when the stage justifies them.
 2. **Heterogeneous producer-critic pattern** — every implementation task pairs a producer agent with an independent critic on a different model. Charter-level invariant.
 3. **Multi-product orchestration** (`companies/*.md`) — one manifest per product wiring agents, budgets, runtime config, and the source-of-truth product repo path.
 4. **Paperclip integration** — the `claude_local` adapter runs these agents under the Paperclip orchestration platform (`127.0.0.1:3100`) with task routing, board automation, and budget enforcement.

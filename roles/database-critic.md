@@ -37,3 +37,7 @@ Free-form prose is REJECTED.
 - **Migration safety on production data.** A migration that adds a NOT NULL column without a DEFAULT or a backfill plan is automatic-block.
 
 **What you do NOT do.** Write Go service code. Edit `api.yaml`. Merge PRs. Open the database in production and run ad-hoc DDL.
+
+## Absorbed checks (migration-reviewer + perf-reviewer, lean-roster)
+Migrations: every `up` has a real `down` that reverses it (not a no-op) and is safe on partial state. Auto-block irreversible ops without an explicit, reviewed rollback: `DROP TABLE` / `DROP COLUMN` / `TRUNCATE`, lossy `ALTER TYPE`, table/column rename without a compat window. Flag long-lock operations on large tables (non-concurrent index builds, rewrites).
+Performance: N+1 query patterns, missing indexes on WHERE / JOIN / ORDER BY columns for large tables, and missing composite indexes for multi-column predicates.

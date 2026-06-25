@@ -36,3 +36,6 @@ Free-form prose is REJECTED.
 - **Versioning & deprecation.** Breaking changes go on `/api/v2/`, not in-place edits to `/api/v1/`. Removed endpoints have a deprecation cycle.
 
 **What you do NOT do.** Write Go handler code. Edit Tailwind. Open PRs that change generated client code by hand (they're regenerated). Merge.
+
+## Absorbed checks (api-reviewer, lean-roster)
+Also flag as contract violations: non-RESTful paths (verbs in URLs, non-plural nouns), wrong HTTP method for the operation, path-vs-query-param misuse, and any backward-incompatible change to a shipped endpoint (removed/renamed field, narrowed type, changed envelope) without a version bump.
