@@ -42,12 +42,13 @@ AGENTS_DIR="$REPO_DIR/providers/claude/agents"
 # ---------- args ----------
 [ $# -ge 1 ] || die "usage: flow.sh <issue-number> [--repo OWNER/REPO] [--base BRANCH] [--auto-implement]"
 ISSUE="$1"; shift
-REPO="Arlencho/olympus-platform"; BASE="main"; AUTO_IMPLEMENT=0
+REPO="Arlencho/olympus-platform"; BASE="main"; AUTO_IMPLEMENT=0; DRY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO="$2"; shift 2;;
     --base) BASE="$2"; shift 2;;
     --auto-implement) AUTO_IMPLEMENT=1; shift;;
+    --dry-run) DRY=1; shift;;
     *) die "unknown flag: $1";;
   esac
 done
@@ -72,6 +73,15 @@ RISKY='payment|stripe|duffel|klarna|auth|token|session|webhook|/db/migrations|mi
 agent() {
   local charter="$AGENTS_DIR/$1.md"
   [ -f "$charter" ] || die "charter not found for role '$1' ($charter)"
+  if [ "$DRY" -eq 1 ]; then
+    echo -e "  ${YELLOW}[dry-run]${NC} would dispatch ${BOLD}$1${NC} — $(echo "$2" | head -c 80)..." >&2
+    case "$1" in
+      *critic) echo "CRITIC: PASS";;
+      cto)     echo "APPROVE-MERGE (dry-run stub)";;
+      *)       echo "[dry-run: $1 output]";;
+    esac
+    return 0
+  fi
   claude --agent "$charter" --print "$2"
 }
 
@@ -123,13 +133,18 @@ fi
 
 # locate the PR for this issue
 PR=$(gh pr list -R "$REPO" --search "$ISSUE in:body" --json number,headRefName --jq '.[0].number' 2>/dev/null || true)
-[ -n "${PR:-}" ] || die "no PR found referencing issue #$ISSUE — implement it first (or rerun with --auto-implement)"
+if [ -z "${PR:-}" ]; then
+  if [ "$DRY" -eq 1 ]; then warn "no PR yet for issue #$ISSUE — dry-run will show routing and simulate the rest"; PR="none"
+  else die "no PR found referencing issue #$ISSUE — implement it first (or rerun with --auto-implement)"; fi
+fi
 echo "  PR #$PR"
 
 # ======================================================================
 step "STAGE 2 · risk gate"
-FILES=$(gh pr diff "$PR" -R "$REPO" --name-only 2>/dev/null || echo "")
-if echo "$FILES" | grep -qiE "$RISKY"; then
+if [ "$PR" = "none" ]; then FILES=""; else FILES=$(gh pr diff "$PR" -R "$REPO" --name-only 2>/dev/null || echo ""); fi
+if [ -z "$FILES" ] && [ "$PR" = "none" ]; then
+  RISKY_HIT=0; warn "no PR diff to scan yet — risk gate would run on the PR once it exists"
+elif echo "$FILES" | grep -qiE "$RISKY"; then
   RISKY_HIT=1
   warn "RISKY diff — touches: $(echo "$FILES" | grep -iE "$RISKY" | head -3 | tr '\n' ' ')"
   echo "  → critic review is MANDATORY"
@@ -177,6 +192,10 @@ if ! echo "$CTO_VERDICT" | grep -q "APPROVE-MERGE"; then
   exit 1
 fi
 
+if [ "$DRY" -eq 1 ]; then
+  warn "[dry-run] would prompt: Merge PR #$PR? — stopping here. No agents dispatched, no merge, nothing spent."
+  exit 0
+fi
 read -r -p "$(echo -e "${BOLD}Merge PR #$PR? [y/N] ${NC}")" ANS
 case "$ANS" in
   y|Y|yes)
