@@ -41,8 +41,9 @@ model_routing:
   devops:                    sonnet
   test-engineer:             sonnet
 
-  # Lightweight roles — cheapest tier
-  docs-writer:               haiku
+  # Docs can be design-heavy (proposals, architecture) — sonnet default.
+  # Use opus when the wave task is strategic design (override in plan or bump here).
+  docs-writer:               opus
 
   # Default when a role isn't listed above
   default:                   sonnet
