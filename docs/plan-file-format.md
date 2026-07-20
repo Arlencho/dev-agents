@@ -26,6 +26,44 @@ WAVE | AGENT | TASK_DESCRIPTION | BRANCH_NAME
 - Comments start with `#` and are ignored.
 - Blank lines are ignored.
 
+## Hard Rules (Production-Learned)
+
+These rules were discovered through production orchestration. Breaking them causes failures.
+
+### Branch Naming
+- **Branch is always the last field** in the pipe-delimited record.
+- **Format**: `feat/<slash-slug>` or `fix/<slash-slug>` (kebab-case with forward slashes allowed for grouping).
+  - ✅ Good: `feat/payments-db`, `fix/auth-token`, `feat/api/payment-endpoints`
+  - ❌ Bad: `feat-payments_db`, `feat/PAYMENTS_DB`, `payments-db` (no scope prefix)
+
+### Task Description — No Unescaped Pipes
+- **Never put unescaped pipe characters (`|`) inside the task description.**
+- Plan files are pipe-delimited; unescaped pipes break the parser.
+- **For verdicts / decisions in descriptions, use space-separated format:**
+  - ✅ Good: `review payment service — verdict PASS` or `audit code: REVISE async patterns`
+  - ❌ Bad: `review | PASS | approved` or `verdict: PASS | REVISE | BLOCK`
+- If you need to include a literal pipe, escape it: `\|` (not parsed by the orchestrator, but documents intent).
+
+### Producer & Critic on Same Branch → Different Waves
+- **When a Producer and Critic both work on the same branch, they must be in different waves.**
+  - Producer wave N creates/pushes branch `feat/payments-svc`
+  - Critic wave N+1 reviews on that same branch
+- **Rationale**: Critic needs Producer's commits to exist before reviewing; same-wave parallel execution would cause race conditions.
+- Example:
+  ```
+  2 | go-backend     | implement payment service              | feat/payments-svc
+  3 | backend-critic | review payment service implementation | feat/payments-svc
+  ```
+
+### Critic Tasks & Existing Branches
+- **When a Critic task reviews an existing branch** (not created by this plan), `run-remote` will check out that branch before invoking the agent.
+- You do not need to specify branch creation logic in the task description.
+- Example:
+  ```
+  4 | backend-critic | review PR #542 changes to payment flow | main
+  ```
+  The critic will check out `main`, load the diff, and review.
+
 ## Legacy Format
 
 For simple (non-wave) plans, the wave number can be omitted. All tasks are treated as wave 1:
