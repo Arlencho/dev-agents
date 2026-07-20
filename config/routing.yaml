@@ -10,29 +10,36 @@
 # Their review coverage folds into the 4 Critics + Security + CTO gate.
 # See roles/_archived/README.md to reactivate any of them.
 
-# Model tier routing per agent role.
-# Uses tier aliases (opus/sonnet/haiku) so config stays current across
-# releases automatically. Only pin exact IDs when reproducibility is required.
+# Model routing per agent role (passed as AGENT_MODEL → launcher --model).
+# Claude accepts tier aliases (opus/sonnet/haiku) OR full IDs (e.g. claude-fable-5).
+# Kimi launcher IGNORES opus/sonnet/haiku and uses the CLI default (Kimi K3).
+# Grok launcher: same — tier aliases are not Claude models; leave default unless pinning.
 #
-# Tier guidance:
-#   opus   — strategic/judgment-heavy: planning, adversarial critique, gate
-#   sonnet — implementation and routine work (default for dev work)
-#   haiku  — lightweight, mechanical, or high-volume tasks
+# Owner multi-vendor defaults (do not "optimize" without asking):
+#   Claude docs/design  → claude-fable-5 (Fable 5)
+#   Kimi producers      → provider kimi + CLI default = K3
+#   Grok plan-critic    → provider grok (see workers.yaml)
+#
+# Tier guidance (Claude only):
+#   claude-fable-5 — owner flagship for design/docs (above opus)
+#   opus           — strategic/judgment-heavy: planning, adversarial critique, gate
+#   sonnet         — implementation and routine work (default for Claude dev work)
+#   haiku          — lightweight, mechanical, or high-volume tasks
 model_routing:
-  # High-reasoning roles — flagship tier
+  # High-reasoning roles — Claude flagship tier alias
   orchestrator:              opus
   cto:                       opus
   retro:                     opus
   security-reviewer:         opus
   investigate:               opus
 
-  # Critics — adversarial review, always a different model from their producer
+  # Critics — adversarial review (Claude seats)
   backend-critic:            opus
   frontend-critic:           opus
   database-critic:           opus
   api-critic:                opus
 
-  # Implementation roles — balanced tier
+  # Implementation roles — Claude sonnet; web-frontend is Kimi so sonnet is ignored → K3
   go-backend:                sonnet
   web-frontend:              sonnet
   mobile:                    sonnet
@@ -41,8 +48,11 @@ model_routing:
   devops:                    sonnet
   test-engineer:             sonnet
 
-  # Explicit model ID (not opus/sonnet/haiku tier). Claude Fable 5 = flagship.
+  # Claude Fable 5 — owner default for docs / design proposals
   docs-writer:               claude-fable-5
+
+  # plan-critic is Grok (workers.yaml); no Claude model pin
+  # plan-critic:             (omit — vendor default)
 
   # Default when a role isn't listed above
   default:                   sonnet

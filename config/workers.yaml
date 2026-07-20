@@ -6,11 +6,15 @@
 # dispatch.sh reads this to select the CLI tool (claude | kimi | grok),
 # then walks provider_failover in routing.yaml when the primary is
 # rate-capped (exit 75) or unavailable (exit 69).
+#
+# Owner multi-vendor seats (pair with routing.yaml model_routing):
+#   docs-writer   → claude + model claude-fable-5 (Fable 5)
+#   web-frontend  → kimi   + CLI default model (Kimi K3)
+#   plan-critic   → grok   + CLI default model
+# NOTE: YAML parsers here don't strip inline comments — keep values bare.
 provider_preferences:
   # Producers
   go-backend: claude
-  # web-frontend: K3 producer; fails over to claude per routing.yaml provider_failover.
-  # NOTE: parsers here don't strip inline comments — keep values bare.
   web-frontend: kimi
   db-architect: claude
   api-designer: claude
