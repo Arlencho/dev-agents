@@ -6,9 +6,9 @@ set -euo pipefail
 # Charter injection mirrors the kimi launcher: Grok Build has no --agent
 # equivalent, so roles/<role>.md rides at the top of the prompt.
 
-# VERIFY AT BUILD TIME: exact headless one-shot invocation for Grok Build.
-# Candidates: grok -p "<prompt>" | grok --prompt "<prompt>" | echo "<prompt>" | grok --headless
-# Everything else in this file is correct regardless of which flag wins.
+# Headless one-shot flag, QA-verified against grok 0.2.103 (2026-07-20):
+# `-p, --single <PROMPT>` — "Single-turn prompt. Prints the response to stdout
+# and exits". Note: headless mode DOES perform file edits, not prose-only.
 GROK_HEADLESS_ARGS=(-p)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

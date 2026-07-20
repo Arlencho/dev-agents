@@ -24,15 +24,9 @@ grok login    # once, against SuperGrok / X Premium+
 
 `providers/grok/launch.sh` is also a full producer launcher (charter injection + rate-cap classification), usable by setting a role's `provider_preferences` to `grok`. Not currently assigned to any producer seat — Grok's benchmarked strength here is judgment, not the frontend producer role K3 holds.
 
-### ⚠️ Verify the headless flag
+### Headless flag (QA-verified)
 
-The exact non-interactive invocation is quarantined at the top of `launch.sh` (`GROK_HEADLESS_ARGS=(-p)`). Confirm against the installed CLI before first real use:
-
-```bash
-grok --help | grep -iE 'print|prompt|headless|non-interactive'
-```
-
-Update the array if it differs; everything else in the launcher is flag-agnostic.
+`GROK_HEADLESS_ARGS=(-p)` in `launch.sh` — confirmed against grok 0.2.103: `-p, --single <PROMPT>` runs a single-turn prompt, prints to stdout, and exits. Headless mode performs real file edits (verified), so guardrails matter here just as they do for the other vendors.
 
 ## Non-goals
 
