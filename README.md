@@ -196,7 +196,7 @@ Each vendor requires a **one-time subscription login** on each machine:
 ```bash
 claude login
 ```
-Browser OAuth flow. Requires a Claude Pro subscription. If using agents in a non-interactive environment (CI, scheduled dispatch), ensure `~/.cache/codeium/` and related auth paths are reachable (typically automatic via SSH; see your IT security for Keychain access via CI runners).
+Browser OAuth flow. Requires a Claude **Pro or Max** subscription. Non-interactive SSH workers cannot read macOS Keychain OAuth; on those machines mirror credentials to the CLI's file store at `~/.claude/.credentials.json` (mode `600`) so `claude` can authenticate without a GUI Keychain prompt. Do not commit this file.
 
 **Kimi Code CLI (`kimi`):**
 ```bash
