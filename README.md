@@ -316,6 +316,7 @@ To onboard a new product, follow the checklist in [`PAPERCLIP.md`](PAPERCLIP.md)
 | [`docs/architecture.md`](docs/architecture.md) | Single-machine, multi-machine, agent communication topology |
 | [`docs/issue-lifecycle.md`](docs/issue-lifecycle.md) | Paperclip issue states (backlog → todo → in_progress → in_review → done) + label-flip discipline |
 | [`docs/plan-file-format.md`](docs/plan-file-format.md) | Wave-plan markdown format |
+| [`docs/operator-guide.md`](docs/operator-guide.md) | Running the fleet: single CLI vs. dispatch, writing plans, invoking dispatch, reading logs, handoff ledger, common failures + cookbook |
 | [`docs/scenarios.md`](docs/scenarios.md) | Real-world examples — bug fix, feature request, sprint planning, multi-machine, pre-launch audit |
 | [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md) | Weekly Paperclip release scan log |
 
