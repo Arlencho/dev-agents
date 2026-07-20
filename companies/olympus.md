@@ -29,6 +29,8 @@ Source-of-truth product repo: [`olympus-platform/`](../../olympus-platform/) —
 | Soft-live definition | **Friends & Family Beta (invite-only)** — **goal = Mode B** (real pay under Pelops) |
 | Mode A | As-is (sandbox/test money) — baseline only, not Soft-live complete |
 | Soft-live doc (source of truth) | `olympus-platform/docs/operations/soft-live-friends-family-beta.md` |
+| Soft-live GitHub Project | https://github.com/users/Arlencho/projects/8 — Soft-live Mode B board |
+| Soft-live epic | `Arlencho/olympus-platform#1996` |
 | Demo deadline | 2026-05-15 (London) — historical; Soft-live Mode B is the current north star |
 | Production URLs | `api.olympus-ai.tech` (Cloud Run), `app.olympus-ai.tech` (Vercel) |
 | Stage | Beta infrastructure; Mode A as-is; Soft-live Mode B not open until KYB + critical path |
