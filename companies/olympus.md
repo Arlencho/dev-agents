@@ -26,12 +26,14 @@ Source-of-truth product repo: [`olympus-platform/`](../../olympus-platform/) —
 | Item | Value |
 |---|---|
 | Wave plan in flight | `wave-plans/olympus-golive-from-sandbox-2026-07-21.md` |
-| Soft-live definition | **Friends & Family Beta** (invite-only): search → book → pay — see product doc |
+| Soft-live definition | **Friends & Family Beta (invite-only)** — **goal = Mode B** (real pay under Pelops) |
+| Mode A | As-is (sandbox/test money) — baseline only, not Soft-live complete |
 | Soft-live doc (source of truth) | `olympus-platform/docs/operations/soft-live-friends-family-beta.md` |
-| Demo deadline | 2026-05-15 (London) — historical; Soft-live is the current north star |
+| Demo deadline | 2026-05-15 (London) — historical; Soft-live Mode B is the current north star |
 | Production URLs | `api.olympus-ai.tech` (Cloud Run), `app.olympus-ai.tech` (Vercel) |
-| Stage | Beta infrastructure; Soft-live F&F not yet formally opened |
-| Legal entity | Pelops AI AB (559579-1574) — Stripe/Duffel KYB under this entity for real money |
+| Stage | Beta infrastructure; Mode A as-is; Soft-live Mode B not open until KYB + critical path |
+| Legal entity | Pelops AI AB (559579-1574) — Stripe/Duffel KYB critical for Mode B |
+| DPAs / full legal | Required for public scale; not hard gate for F&F production testing (owner risk) |
 
 ## Budget cap
 
