@@ -167,11 +167,19 @@ fi
 
 cd "$WORK_DIR"
 
-# Update and create branch
+# Update and land on the task branch. The branch may already exist (producer
+# pushed it; a critic reviews the same branch next) — create only if missing,
+# track origin when it only exists remotely, fast-forward when local.
 git fetch origin
 git checkout main
 git pull origin main
-git checkout -b "$BRANCH"
+if git checkout "$BRANCH" 2>/dev/null; then
+    git pull origin "$BRANCH" 2>/dev/null || true
+elif git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
+    git checkout -b "$BRANCH" "origin/$BRANCH"
+else
+    git checkout -b "$BRANCH"
+fi
 
 # Install guardrails git hooks
 if [ -x ~/dev/guardrails/guardrails.sh ]; then

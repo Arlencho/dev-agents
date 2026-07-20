@@ -1,1 +1,11 @@
 task,arm,critic_block,rework_loops,intent_cited,notes
+T01-canonical,treatment,0,0,0,PASS; producer anomaly — no handoff written (dispatch marked producer failed); critic reviewed branch fine
+T02-robots,control,0,0,0,PASS
+T03-twitter-title,treatment,0,0,0,PASS w/ advisory (tag inert w/o twitter:card — follow-up task); review mirrors handoff do_not_repeat items without citing them
+T04-og-locale,control,0,0,0,PASS
+T05-jsonld-org,treatment,0,0,0,PASS
+T06-cta-aria,control,1,0,0,REVISE — aria-label duplicates visible text (semantic no-op); good catch
+T07-skip-link,treatment,0,0,0,PASS
+T08-footer-domain,control,0,0,0,PASS
+T09-theme-color,treatment,0,0,0,PASS
+T10-mailto-subject,control,0,0,0,PASS (empty commit; earlier kimi-critic run said REVISE on same branch)

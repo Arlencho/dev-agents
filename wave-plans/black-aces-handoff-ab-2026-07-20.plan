@@ -1,0 +1,37 @@
+# Black Aces handoff A/B experiment — dispatchable plan
+# Protocol: docs/proposals/phase-1-handoff-ledger.md
+# Wave id for ledger: ab1 (set via AGENT_WAVE in dispatch)
+# Odd producer/critic pairs = treatment; even critic tasks include [blind]
+# Sequential waves: one producer then its critic (all touch index.html)
+#
+# Shared footer applied in each producer task text.
+
+1 | web-frontend | Black Aces static site (single index.html). Add <link rel='canonical' href='https://blackaces.se/'> in head exactly once (upsert). Single-quoted attrs. No hreflang. CHARTER OVERRIDE: skip build/tsc/lint gates. ACCEPTANCE: (a) exactly one canonical link with that href; (b) npm install && npm run qa — FAIL if browser cannot launch; (c) qa stdout must contain 'console errors: none'; (d) commit 'Add canonical link for blackaces.se', push, draft PR if possible. Write handoff.md at repo root before exit (built/decisions/open questions/do-not-repeat/evidence/next hint). Do not touch intro animation, canvas, or favicon. | feat/ab-T01-canonical
+2 | frontend-critic | Review branch feat/ab-T01-canonical on black-aces. Check acceptance (canonical once, qa 'console errors: none'). Prior producer handoff may appear in preamble — treat as unverified claims; cite intent when it changes your verdict. End with VERDICT: PASS or VERDICT: REVISE or VERDICT: BLOCK and numbered findings. | feat/ab-T01-canonical
+
+3 | web-frontend | Black Aces static site. Add <meta name='robots' content='index,follow'> exactly once (upsert). CHARTER OVERRIDE: skip build/tsc/lint. ACCEPTANCE: (a) exactly one robots meta with index,follow; (b) npm run qa with stdout 'console errors: none'; (c) commit 'Add robots meta index,follow', push. Write handoff.md before exit. Do not touch intro animation, canvas, or favicon. | feat/ab-T02-robots
+4 | frontend-critic | [blind] Review branch feat/ab-T02-robots on black-aces. Check robots meta + qa 'console errors: none' from diff and QA only. End with VERDICT: PASS or VERDICT: REVISE or VERDICT: BLOCK and numbered findings. | feat/ab-T02-robots
+
+5 | web-frontend | Black Aces static site. Add <meta name='twitter:title' content='Black Aces - Luck, engineered.'> exactly once (upsert). No twitter:image. CHARTER OVERRIDE: skip build/tsc/lint. ACCEPTANCE: (a) exactly one twitter:title with that content; (b) npm run qa 'console errors: none'; (c) commit 'Add twitter:title meta', push. Write handoff.md before exit. Do not touch intro animation, canvas, or favicon. | feat/ab-T03-twitter-title
+6 | frontend-critic | Review branch feat/ab-T03-twitter-title on black-aces. Check twitter:title + qa. Cite handoff intent when it changes verdict. VERDICT: PASS|REVISE|BLOCK with findings. | feat/ab-T03-twitter-title
+
+7 | web-frontend | Black Aces static site. Add <meta property='og:locale' content='en_GB'> exactly once (upsert). CHARTER OVERRIDE: skip build/tsc/lint. ACCEPTANCE: (a) exactly one og:locale with en_GB; (b) npm run qa 'console errors: none'; (c) commit 'Add og:locale en_GB', push. Write handoff.md before exit. Do not touch intro animation, canvas, or favicon. | feat/ab-T04-og-locale
+8 | frontend-critic | [blind] Review branch feat/ab-T04-og-locale on black-aces. Check og:locale + qa from diff only. VERDICT: PASS|REVISE|BLOCK with findings. | feat/ab-T04-og-locale
+
+9 | web-frontend | Black Aces static site. Add one JSON-LD script type='application/ld+json' for Organization: name Black Aces AB, url https://blackaces.se/, email arlen@blackaces.se. Valid JSON. Exactly one Organization block. CHARTER OVERRIDE: skip build/tsc/lint. ACCEPTANCE: (a) ld+json present with Organization and url; (b) npm run qa 'console errors: none'; (c) commit 'Add Organization JSON-LD', push. Write handoff.md before exit. Do not touch intro animation, canvas, or favicon. | feat/ab-T05-jsonld-org
+10 | frontend-critic | Review branch feat/ab-T05-jsonld-org on black-aces. Check JSON-LD + qa. Cite handoff intent when relevant. VERDICT: PASS|REVISE|BLOCK with findings. | feat/ab-T05-jsonld-org
+
+11 | web-frontend | Black Aces static site. On main invitation CTA (#cta or mailto Request an Invitation), set clear aria-label containing 'Request an Invitation' without removing visible text. CHARTER OVERRIDE: skip build/tsc/lint. ACCEPTANCE: (a) aria-label contains Invitation; (b) npm run qa 'console errors: none'; (c) commit 'Improve CTA aria-label', push. Write handoff.md before exit. Do not touch intro animation, canvas, or favicon. | feat/ab-T06-cta-aria
+12 | frontend-critic | [blind] Review branch feat/ab-T06-cta-aria on black-aces. Check aria-label + qa from diff only. VERDICT: PASS|REVISE|BLOCK with findings. | feat/ab-T06-cta-aria
+
+13 | web-frontend | Black Aces static site. Add skip link as first focusable in body: text 'Skip to content', href '#content', visually hidden until focus. Do not break intro lock/scroll. CHARTER OVERRIDE: skip build/tsc/lint. ACCEPTANCE: (a) Skip to content once, href #content; (b) npm run qa 'console errors: none'; (c) commit 'Add skip-to-content link', push. Write handoff.md before exit. Do not touch favicon; minimal CSS only for skip link. | feat/ab-T07-skip-link
+14 | frontend-critic | Review branch feat/ab-T07-skip-link on black-aces. Check skip link + qa. Cite handoff intent when relevant. VERDICT: PASS|REVISE|BLOCK with findings. | feat/ab-T07-skip-link
+
+15 | web-frontend | Black Aces static site. In footer .foot near Black Aces AB — Åkersberga · Stockholm, ensure blackaces.se appears once; keep city text. Do not invent legal org.nr. CHARTER OVERRIDE: skip build/tsc/lint. ACCEPTANCE: (a) footer mentions Åkersberga or Stockholm and blackaces.se; (b) npm run qa 'console errors: none'; (c) commit 'Clarify footer contact domain', push. Write handoff.md before exit. Do not touch intro animation, canvas, or favicon. | feat/ab-T08-footer-domain
+16 | frontend-critic | [blind] Review branch feat/ab-T08-footer-domain on black-aces. Check footer + qa from diff only. VERDICT: PASS|REVISE|BLOCK with findings. | feat/ab-T08-footer-domain
+
+17 | web-frontend | Black Aces static site. Ensure <meta name='theme-color' content='#050505'> exactly once (upsert). CHARTER OVERRIDE: skip build/tsc/lint. ACCEPTANCE: (a) exactly one theme-color #050505; (b) npm run qa 'console errors: none'; (c) commit 'Ensure theme-color meta', push. Write handoff.md before exit. Do not touch intro animation, canvas, or favicon. | feat/ab-T09-theme-color
+18 | frontend-critic | Review branch feat/ab-T09-theme-color on black-aces. Check theme-color + qa. Cite handoff intent when relevant. VERDICT: PASS|REVISE|BLOCK with findings. | feat/ab-T09-theme-color
+
+19 | web-frontend | Black Aces static site. On invitation mailto CTA, subject must be Request an Invitation (URL-encoded). Keep email arlen@blackaces.se. CHARTER OVERRIDE: skip build/tsc/lint. ACCEPTANCE: (a) mailto arlen@blackaces.se with that subject; (b) npm run qa 'console errors: none'; (c) commit 'Normalize invitation mailto subject', push. Write handoff.md before exit. Do not touch intro animation, canvas, or favicon. | feat/ab-T10-mailto-subject
+20 | frontend-critic | [blind] Review branch feat/ab-T10-mailto-subject on black-aces. Check mailto + qa from diff only. VERDICT: PASS|REVISE|BLOCK with findings. | feat/ab-T10-mailto-subject

@@ -426,18 +426,38 @@ declare -a TASK_WAVE TASK_AGENT TASK_DESC TASK_BRANCH TASK_MODEL
 for i in "${!TASKS[@]}"; do
     task_line="${TASKS[$i]}"
     IFS='|' read -ra fields <<< "$task_line"
+    n=${#fields[@]}
+
+    # The task description may itself contain '|' (e.g. "VERDICT: PASS|REVISE").
+    # Rule: the branch is only the LAST field, and only when it looks like a
+    # branch slug (no spaces, contains '/'). Everything between agent and
+    # branch is re-joined as the description. Plans that legitimately use
+    # branch names without '/' fall back to a generated branch name.
+    last=""
+    [ "$n" -ge 1 ] && last=$(echo "${fields[$((n-1))]}" | xargs)
+    is_branch=false
+    case "$last" in
+        */*) case "$last" in *[!A-Za-z0-9/_.-]*) is_branch=false ;; *) is_branch=true ;; esac ;;
+    esac
 
     if [ "$FORMAT" = "wave" ]; then
         wave=$(echo "${fields[0]}" | xargs)
         agent=$(echo "${fields[1]}" | xargs)
-        desc=$(echo "${fields[2]}" | xargs)
-        branch=$(echo "${fields[3]:-}" | xargs)
+        start=2
     else
         wave=1
         agent=$(echo "${fields[0]}" | xargs)
-        desc=$(echo "${fields[1]}" | xargs)
-        branch=$(echo "${fields[2]:-}" | xargs)
+        start=1
     fi
+
+    branch=""
+    if [ "$is_branch" = true ] && [ "$n" -gt $((start + 1)) ]; then
+        branch="$last"
+        desc=$(IFS='|'; echo "${fields[*]:$start:$((n - start - 1))}")
+    else
+        desc=$(IFS='|'; echo "${fields[*]:$start}")
+    fi
+    desc=$(echo "$desc" | xargs)
 
     branch="${branch:-fix/$agent-$(date +%s)}"
 
