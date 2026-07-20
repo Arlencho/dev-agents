@@ -9,6 +9,8 @@ paperclip_project_id: 16a1b183-4800-4b35-95a6-f9c3730579e0  # Onboarding (defaul
 paperclip_workspace_id: a7238075-4236-44ff-82c6-95a5bb9d60af
 github_repo: Arlencho/olympus-platform
 github_default_branch: main
+legal_entity: Pelops AI AB
+legal_org_nr: 559579-1574  # registered 2026-07-20; "Olympus AI AB" name rejected, Pelops = 2nd choice
 ---
 
 # Olympus — AI Travel Booking Platform
