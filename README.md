@@ -12,7 +12,8 @@ Source of truth for:
 2. **Heterogeneous producer-critic pattern** — every implementation task pairs a producer agent with an independent critic on a different model. Charter-level invariant.
 3. **Multi-vendor CLI orchestration** — agents run via `claude`, `kimi`, and `grok` subscription CLIs on owned hardware. Provider selection via `workers.yaml provider_preferences` + `routing.yaml provider_failover`. Rate-cap sentinel marks vendors cooling and fails over automatically.
 4. **Multi-product orchestration** (`companies/*.md`) — one manifest per product wiring agents, budgets, runtime config, and the source-of-truth product repo path.
-5. **Paperclip integration** — the `claude_local` adapter runs these agents under the Paperclip orchestration platform (`127.0.0.1:3100`) with task routing, board automation, and budget enforcement.
+5. **L2 skill packs** (`skills/*/SKILL.md` + `config/role-skills.yaml`) — versioned playbooks injected at launch (not identity; not auto-memory). Global packs live here; project packs live in the product repo and **replace** global by pack id. Evolution is PR-gated (human merge for global). See [skills evolution synthesis](docs/proposals/skills-evolution-SYNTHESIS.md).
+6. **Paperclip integration** — the `claude_local` adapter runs these agents under the Paperclip orchestration platform (`127.0.0.1:3100`) with task routing, board automation, and budget enforcement.
 
 ## What's new
 
@@ -71,9 +72,27 @@ The heterogeneity invariant extended across vendors — same-vendor different-ti
 
 **Non-goals**: no vendor swap on orchestrator, CTO gate, or critics — trust-critical seats stay on harness-proven Claude.
 
-### Per-role model tier routing
+### Per-role model routing
 
-`config/routing.yaml → model_routing:` pins each role to `opus`, `sonnet`, or `haiku`. Tier aliases (not version IDs) so config doesn't churn when Anthropic ships a new version. ~51% cost reduction vs uniform Opus.
+`config/routing.yaml → model_routing:` pins each role to a **Claude tier alias** (`opus` / `sonnet` / `haiku`) **or** an explicit model id (e.g. `claude-fable-5` for `docs-writer`). Kimi/Grok launchers **ignore** Claude tier aliases and use the CLI default (Kimi **K3**, Grok default). Live seats: see `workers.yaml` `provider_preferences` + this map.
+
+| Example seat | Provider | Model (today) |
+|---|---|---|
+| `web-frontend` | kimi | K3 (CLI default) |
+| `docs-writer` | claude | **claude-fable-5** (Fable 5) |
+| `plan-critic` | grok | CLI default |
+| most critics / cto / security | claude | opus |
+| most producers | claude | sonnet |
+
+### L2 skills + experience evolution (Phase 0 live)
+
+Agents load **charter (L1) + skill packs (L2) + case file (L3 preamble) + task**. Skills are short, evidence-cited playbooks under `skills/<id>/SKILL.md`, mapped per role in `config/role-skills.yaml`.
+
+**Runtime (fleet dispatch):** `scripts/run-remote.sh` runs `scripts/skill-inject.sh` and places L2 text **before** the L3 preamble (not inside `preamble.sh`). Missing packs warn and continue — never block dispatch. Workers also receive a copy under `~/dev/agent-runtime/skills/`.
+
+**Starter packs (shared, not 50 novels):** `evidence-first`, `untrusted-prior`, `handoff-intent`, `git-ship`, `docs-no-hallucinate`. Lint with `./scripts/skills-lint.sh`.
+
+**Evolution:** experience stays in learnings/handoffs/retros; **promotion is a PR** (project → critic or human; **global → human always**). No producer auto-merge of skills. No AI branding on commits/PRs (`git-ship` + commit-msg guardrail). Full freeze: [`docs/proposals/skills-evolution-SYNTHESIS.md`](docs/proposals/skills-evolution-SYNTHESIS.md). Phases 1–3 (manual promote practice → candidate automation → metrics) are planned there; only **Phase 0 inject** is shipped.
 
 ## Operator Quickstart
 
@@ -249,25 +268,35 @@ dev-agents/
 │   └── # Each manifest: charter, paperclip company id, budget cap, agent
 │       # roster (subset of roles/), KPIs, escalation rules, repo path.
 │       # See any existing manifest as a template.
-├── wave-plans/               # Per-wave execution plans (one per wave per product)
+├── wave-plans/               # Per-wave execution plans + handoff ledgers
 ├── learnings/                # Retros + Paperclip release-tracker + per-company logs
 │   └── paperclip-changelog.md
+├── skills/                   # L2 global skill packs (SKILL.md per pack)
+│   ├── README.md             # Layout, promotion rules, delivery-face law
+│   ├── evidence-first/  untrusted-prior/  handoff-intent/
+│   ├── git-ship/  docs-no-hallucinate/
+│   └── _candidates/          # Drafts only — never injected at runtime
 ├── docs/
 │   ├── architecture.md
 │   ├── org-chart.md          # Producer-critic reporting + pairing visualization
+│   ├── operator-guide.md     # Fleet ops: dispatch, logs, handoffs, failures
+│   ├── plan-file-format.md   # Detailed WAVE format spec
 │   ├── paperclip-architecture.md
 │   ├── issue-lifecycle.md
-│   ├── plan-file-format.md   # Detailed WAVE format spec
-│   └── scenarios.md
+│   ├── scenarios.md
+│   └── proposals/            # Design freezes (skills evolution, multi-vendor, …)
 ├── templates/                # Project CLAUDE.md scaffolds
 │   ├── go-nextjs.md  python-fastapi.md
 ├── config/
 │   ├── workers.yaml          # Worker machine registry + provider_preferences
-│   ├── routing.yaml          # Model tier routing + provider_failover
+│   ├── routing.yaml          # model_routing + provider_failover
+│   ├── role-skills.yaml      # Role → L2 skill pack map
+│   ├── preamble.yaml         # L3 case-file inject limits
+│   ├── guardrails.yaml       # Blocked/warned command patterns
 │   └── ratecap-patterns.conf # Vendor rate-cap detection patterns
 ├── providers/
 │   ├── lib.sh                # Shared launcher utilities
-│   ├── claude/agents/        # Claude Code agent symlinks (ready)
+│   ├── claude/agents/        # Claude Code agent definitions
 │   ├── kimi/
 │   │   ├── README.md         # Kimi K3 producer setup + rate-cap behavior
 │   │   └── launch.sh
@@ -276,17 +305,15 @@ dev-agents/
 │   │   └── launch.sh
 │   └── openai/  cursor/      # Placeholder stubs
 └── scripts/
-    ├── # Local agent harness
     ├── bootstrap.sh  setup-machine.sh  new-project.sh
-    ├── dispatch.sh   # Multi-agent fleet orchestration with wave coordination
-    ├── run-remote.sh # Ships launcher + task to worker, handles provider exit codes
-    ├── workers-status.sh
-    ├── guardrails.sh  preamble.sh  notify.sh
-    ├── autoplan.sh  retro-data.sh  learnings.sh  sync-providers.sh
-    ├── provider-scorecard.sh # Rate-cap + task outcome metrics
-    └── # Paperclip orchestration (secondary path)
-    └── paperclip-up.sh  paperclip-down.sh
-    └── paperclip-status.sh  paperclip-refresh.sh
+    ├── dispatch.sh           # Multi-agent fleet orchestration (waves)
+    ├── run-remote.sh         # Preamble + skill-inject + launcher on worker
+    ├── skill-inject.sh       # Assemble L2 skill text for a role
+    ├── skills-lint.sh        # Lint packs ([ev:], size, path hygiene)
+    ├── guardrails.sh         # pre-push + commit-msg (no AI branding)
+    ├── preamble.sh  notify.sh  autoplan.sh  retro-data.sh  learnings.sh
+    ├── sync-providers.sh  provider-scorecard.sh
+    └── paperclip-up.sh  paperclip-down.sh  paperclip-status.sh  paperclip-refresh.sh
 ```
 
 ## How orchestration actually works
@@ -323,7 +350,7 @@ CTO architectural gate — APPROVE-MERGE / BLOCK-FIX / BLOCK-ESCALATE
 DevOps + CI ship
 ```
 
-Per-task discipline (worktree isolation, label-flip cadence, no-Co-Authored-By trailer, conventional commits) is enforced by each project's `CLAUDE.md` rules.
+Per-task discipline (worktree isolation, label-flip cadence, conventional commits, **no AI branding** on commits/PRs) is enforced by project `CLAUDE.md` rules, fleet `skills/git-ship`, and the commit-msg guardrail hook.
 
 ### Path B — Direct agent invocation (for one-off, single-scope, ad-hoc work)
 
@@ -345,6 +372,8 @@ Use direct invocation when:
 # See "Operator Quickstart" section above for full details
 ./scripts/dispatch.sh git@github.com:yourcompany/myproject.git wave-plans/myplan.txt --auto --retries 3
 ```
+
+**Launch prompt shape (fleet path):** L1 charter (launcher / `--agent`) → **L2 skills** (`skill-inject.sh`) → **L3 case** (`preamble.sh`: learnings, git, handoffs) → task text. Log line `Injected L2 skill packs into prompt` confirms skills loaded.
 
 Use fleet dispatch when:
 - You have 5–20 agents working in parallel across waves
@@ -497,12 +526,16 @@ The sync script resolves agent → provider file via a 3-level lookup:
 | Doc | What it covers |
 |---|---|
 | [`docs/plan-file-format.md`](docs/plan-file-format.md) | Detailed WAVE format spec, parsing rules, pipe character / VERDICT line warnings |
-| [`docs/operator-guide.md`](docs/operator-guide.md) | Running the fleet: single CLI vs dispatch, plans, logs, handoff Phase 1, common failures + cookbook |
+| [`docs/operator-guide.md`](docs/operator-guide.md) | Running the fleet: single CLI vs dispatch, plans, logs, handoff Phase 1, skills inject, common failures + cookbook |
 | [`docs/org-chart.md`](docs/org-chart.md) | Mermaid + ASCII visualization of reporting + pairing edges (Paperclip's tree UI can't draw peer edges; this is canonical) |
 | [`docs/paperclip-architecture.md`](docs/paperclip-architecture.md) | Paperclip platform architecture — companies, agents, issues, runs, adapters |
 | [`docs/architecture.md`](docs/architecture.md) | Single-machine, multi-machine, agent communication topology |
 | [`docs/issue-lifecycle.md`](docs/issue-lifecycle.md) | Paperclip issue states (backlog → todo → in_progress → in_review → done) + label-flip discipline |
 | [`docs/scenarios.md`](docs/scenarios.md) | Real-world examples — bug fix, feature request, sprint planning, multi-machine, pre-launch audit |
+| [`skills/README.md`](skills/README.md) | L2 skill pack layout, promotion rules, delivery-face law |
+| [`docs/proposals/skills-evolution-SYNTHESIS.md`](docs/proposals/skills-evolution-SYNTHESIS.md) | **Owner freeze** — skills architecture, phases 0–3, inject path, gates |
+| [`docs/proposals/skills-evolution-BRIEF.md`](docs/proposals/skills-evolution-BRIEF.md) | Design brief that produced the three vendor proposals |
+| [`config/role-skills.yaml`](config/role-skills.yaml) | Role → skill pack map |
 | [`providers/kimi/README.md`](providers/kimi/README.md) | Kimi K3 producer setup, rate-cap behavior, trial gate for cross-vendor pairs |
 | [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic and judgment-seat launcher |
 | [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md) | Weekly Paperclip release scan log |

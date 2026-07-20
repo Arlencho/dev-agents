@@ -347,6 +347,28 @@ wave,task_id,agent,arm,files_touched,exit_code,verdict
 
 ---
 
+## L2 Skill Packs (Phase 0 live)
+
+Fleet agents receive **versioned playbooks** in addition to charters and the case-file preamble.
+
+| Layer | What | Where |
+|-------|------|--------|
+| L1 Charter | Role identity + hard laws | `roles/<role>.md` |
+| L2 Skills | Shared playbooks | `skills/<id>/SKILL.md` + `config/role-skills.yaml` |
+| L3 Case | This task’s context | `scripts/preamble.sh` (learnings, git, handoffs) |
+
+**Inject path:** `run-remote.sh` calls `scripts/skill-inject.sh` and places L2 **before** L3. Log line: `Injected L2 skill packs into prompt`. Skills are **not** folded into `preamble.sh`.
+
+**Project override:** same pack id under `<product-repo>/skills/<id>/SKILL.md` **replaces** the global pack body.
+
+**Delivery face:** no AI branding on commits/PRs (`skills/git-ship` + `guardrails.sh` commit-msg hook). Provenance stays in handoffs/logs.
+
+**Promote skills:** open a PR (not silent edit on product branches). Global = human merge. Project = critic or human. Full design: [`docs/proposals/skills-evolution-SYNTHESIS.md`](proposals/skills-evolution-SYNTHESIS.md). Lint: `./scripts/skills-lint.sh`.
+
+**Not shipped yet (SYNTHESIS phases 1–3):** auto candidate scanner, retro-drafted skill PRs, scorecard metrics. Phase 0 = inject + starter packs only.
+
+---
+
 ## Common Failures & Troubleshooting
 
 ### 1. HTTPS Clone Auth Fails
@@ -729,10 +751,12 @@ This is equivalent to:
 | **Plans** | `wave-plans/<name>.plan` | Author here; dispatch reads from here |
 | **Execution log** | `wave-plans/<repo>-<date>.log` | Dispatch saves results here |
 | **Handoff ledger** | `wave-plans/<wave>/handoffs/<task-id>.{jsonl,md}` | Mechanical record + agent intent |
-| **Worker config** | `config/workers.yaml` | SSH hosts, capacities, agent preferences |
-| **Routing config** | `config/routing.yaml` | Provider failover chains, model tiers, rate-cap windows |
-| **Guardrails** | `config/guardrails.yaml` | Git hook rules (commit message, file access) |
-| **Agent logs** | `logs/` (dispatcher side) or `~/$HOME/dev/agent-logs/` (worker side) | Full agent output |
+| **Worker config** | `config/workers.yaml` | SSH hosts, capacities, provider_preferences |
+| **Routing config** | `config/routing.yaml` | model_routing, provider_failover, rate-cap windows |
+| **Role → skills map** | `config/role-skills.yaml` | Which L2 packs each role loads |
+| **Skill packs** | `skills/<id>/SKILL.md` | Global L2 playbooks |
+| **Guardrails** | `config/guardrails.yaml` + hooks from `guardrails.sh` | Blocked commands; commit-msg bans AI branding |
+| **Agent logs** | `logs/` (dispatcher) or `~/dev/agent-logs/` (worker) | Full agent output |
 | **Provider state** | `logs/provider-state/` | Rate-cap cooldowns, failover events |
 | **Learnings** | `learnings/` | Auto-recorded failure patterns |
 
@@ -757,6 +781,10 @@ This is equivalent to:
 
 - [`docs/plan-file-format.md`](plan-file-format.md) — Deep dive on plan syntax
 - [`docs/scenarios.md`](scenarios.md) — Real-world examples (bug fix, feature request, pre-launch audit)
+- [`docs/proposals/skills-evolution-SYNTHESIS.md`](proposals/skills-evolution-SYNTHESIS.md) — Skills architecture freeze (phases 0–3)
+- [`skills/README.md`](../skills/README.md) — Pack layout + promotion rules
 - [`scripts/dispatch.sh`](../scripts/dispatch.sh) — Full dispatcher source; see Flags section
-- [`scripts/run-remote.sh`](../scripts/run-remote.sh) — Full remote execution source; see Phase 1 handoff comments
+- [`scripts/run-remote.sh`](../scripts/run-remote.sh) — skill-inject + preamble + launcher
+- [`scripts/skill-inject.sh`](../scripts/skill-inject.sh) — L2 pack assembly
 - [`config/workers.yaml`](../config/workers.yaml) — Worker + provider configuration template
+- [`config/role-skills.yaml`](../config/role-skills.yaml) — Role → pack map
