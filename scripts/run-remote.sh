@@ -25,7 +25,8 @@ BRANCH="${5:-fix/${AGENT}-$(date +%s)}"
 shift 5 2>/dev/null || shift $#
 
 # Parse optional flags
-LOG_DIR="~/dev/agent-logs"
+# Default log dir: \$HOME expands worker-side (see WORK_DIR note below).
+LOG_DIR="\$HOME/dev/agent-logs"
 # Model tier or ID, set by dispatch.sh via AGENT_MODEL env var (e.g. opus,
 # sonnet, haiku, or an explicit model ID). Empty means use the CLI default.
 MODEL="${AGENT_MODEL:-}"
@@ -33,6 +34,9 @@ MODEL="${AGENT_MODEL:-}"
 # Selects which providers/<provider>/launch.sh runs the agent. All authenticate
 # via subscription login on the worker — no API keys anywhere.
 PROVIDER="${AGENT_PROVIDER:-claude}"
+# Wave number set by dispatch.sh via AGENT_WAVE (default 1 for direct runs).
+# Drives the handoff ledger location (wave-plans/<wave>/handoffs/).
+WAVE="${AGENT_WAVE:-1}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --log-dir)
@@ -51,7 +55,10 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_NAME=$(basename "$REPO_URL" .git)
-WORK_DIR="~/dev/$REPO_NAME"
+# \$HOME stays literal through the dispatcher-side heredoc expansion and
+# expands ON THE WORKER — a quoted "~" would never expand anywhere (latent
+# bug: quoted-tilde paths broke fresh clones, cd, and tee on every worker).
+WORK_DIR="\$HOME/dev/$REPO_NAME"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 LOG_FILE="${REPO_NAME}-${BRANCH//\//-}-${TIMESTAMP}.log"
 
@@ -73,8 +80,20 @@ ssh -o ConnectTimeout=5 "$HOST" "echo 'Connected'" || {
     exit 1
 }
 
+# A/B control arm (Phase 1): a task whose text carries the [blind] marker gets
+# no handoff slice in its preamble — per-task control, so a plan can hold a
+# normal producer and a charter-blind critic in the same wave pair. The marker
+# is stripped before the task reaches the agent.
+if [[ "$TASK" == *"[blind]"* ]]; then
+    TASK="${TASK//\[blind\] /}"
+    TASK="${TASK//\[blind\]/}"
+    export PREAMBLE_NO_HANDOFF=1
+fi
+
 # Generate preamble (includes CLAUDE.md, learnings, parallel sessions, git state, issue context)
-PREAMBLE=$("$SCRIPT_DIR/preamble.sh" "$WORK_DIR" "$AGENT" "$BRANCH" 2>/dev/null || true)
+# Path here is dispatcher-absolute ($HOME expands locally) — WORK_DIR above is worker-relative.
+# Wave + provider enable the handoff slice + continuity line (Phase 1).
+PREAMBLE=$("$SCRIPT_DIR/preamble.sh" "$HOME/dev/$REPO_NAME" "$AGENT" "$BRANCH" "$WAVE" "$PROVIDER" 2>/dev/null || true)
 if [ -n "$PREAMBLE" ]; then
     FULL_TASK="$PREAMBLE
 
@@ -83,6 +102,13 @@ YOUR TASK: $TASK"
 else
     FULL_TASK="$TASK"
 fi
+
+# The task text (and preamble) can contain ANY shell-significant characters —
+# quotes, parens, apostrophes, URLs. It must never reach the remote shell
+# parser through the unquoted heredoc (live-run bug: task text fragmented the
+# remote invocation). Encode dispatcher-side, decode on the worker; base64's
+# alphabet is inert inside double quotes.
+FULL_TASK_B64=$(printf '%s' "$FULL_TASK" | base64)
 
 # Copy guardrails to remote
 GUARDRAILS_SCRIPT="$SCRIPT_DIR/guardrails.sh"
@@ -123,6 +149,11 @@ echo "Starting agent on $HOST..."
 ssh "$HOST" bash -s <<REMOTE_SCRIPT
 set -euo pipefail
 
+# Non-interactive ssh shells get a bare PATH (/usr/bin:/bin:/usr/sbin:/sbin) —
+# the vendor CLIs (kimi, grok, claude) install under \$HOME. Prepend the known
+# locations (expanded worker-side) so launch.sh can find its CLI.
+export PATH="\$HOME/.kimi-code/bin:\$HOME/.grok/bin:\$HOME/.local/bin:\$PATH"
+
 # Create log directory
 mkdir -p $LOG_DIR
 
@@ -148,15 +179,18 @@ if [ -x ~/dev/guardrails/guardrails.sh ]; then
 fi
 
 # Run the agent through the provider launcher (it verifies its own CLI is
-# installed + logged in, exiting 69 if not). $MODEL / $AGENT / $FULL_TASK
-# expand dispatcher-side through the unquoted heredoc; the ~ paths expand here
-# on the worker. set +e so a launcher exit (69/75/1) is captured, not aborted.
+# installed + logged in, exiting 69 if not). $MODEL / $AGENT expand
+# dispatcher-side through the unquoted heredoc; the task arrives base64-encoded
+# (see above) and is decoded HERE on the worker — \$( … ) stays remote, so no
+# task character ever enters this script's parse. ~ paths expand on the worker.
+# set +e so a launcher exit (69/75/1) is captured, not aborted.
 echo "Starting $PROVIDER launcher for agent $AGENT (model: ${MODEL:-default})..."
 echo "Logging to: $LOG_DIR/$LOG_FILE"
+FULL_TASK=\$(printf '%s' "$FULL_TASK_B64" | base64 -d)
 set +e
 AGENT_MODEL="$MODEL" ROLES_DIR=~/dev/agent-runtime/roles \
     RATECAP_PATTERNS=~/dev/agent-runtime/ratecap-patterns.conf \
-    bash ~/dev/agent-runtime/launch.sh "$AGENT" "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
+    bash ~/dev/agent-runtime/launch.sh "$AGENT" "\$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
 AGENT_EXIT=\${PIPESTATUS[0]}
 set -e
 
@@ -172,6 +206,45 @@ REMOTE_SCRIPT
 
 REMOTE_EXIT=$?
 REMOTE_LOG_PATH="$LOG_DIR/$LOG_FILE"
+
+# ── Handoff ledger (Phase 1): orchestrator-authored mechanical fields ──
+# The agent writes intent (handoff.md at repo root); everything here is git
+# truth pulled from the worker — it cannot be hallucinated downstream.
+# APPEND-ONLY: attempts for the same task-id (failover retries) accumulate as
+# JSONL lines — truncating would wipe first-vendor provenance + failover event.
+HANDOFF_DIR="$SCRIPT_DIR/../wave-plans/$WAVE/handoffs"
+TASK_ID="${WAVE}-${AGENT}-$(echo "$BRANCH" | tr '/ ' '--')"
+mkdir -p "$HANDOFF_DIR"
+BASE_SHA=$(ssh "$HOST" "cd $WORK_DIR && git rev-parse --short origin/main" 2>/dev/null || echo "unknown")
+HEAD_SHA=$(ssh "$HOST" "cd $WORK_DIR && git rev-parse --short $BRANCH" 2>/dev/null || echo "unknown")
+FILES_TOUCHED=$(ssh "$HOST" "cd $WORK_DIR && git diff --name-only origin/main...$BRANCH" 2>/dev/null || echo "")
+DIFF_STAT=$(ssh "$HOST" "cd $WORK_DIR && git diff --shortstat origin/main...$BRANCH" 2>/dev/null || echo "")
+FILES_JSON=$(printf '%s\n' "$FILES_TOUCHED" | awk 'NF { printf "%s\"%s\"", (c++ ? ", " : ""), $0 }')
+LEDGER_STATUS="failed"
+[ "$REMOTE_EXIT" -eq 0 ] && LEDGER_STATUS="done"
+printf '{"task_id":"%s","wave":%s,"agent":"%s","provenance":{"vendor":"%s","model":"%s","host":"%s"},"branch":"%s","base_sha":"%s","head_sha":"%s","ts":"%s","status":"%s","orchestrator_fields":{"files_touched":[%s],"diff_stat":"%s","agent_exit":%s,"log":"%s"}}\n' \
+    "$TASK_ID" "$WAVE" "$AGENT" "$PROVIDER" "${MODEL:-default}" "$HOST" \
+    "$BRANCH" "$BASE_SHA" "$HEAD_SHA" "$(date -u +%FT%TZ)" "$LEDGER_STATUS" \
+    "$FILES_JSON" "$DIFF_STAT" "$REMOTE_EXIT" "$REMOTE_LOG_PATH" \
+    >> "$HANDOFF_DIR/$TASK_ID.jsonl"
+
+# Failover transparency: on 75/69, append the failover event BEFORE dispatch
+# retries on another vendor — the second vendor inherits a complete picture.
+if [ "$REMOTE_EXIT" -eq 75 ] || [ "$REMOTE_EXIT" -eq 69 ]; then
+    FAILOVER_REASON="UNAVAILABLE"
+    [ "$REMOTE_EXIT" -eq 75 ] && FAILOVER_REASON="RATE_CAP"
+    printf '{"task_id":"%s","event":"failover","from_vendor":"%s","reason":"%s","partial":true,"ts":"%s"}\n' \
+        "$TASK_ID" "$PROVIDER" "$FAILOVER_REASON" "$(date -u +%FT%TZ)" \
+        >> "$HANDOFF_DIR/$TASK_ID.jsonl"
+fi
+
+# Agent intent block (handoff.md at repo root) — merged alongside the skeleton.
+if ssh "$HOST" "test -f $WORK_DIR/handoff.md" 2>/dev/null; then
+    ssh "$HOST" "cat $WORK_DIR/handoff.md" > "$HANDOFF_DIR/$TASK_ID.md" 2>/dev/null || true
+    echo "Handoff recorded: $HANDOFF_DIR/$TASK_ID.{jsonl,md}"
+elif [ "$REMOTE_EXIT" -eq 0 ]; then
+    echo "WARNING: $AGENT left no handoff.md (soft phase — task still counts as done)" >&2
+fi
 
 # Rate-cap sentinel (exit 75): mark the vendor cooling, log the event, learn it.
 # run-remote RECORDS; dispatch.sh REACTS (fails over per routing.yaml chain).

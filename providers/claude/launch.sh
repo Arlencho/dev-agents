@@ -4,8 +4,14 @@ set -euo pipefail
 # Contract: see providers/lib.sh header.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Existence-checked source: on bash 3.2 (macOS /bin/bash, the ssh worker
+# shell), `source missing 2>/dev/null || source …` dies silently under set -e.
 # shellcheck source=../lib.sh
-source "$SCRIPT_DIR/../lib.sh" 2>/dev/null || source "$SCRIPT_DIR/lib.sh"
+if [ -f "$SCRIPT_DIR/../lib.sh" ]; then
+    source "$SCRIPT_DIR/../lib.sh"
+else
+    source "$SCRIPT_DIR/lib.sh"
+fi
 
 ROLE="${1:?usage: launch.sh <role> <task>}"
 TASK="${2:?usage: launch.sh <role> <task>}"

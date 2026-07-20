@@ -1,5 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Requires bash 4+ (associative arrays) — macOS /bin/bash is 3.2; use Homebrew bash.
 set -euo pipefail
+if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+    echo "ERROR: dispatch.sh needs bash >= 4 (associative arrays). Found: ${BASH_VERSION:-unknown}"
+    echo "Install: brew install bash — or run: /opt/homebrew/bin/bash scripts/dispatch.sh ..."
+    exit 1
+fi
 
 # Dispatch agent tasks to worker machines from a wave plan.
 # Reads worker config from config/workers.yaml.
@@ -553,8 +559,23 @@ dispatch_task() {
     local branch="${TASK_BRANCH[$idx]}"
     local exclude_worker="${2:-}"
 
-    local worker_info
-    worker_info=$(find_worker "$agent" "$exclude_worker")
+    # Initialize result fields FIRST. Anything below can fail early (no worker
+    # found, provider resolution, launcher missing) — with every slot set, the
+    # wave result loop reports cleanly under set -u instead of dying on an
+    # unbound RESULT_WORKER (live-run bug).
+    RESULT_STATUS[$idx]="failed"
+    RESULT_PROVIDER[$idx]=""
+    RESULT_WORKER[$idx]=""
+    RESULT_BRANCH[$idx]="$branch"
+
+    local worker_info wname whost
+    if ! worker_info=$(find_worker "$agent" "$exclude_worker"); then
+        echo -e "  ${RED}✗${NC} $agent — no worker available" >&2
+        # Keep the "always returns a waitable pid" contract: reports as failed.
+        ( exit 1 ) &
+        DISPATCH_PID=$!
+        return 0
+    fi
     IFS='|' read -r wname whost <<< "$worker_info"
 
     # Resolve provider through the failover chain, skipping vendors already
@@ -566,7 +587,8 @@ dispatch_task() {
     local model="${TASK_MODEL[$idx]:-}"
 
     local is_preferred=""
-    preferred=$(get_preferred_agents "$wname")
+    local preferred
+    preferred=$(get_preferred_agents "$wname" || true)
     if ! echo "$preferred" | grep -q "^${agent}$"; then
         is_preferred=" (round-robin)"
     fi
@@ -575,15 +597,17 @@ dispatch_task() {
     echo -e "  ${CYAN}→${NC} $wname ($whost): ${BOLD}$agent${NC} [${provider}/${model_label}] — \"$task\" [$branch]$is_preferred" >&2
 
     RESULT_WORKER[$idx]="$wname"
-    RESULT_BRANCH[$idx]="$branch"
 
     # Run in subshell to capture exit code. Pass model + provider via env so
     # run-remote.sh selects the right launcher and forwards --model.
+    # The PID travels via the DISPATCH_PID global — callers must NOT capture
+    # $(dispatch_task): a command-substitution subshell would swallow every
+    # RESULT_* write above (the actual root cause of the unbound-variable crash).
     (
-        AGENT_MODEL="$model" AGENT_PROVIDER="$provider" \
+        AGENT_MODEL="$model" AGENT_PROVIDER="$provider" AGENT_WAVE="${CURRENT_WAVE:-1}" \
             "$SCRIPT_DIR/run-remote.sh" "$whost" "$REPO_URL" "$agent" "$task" "$branch"
     ) &
-    echo $!
+    DISPATCH_PID=$!
 }
 
 # --------------------------------------------------
@@ -623,6 +647,7 @@ OVERALL_START=$(date +%s)
 
 for wave_num in "${SORTED_WAVES[@]}"; do
     IFS=',' read -ra wave_indices <<< "${WAVE_TASKS[$wave_num]}"
+    CURRENT_WAVE="$wave_num"   # passed to run-remote as AGENT_WAVE (handoff ledger)
 
     echo -e "${BOLD}------------------------------------------${NC}"
     echo -e "${BOLD}  Wave $wave_num — ${#wave_indices[@]} task(s)${NC}"
@@ -636,8 +661,8 @@ for wave_num in "${SORTED_WAVES[@]}"; do
 
     for idx in "${wave_indices[@]}"; do
         TASK_START[$idx]=$(date +%s)
-        pid=$(dispatch_task "$idx")
-        WAVE_PIDS[$pid]="$idx"
+        dispatch_task "$idx"
+        WAVE_PIDS[$DISPATCH_PID]="$idx"
     done
 
     echo ""
@@ -646,7 +671,7 @@ for wave_num in "${SORTED_WAVES[@]}"; do
     # Wait for all PIDs and collect results
     wave_success=0
     wave_fail=0
-    declare -A FAILED_TASKS  # idx -> retry_count
+    declare -A FAILED_TASKS=()  # idx -> retry_count (=() keeps ${#..[@]} bound under set -u)
 
     for pid in "${!WAVE_PIDS[@]}"; do
         idx="${WAVE_PIDS[$pid]}"
@@ -706,7 +731,8 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             local_attempts=0
             while [ $local_attempts -lt "$MAX_RETRIES" ]; do
                 local_attempts=$((local_attempts + 1))
-                retry_pid=$(retry_task "$idx" "$local_attempts")
+                retry_task "$idx" "$local_attempts"
+                retry_pid="$DISPATCH_PID"
 
                 TASK_START[$idx]=$(date +%s)
                 set +e

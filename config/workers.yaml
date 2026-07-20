@@ -39,6 +39,14 @@ machines:
     max_agents: 6
     notes: "Primary machine. Orchestrator + security-reviewer + tech-scout"
 
+  # Same physical machine as a dispatch target — get_workers() only returns
+  # role: worker entries, so single-machine setups need this alongside the
+  # orchestrator entry. Remove once real mac-mini workers come online.
+  - name: macbook-pro-local
+    host: localhost
+    role: worker
+    max_agents: 3
+
   # Worker 1 — backend-focused
   # Uncomment and fill in after running setup-machine.sh on Mac Mini 1
   # - name: mac-mini-1

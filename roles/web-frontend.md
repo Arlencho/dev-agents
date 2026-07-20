@@ -59,3 +59,16 @@ When working on a GitHub issue, update its status as you progress:
 4. **Never close issues** — only the human marks Done after QA verification
 
 See `docs/issue-lifecycle.md` in the dev-agents repo for full details.
+
+## Handoff (fleet memory — required before exit)
+
+You will not see prior chat from other vendors, and the next specialist cannot see yours. Before you exit successfully, write `handoff.md` at the repo root:
+
+- **Built:** what you changed (files, behavior)
+- **Decisions (+why):** choices not obvious from the diff
+- **Open questions:** what the next role must resolve or accept
+- **Do not repeat:** dead ends you hit ("X fails because Y")
+- **Evidence:** commands + results (test runs, greps, URLs)
+- **Next hint:** what the critic should focus on
+
+The orchestrator records the mechanical facts (files, SHAs, exit code) itself — write the part only you know: *why*. Keep it under a page.
