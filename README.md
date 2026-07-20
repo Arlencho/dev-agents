@@ -48,6 +48,18 @@ Across the first 3 Backend Critic activations on payment / state-machine code in
 
 All loops converged within the 2-loop ceiling. No CTO escalation. The executable-only critic charter (failing test diff + `file:line` citation, prose rejected) is load-bearing — it's what stops critics from producing LGTM noise.
 
+### Multi-vendor CLI orchestration (2026-07)
+
+The heterogeneity invariant extended across vendors — same-vendor different-tier pairs still share training lineage; cross-vendor pairs decorrelate harder. Every vendor runs through its **own subscription-authenticated CLI** — Claude Code (`claude`), Grok Build (`grok`), Kimi Code CLI (`kimi`) — with **zero API keys**. Auth is a per-machine login, exactly like `claude login`.
+
+**Provider launcher layer** (`providers/lib.sh` + `providers/<vendor>/launch.sh`) — one launcher per vendor behind a uniform contract: `launch.sh <role> <task>`, exit `0` success / `1` fail / `75` rate-capped / `69` unavailable. `run-remote.sh` ships the launcher to the worker and invokes it; `dispatch.sh` reads `AGENT_PROVIDER` from `provider_preferences` (workers.yaml). Non-claude launchers inject the `roles/<role>.md` charter into the prompt (no `--agent` equivalent); guardrails still apply as git hooks.
+
+**Rate-cap sentinel + failover** — a vendor that emits a cap pattern (`config/ratecap-patterns.conf`) exits 75; the vendor is marked cooling (`logs/provider-state/`, `cooldown_minutes` in routing.yaml), the event is logged + notified, and `dispatch.sh` **fails the task over** to the next provider in `routing.yaml provider_failover` — reusing the existing retry loop. `make scorecard` shows cooldown state, cap events, and per-provider task outcomes.
+
+**Seats today**: `web-frontend` → **Kimi K3** primary, `claude` failover (`providers/kimi/README.md`; Frontend Critic stays on Opus → first true cross-vendor producer-critic pair; gated on 5–10 tasks of evidence). **Grok Plan Critic** runs as Pass 4 of `autoplan.sh` via the grok CLI (`providers/grok/README.md`) — the plan was the only unreviewed artifact in the pipeline.
+
+**Non-goals**: no vendor swap on orchestrator, CTO gate, or critics — trust-critical seats stay on harness-proven Claude.
+
 ### Per-role model tier routing
 
 `config/routing.yaml → model_routing:` pins each role to `opus`, `sonnet`, or `haiku`. Tier aliases (not version IDs) so config doesn't churn when Anthropic ships a new version. ~51% cost reduction vs uniform Opus.
