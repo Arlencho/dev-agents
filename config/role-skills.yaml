@@ -1,0 +1,33 @@
+# Role → L2 skill pack map (fleet source of truth).
+# Loaded by scripts/skill-inject.sh. Grep-friendly YAML (no required yaml lib).
+#
+# Pack bodies: skills/<id>/SKILL.md (global) or <product>/skills/<id>/SKILL.md (project).
+# Conflict: same pack id → project body REPLACES global (no deep merge).
+# Product tasks must not edit skills/ unless the task is an explicit skill-promotion task.
+
+defaults:
+  max_packs: 4
+  max_total_lines: 400
+
+# Space-separated pack lists. Order = inject priority (truncate by max_packs).
+roles:
+  web-frontend: evidence-first untrusted-prior handoff-intent git-ship
+  frontend-critic: evidence-first untrusted-prior git-ship
+  go-backend: evidence-first untrusted-prior handoff-intent git-ship
+  backend-critic: evidence-first untrusted-prior git-ship
+  db-architect: evidence-first untrusted-prior handoff-intent git-ship
+  database-critic: evidence-first untrusted-prior git-ship
+  api-designer: evidence-first untrusted-prior handoff-intent git-ship
+  api-critic: evidence-first untrusted-prior git-ship
+  mobile: evidence-first untrusted-prior handoff-intent git-ship
+  devops: evidence-first untrusted-prior handoff-intent git-ship
+  test-engineer: evidence-first untrusted-prior handoff-intent git-ship
+  docs-writer: evidence-first untrusted-prior handoff-intent docs-no-hallucinate
+  investigate: evidence-first untrusted-prior handoff-intent git-ship
+  plan-critic: evidence-first untrusted-prior git-ship
+  security-reviewer: evidence-first untrusted-prior git-ship
+  cto: evidence-first untrusted-prior git-ship
+  orchestrator: evidence-first untrusted-prior git-ship
+  pr-sentinel: evidence-first untrusted-prior git-ship
+  retro: evidence-first untrusted-prior handoff-intent git-ship
+  default: evidence-first untrusted-prior git-ship

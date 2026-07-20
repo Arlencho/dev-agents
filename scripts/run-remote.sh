@@ -90,15 +90,36 @@ if [[ "$TASK" == *"[blind]"* ]]; then
     export PREAMBLE_NO_HANDOFF=1
 fi
 
+# L2 skill packs (stable playbooks) — NOT folded into preamble (L3 case file).
+# See docs/proposals/skills-evolution-SYNTHESIS.md. Missing skills → empty, non-fatal.
+PRODUCT_REPO_PATH="$HOME/dev/$REPO_NAME"
+SKILLS=$("$SCRIPT_DIR/skill-inject.sh" "$AGENT" "$PRODUCT_REPO_PATH" 2>/dev/null || true)
+if [ -n "$SKILLS" ]; then
+    echo "Injected L2 skill packs into prompt"
+fi
+
 # Generate preamble (includes CLAUDE.md, learnings, parallel sessions, git state, issue context)
 # Path here is dispatcher-absolute ($HOME expands locally) — WORK_DIR above is worker-relative.
 # Wave + provider enable the handoff slice + continuity line (Phase 1).
-PREAMBLE=$("$SCRIPT_DIR/preamble.sh" "$HOME/dev/$REPO_NAME" "$AGENT" "$BRANCH" "$WAVE" "$PROVIDER" 2>/dev/null || true)
+PREAMBLE=$("$SCRIPT_DIR/preamble.sh" "$PRODUCT_REPO_PATH" "$AGENT" "$BRANCH" "$WAVE" "$PROVIDER" 2>/dev/null || true)
 if [ -n "$PREAMBLE" ]; then
-    FULL_TASK="$PREAMBLE
-
-YOUR TASK: $TASK"
     echo "Injected session preamble into prompt"
+fi
+
+# Order: L2 skills → L3 case (preamble) → task  (charter prepended by kimi/grok launchers)
+FULL_TASK=""
+if [ -n "$SKILLS" ]; then
+    FULL_TASK+="$SKILLS
+
+"
+fi
+if [ -n "$PREAMBLE" ]; then
+    FULL_TASK+="$PREAMBLE
+
+"
+fi
+if [ -n "$FULL_TASK" ]; then
+    FULL_TASK+="YOUR TASK: $TASK"
 else
     FULL_TASK="$TASK"
 fi
@@ -132,12 +153,19 @@ PROVIDER_LIB="$SCRIPT_DIR/../providers/lib.sh"
 RATECAP_CONF="$SCRIPT_DIR/../config/ratecap-patterns.conf"
 if [ -f "$PROVIDER_LAUNCHER" ] && [ -f "$PROVIDER_LIB" ]; then
     echo "Shipping $PROVIDER launcher runtime to $HOST..."
-    ssh "$HOST" "mkdir -p ~/dev/agent-runtime/roles"
+    ssh "$HOST" "mkdir -p ~/dev/agent-runtime/roles ~/dev/agent-runtime/skills ~/dev/agent-runtime/config"
     scp -q "$PROVIDER_LIB" "$HOST:~/dev/agent-runtime/lib.sh"
     scp -q "$PROVIDER_LAUNCHER" "$HOST:~/dev/agent-runtime/launch.sh"
     [ -f "$RATECAP_CONF" ] && scp -q "$RATECAP_CONF" "$HOST:~/dev/agent-runtime/ratecap-patterns.conf"
     if [ "$PROVIDER" != "claude" ] && [ -f "$SCRIPT_DIR/../roles/$AGENT.md" ]; then
         scp -q "$SCRIPT_DIR/../roles/$AGENT.md" "$HOST:~/dev/agent-runtime/roles/$AGENT.md"
+    fi
+    # Global L2 skills + map (for local skill-inject / offline debugging on worker)
+    if [ -d "$SCRIPT_DIR/../skills" ]; then
+        scp -rq "$SCRIPT_DIR/../skills/." "$HOST:~/dev/agent-runtime/skills/" 2>/dev/null || true
+    fi
+    if [ -f "$SCRIPT_DIR/../config/role-skills.yaml" ]; then
+        scp -q "$SCRIPT_DIR/../config/role-skills.yaml" "$HOST:~/dev/agent-runtime/config/role-skills.yaml" 2>/dev/null || true
     fi
 else
     echo "ERROR: launcher runtime for provider '$PROVIDER' not found ($PROVIDER_LAUNCHER)" >&2
