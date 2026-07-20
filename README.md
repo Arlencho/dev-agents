@@ -18,26 +18,36 @@ Source of truth for:
 
 ### Heterogeneous producer-critic pattern
 
-Every implementation task runs through a producer + critic pair on different models. Critics report to CTO for independence, but pair with their producer counterpart on every diff.
+Every implementation task runs through a producer + critic pair. Heterogeneity is **two-layered**:
 
-**Pairing matrix:**
+1. **Vendor** (CLI) — preferred when configured (e.g. Kimi producer × Claude critic).
+2. **Model tier** — when both seats are Claude, critic still uses a **different** tier than the producer (e.g. sonnet × opus).
 
-| Producer | Producer model | Critic | Critic model | Discipline |
-|---|---|---|---|---|
-| Frontend Engineer | sonnet | Frontend Critic | **opus** | Next.js / React / Tailwind / a11y |
-| Backend Engineer | sonnet | Backend Critic | **opus** | Go / Chi / pgx / sqlc / OpenAPI |
-| Database Engineer | **opus** (DB exception) | Database Critic | opus | Postgres migrations / sqlc / index strategy |
-| API Designer | sonnet | API Critic | **opus** | `api.yaml` / generated TS client / response envelopes |
-| DevOps Engineer | sonnet | (none — by design) | — | Security Engineer covers review surface |
+Critics report to CTO for independence, but pair with their producer counterpart on every diff. Seats come from `config/workers.yaml` → `provider_preferences` + `config/routing.yaml` → `model_routing` / `provider_failover`.
 
-**Hard rule (charter-level invariant):** each Critic uses a different model from its paired producer. Same-model pairs lose ~30% of cross-error detection per Reflexion (Shinn 2023) and Constitutional AI (Bai 2022). Do **not** "correct" any Critic to Sonnet to save cost. The Database pair is the documented exception (irreversibility premium on migrations) — see [`docs/org-chart.md`](docs/org-chart.md).
+**Pairing matrix (current seats):**
 
-**Cross-cutting reviewers** (peers, NOT discipline-paired):
+| Producer role | Vendor (CLI) | Model tier | Critic role | Critic vendor | Critic tier | Discipline |
+|---|---|---|---|---|---|---|
+| Frontend Engineer (`web-frontend`) | **kimi** (failover: claude) | K3 / sonnet-class | Frontend Critic | **claude** | **opus** | Next.js / React / Tailwind / a11y |
+| Backend Engineer (`go-backend`) | claude | sonnet | Backend Critic | claude | **opus** | Go / Chi / pgx / sqlc / OpenAPI |
+| Database Engineer (`db-architect`) | claude | **opus** (DB exception) | Database Critic | claude | opus | Postgres migrations / sqlc / index strategy |
+| API Designer (`api-designer`) | claude | sonnet | API Critic | claude | **opus** | `api.yaml` / generated TS client / response envelopes |
+| DevOps Engineer (`devops`) | claude | sonnet | (none — by design) | — | — | Security Engineer covers review surface |
+| Plan review (autoplan Pass 4) | — | — | Plan Critic | **grok** | default | Wave-plan review (`autoplan.sh`) |
+
+**Hard rules (charter-level invariants):**
+
+1. **Do not same-seat producer and critic** when a cross-vendor or cross-tier pair is available. Same-model pairs lose ~30% of cross-error detection per Reflexion (Shinn 2023) and Constitutional AI (Bai 2022). Do **not** "correct" any Critic down to Sonnet only to save cost.
+2. **Frontend is the flagship cross-vendor pair:** Kimi produces, Claude Opus critiques. Trust-critical seats (CTO, Security, most critics) stay on Claude unless explicitly re-seated in config.
+3. The Database pair is the documented **same-vendor opus×opus** exception (irreversibility premium on migrations) — see [`docs/org-chart.md`](docs/org-chart.md).
+
+**Cross-cutting reviewers** (peers, NOT discipline-paired; Claude unless reconfigured):
 - **QA Engineer** (opus, test-first) — writes failing tests against PRD/contract before producer codes
 - **Security Engineer** (opus, red-team) — active attack attempts on every PR before CTO gate
 - **CTO** (opus) — final architectural gate (APPROVE-MERGE / BLOCK-FIX / BLOCK-ESCALATE)
 
-Full org chart with reporting + pairing edges: [`docs/org-chart.md`](docs/org-chart.md).
+Full org chart with reporting + pairing edges: [`docs/org-chart.md`](docs/org-chart.md). Live seats always win over this table if `workers.yaml` differs — update both when you re-seat a role.
 
 ### Production evidence — Backend Critic activations
 
@@ -408,23 +418,23 @@ The sync script resolves agent → provider file via a 3-level lookup:
 
 ### Engineers (write code)
 
-| Agent | Model | Scope |
-|---|---|---|
-| `go-backend` | sonnet | Handlers, services, providers, middleware |
-| `web-frontend` | sonnet | Pages, components, styling, API integration |
-| `mobile` | sonnet | Screens, navigation, native features |
-| `db-architect` | **opus** (DB exception) | Migrations, sqlc queries, index strategy |
-| `api-designer` | sonnet | OpenAPI spec, type generation, response envelopes |
-| `devops` | sonnet | Docker, CI/CD, deployment, scripts |
+| Agent | Vendor (CLI) | Model tier | Scope |
+|---|---|---|---|
+| `go-backend` | claude | sonnet | Handlers, services, providers, middleware |
+| `web-frontend` | **kimi** (failover claude) | K3 / sonnet-class | Pages, components, styling, API integration |
+| `mobile` | claude | sonnet | Screens, navigation, native features |
+| `db-architect` | claude | **opus** (DB exception) | Migrations, sqlc queries, index strategy |
+| `api-designer` | claude | sonnet | OpenAPI spec, type generation, response envelopes |
+| `devops` | claude | sonnet | Docker, CI/CD, deployment, scripts |
 
-### Critics (review diffs — opus-paired)
+### Critics (review diffs — prefer cross-tier / cross-vendor vs producer)
 
-| Agent | Pairs with | Output rule |
-|---|---|---|
-| `backend-critic` | `go-backend` | Failing test diff + `file:line` citation only |
-| `frontend-critic` | `web-frontend` | Same — executable critique, prose rejected |
-| `database-critic` | `db-architect` | Migration diff, query plan, index analysis |
-| `api-critic` | `api-designer` | Contract violation, response-shape diff |
+| Agent | Vendor | Pairs with | Output rule |
+|---|---|---|---|
+| `backend-critic` | claude opus | `go-backend` | Failing test diff + `file:line` citation only |
+| `frontend-critic` | **claude opus** | `web-frontend` (**kimi** producer) | Same — executable critique, prose rejected; flagship **cross-vendor** pair |
+| `database-critic` | claude opus | `db-architect` | Migration diff, query plan, index analysis |
+| `api-critic` | claude opus | `api-designer` | Contract violation, response-shape diff |
 
 ### Cross-cutting reviewers
 
