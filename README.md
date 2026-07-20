@@ -1,6 +1,8 @@
 # Dev Agents
 
-Portable, project-agnostic, provider-agnostic orchestration toolkit for AI-powered parallel development.
+Portable, project-agnostic, **multi-vendor** orchestration toolkit for AI-powered parallel development.
+
+Run agents via **claude**, **kimi**, and **grok** CLIs with **zero API keys** — subscription login only. Agents pair cross-vendor for decorrelated review and rate-cap failover out of the box.
 
 ## What this is
 
@@ -8,10 +10,9 @@ Source of truth for:
 
 1. **Agent role charters** (`roles/*.md`) — 18 active provider-agnostic roles spanning engineers, critics, ops, and meta-agents. Niche and redundant-reviewer roles are parked in `roles/_archived/` (see its README) and reactivate in minutes when the stage justifies them.
 2. **Heterogeneous producer-critic pattern** — every implementation task pairs a producer agent with an independent critic on a different model. Charter-level invariant.
-3. **Multi-product orchestration** (`companies/*.md`) — one manifest per product wiring agents, budgets, runtime config, and the source-of-truth product repo path.
-4. **Paperclip integration** — the `claude_local` adapter runs these agents under the Paperclip orchestration platform (`127.0.0.1:3100`) with task routing, board automation, and budget enforcement.
-
-Works with Claude Code today; designed to extend to OpenAI, Cursor, Grok via the `providers/` adapter layer.
+3. **Multi-vendor CLI orchestration** — agents run via `claude`, `kimi`, and `grok` subscription CLIs on owned hardware. Provider selection via `workers.yaml provider_preferences` + `routing.yaml provider_failover`. Rate-cap sentinel marks vendors cooling and fails over automatically.
+4. **Multi-product orchestration** (`companies/*.md`) — one manifest per product wiring agents, budgets, runtime config, and the source-of-truth product repo path.
+5. **Paperclip integration** — the `claude_local` adapter runs these agents under the Paperclip orchestration platform (`127.0.0.1:3100`) with task routing, board automation, and budget enforcement.
 
 ## What's new
 
@@ -64,59 +65,152 @@ The heterogeneity invariant extended across vendors — same-vendor different-ti
 
 `config/routing.yaml → model_routing:` pins each role to `opus`, `sonnet`, or `haiku`. Tier aliases (not version IDs) so config doesn't churn when Anthropic ships a new version. ~51% cost reduction vs uniform Opus.
 
-## Quick setup
+## Operator Quickstart
 
-### New machine (full setup)
+If you're running agents on owned hardware (local machines or Mac Minis), this section is your starting point.
+
+### Two modes: co-pilot chat vs fleet dispatch
+
+**Mode 1: Co-pilot chat (single-agent, one CLI)**
 ```bash
-git clone git@github.com:Arlencho/dev-agents.git
-cd dev-agents
-./scripts/setup-machine.sh
+# In any project directory
+claude --agent go-backend "fix auth bug #123"
+claude --agent web-frontend "build login page"
+claude --agent security-reviewer "review PR #301"
 ```
-Installs Homebrew, Go, Node, Docker, Claude Code; bootstraps all roles to `~/.claude/agents/`; authenticates GitHub + GCP. Interactive — prompts for logins.
+Use this for focused, interactive work — one agent, immediate feedback, no wave coordination.
 
-### Existing machine (agents only)
+**Mode 2: Fleet dispatch (multi-agent, parallel waves, from shell)**
 ```bash
-git clone git@github.com:Arlencho/dev-agents.git
-cd dev-agents
-./scripts/bootstrap.sh claude
+# Orchestrate 5–20 agents across waves from a plan file
+./scripts/dispatch.sh git@github.com:yourcompany/myproject.git wave-plans/myplan.txt --auto --retries 3
 ```
+Use this for multi-step features (API spec → migration → backend → frontend → tests) where tasks have dependencies and parallelism matters.
 
-### Paperclip orchestration platform
-```bash
-./scripts/paperclip-up.sh        # start local Paperclip on 127.0.0.1:3100
-./scripts/paperclip-status.sh    # health + version + companies + agents
-./scripts/paperclip-refresh.sh   # pull latest Paperclip release
-./scripts/paperclip-down.sh      # stop
+### Plan file format (WAVE agent task branch)
+
+Plan files define what agents do, in what order, and on which branches. One task per line:
+
 ```
-Pinned version + release scan log: [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md).
-
-### Live-agent sync (post-merge ritual)
-
-`providers/claude/agents/*.md` is the **single source of truth** for all agent instructions. The live Paperclip instance reads `~/.paperclip/instances/default/companies/<id>/agents/<aid>/instructions/AGENTS.md`. These diverge over time unless synced.
-
-**After every merge to `dev-agents/main`** that touches `providers/claude/agents/`:
-
-```bash
-make paperclip-sync   # push providers/ → all live AGENTS.md files (provider wins)
+WAVE | AGENT | TASK_DESCRIPTION | BRANCH_NAME
 ```
 
-To check drift without applying:
-```bash
-make paperclip-check  # report only; exits 1 if any drift or missing provider
+**Example:**
+```
+# Payments feature — 3 waves
+1 | db-architect   | create payments tables migration        | feat/payments-db
+1 | api-designer   | add payment endpoints to OpenAPI spec   | feat/payments-spec
+2 | go-backend     | implement payment service and handlers  | feat/payments-svc
+2 | web-frontend   | build checkout page with Stripe Elements| feat/payments-ui
+3 | test-engineer  | add payment flow integration tests      | feat/payments-tests
+3 | security-reviewer | audit payment code for vulnerabilities | feat/payments-audit
 ```
 
-For **negative drift** (live has content not yet in providers — e.g., you edited a live file directly):
+**Critical rules:**
+- **Wave ordering**: Wave 1 runs first and in parallel. Wave 2 waits for Wave 1. Task dependencies map to wave numbers.
+- **Pipe character warning**: Raw `|` inside `TASK_DESCRIPTION` will break parsing. Escape with `\|` or rewrite the description.
+- **VERDICT lines**: Some agents (notably plan-critic) emit `VERDICT: APPROVE|REVISE|REJECT` — the parser recognizes this grammar. Use **forward slashes** (`/`) not pipes (`|`) in your prose if you need to denote alternatives.
+- **Blank lines and comments**: Lines starting with `#` and blank lines are ignored.
+- **Branch names**: Use kebab-case (e.g., `feat/payments-db`, `fix/auth-token`).
+
+See full format spec: [`docs/plan-file-format.md`](docs/plan-file-format.md).
+
+### Running dispatch.sh: git SSH, Homebrew bash, --auto, --retries
+
+**Prerequisite:** bash 4+ (macOS ships bash 3.2; use Homebrew).
 ```bash
-./scripts/paperclip-sync.sh --reverse <slug>
-# e.g.: ./scripts/paperclip-sync.sh --reverse devops
-# Copies live AGENTS.md → providers/claude/agents/<slug>.md (with backup)
-# Then review the diff and open a PR to dev-agents/main.
+brew install bash
 ```
 
-The sync script resolves agent → provider file via a 3-level lookup:
-1. `providers/<kebab(name)>.md` — e.g., "Backend Engineer" → `backend-engineer.md`
-2. `providers/<role>.md` — e.g., role=`devops` → `devops.md`
-3. Frontmatter `name:` in the live file — e.g., `name: go-backend` → `go-backend.md`
+**Basic dispatch:**
+```bash
+./scripts/dispatch.sh git@github.com:yourcompany/myproject.git wave-plans/myplan.txt
+```
+
+**Flags:**
+- `--auto` — auto-continue between waves (no "press Enter" prompts). Useful for CI or overnight runs.
+- `--retries N` — max retries per task (default: 2). Set higher for flaky agents.
+- `--review` — run autoplan review before dispatching (see `autoplan.sh`).
+- `--retry-on-different-worker` — on failure, try the same task on a different worker.
+
+**Example: fast, parallel, hands-off dispatch:**
+```bash
+/opt/homebrew/bin/bash scripts/dispatch.sh git@github.com:yourcompany/myproject.git wave-plans/feature-2026-07.txt --auto --retries 3
+```
+
+### workers.yaml provider_preferences + routing.yaml provider_failover
+
+**Edit `config/workers.yaml`** to assign which CLI each agent prefers:
+```yaml
+provider_preferences:
+  go-backend: claude
+  web-frontend: kimi       # Primary: Kimi K3; will fail over to claude if capped
+  db-architect: claude
+  api-designer: claude
+  devops: claude
+  test-engineer: claude
+  security-reviewer: claude
+  cto: claude              # Trust-critical; always Claude
+  orchestrator: claude     # Trust-critical; always Claude
+  default: claude          # Fallback for any unlisted agent
+```
+
+**Edit `config/routing.yaml`** to define failover chains:
+```yaml
+provider_failover:
+  web-frontend: [kimi, claude]    # Try kimi first; if capped, use claude
+  default: [claude, kimi]         # Default chain: claude first
+```
+
+How it works:
+1. `dispatch.sh` reads `provider_preferences[agent]` to pick the primary vendor.
+2. If the primary is rate-capped (exit 75) or unavailable (exit 69), `dispatch.sh` walks `provider_failover[agent]` for the next provider.
+3. Same retry loop applies; the task is retried on the failover provider up to `--retries` times.
+4. Log all events and results per provider (see `make scorecard` below).
+
+**Provider README references:**
+- Kimi (K3 producer): [`providers/kimi/README.md`](providers/kimi/README.md)
+- Grok (plan-critic + judgment seats): [`providers/grok/README.md`](providers/grok/README.md)
+- Claude (default, trust-critical roles): `providers/claude/agents/` (symlinked from roles/)
+
+### make scorecard
+
+View cross-vendor task outcomes, rate-cap events, and cooldown state:
+```bash
+make scorecard
+```
+
+Output shows:
+- Per-provider task success/failure counts
+- Rate-cap events (if any vendor hit quota)
+- Cooldown state (vendor unavailable until timestamp)
+- Wave-by-wave execution summary
+
+Run this after dispatches to audit provider health and inform `provider_preferences` tuning.
+
+### Worker login notes
+
+Each vendor requires a **one-time subscription login** on each machine:
+
+**Claude Code (`claude`):**
+```bash
+claude login
+```
+Browser OAuth flow. Requires a Claude **Pro or Max** subscription. Non-interactive SSH workers cannot read macOS Keychain OAuth; on those machines mirror credentials to the CLI's file store at `~/.claude/.credentials.json` (mode `600`) so `claude` can authenticate without a GUI Keychain prompt. Do not commit this file.
+
+**Kimi Code CLI (`kimi`):**
+```bash
+kimi login
+```
+Device-code OAuth against your Kimi for Coding subscription. Same principle — no API key export; all auth stored locally and refreshed automatically.
+
+**Grok Build CLI (`grok`):**
+```bash
+grok login
+```
+Login to xAI Grok via device-code OAuth against SuperGrok / X Premium+ subscription. Same local auth, automatic refresh.
+
+**Non-interactive SSH dispatch note:** If running dispatch.sh from a CI environment or remote shell (e.g., GitHub Actions → SSH → Mac Mini), the login credentials must be in a form accessible without user interaction. This is typically handled by pre-login or SSH agent forwarding. Contact your team's automation lead if you need to set this up. (No credentials are documented in this repo — they live in per-machine setup.)
 
 ## Repo structure
 
@@ -153,20 +247,34 @@ dev-agents/
 │   ├── org-chart.md          # Producer-critic reporting + pairing visualization
 │   ├── paperclip-architecture.md
 │   ├── issue-lifecycle.md
-│   ├── plan-file-format.md
+│   ├── plan-file-format.md   # Detailed WAVE format spec
 │   └── scenarios.md
 ├── templates/                # Project CLAUDE.md scaffolds
 │   ├── go-nextjs.md  python-fastapi.md
+├── config/
+│   ├── workers.yaml          # Worker machine registry + provider_preferences
+│   ├── routing.yaml          # Model tier routing + provider_failover
+│   └── ratecap-patterns.conf # Vendor rate-cap detection patterns
 ├── providers/
-│   ├── claude/agents/        # Claude Code symlinks (ready)
-│   ├── openai/  cursor/  grok/   # Placeholders
+│   ├── lib.sh                # Shared launcher utilities
+│   ├── claude/agents/        # Claude Code agent symlinks (ready)
+│   ├── kimi/
+│   │   ├── README.md         # Kimi K3 producer setup + rate-cap behavior
+│   │   └── launch.sh
+│   ├── grok/
+│   │   ├── README.md         # Grok plan-critic + judgment-seat launcher
+│   │   └── launch.sh
+│   └── openai/  cursor/      # Placeholder stubs
 └── scripts/
     ├── # Local agent harness
     ├── bootstrap.sh  setup-machine.sh  new-project.sh
-    ├── dispatch.sh  run-remote.sh  workers-status.sh
+    ├── dispatch.sh   # Multi-agent fleet orchestration with wave coordination
+    ├── run-remote.sh # Ships launcher + task to worker, handles provider exit codes
+    ├── workers-status.sh
     ├── guardrails.sh  preamble.sh  notify.sh
     ├── autoplan.sh  retro-data.sh  learnings.sh  sync-providers.sh
-    └── # Paperclip orchestration
+    ├── provider-scorecard.sh # Rate-cap + task outcome metrics
+    └── # Paperclip orchestration (secondary path)
     └── paperclip-up.sh  paperclip-down.sh
     └── paperclip-status.sh  paperclip-refresh.sh
 ```
@@ -221,6 +329,19 @@ Use direct invocation when:
 - You're iterating live and don't want the full producer-critic loop
 - You're outside any product's Paperclip company
 
+### Path C — Fleet dispatch (for multi-agent waves on owned hardware)
+
+```bash
+# See "Operator Quickstart" section above for full details
+./scripts/dispatch.sh git@github.com:yourcompany/myproject.git wave-plans/myplan.txt --auto --retries 3
+```
+
+Use fleet dispatch when:
+- You have 5–20 agents working in parallel across waves
+- Tasks have clear dependencies (API spec → backend → frontend → tests)
+- You own the hardware (local machines or Mac Minis, not cloud CI)
+- Rate-cap failover and provider rotation are important
+
 ## Multi-product orchestration
 
 Each product lives under `companies/` with its own manifest (paperclip company id, budget cap, agent roster, deploy targets). Each manifest pins the source-of-truth product repo path so agents know where to find the product's `CLAUDE.md` and PRDs.
@@ -228,6 +349,60 @@ Each product lives under `companies/` with its own manifest (paperclip company i
 When you ask the Orchestrator a question, the active product context comes from `cwd` matching one of the manifests. Cross-product orchestration is intentionally manual — there is no global queue.
 
 To onboard a new product, follow the checklist in [`PAPERCLIP.md`](PAPERCLIP.md) § 8 ("Standing up a new company").
+
+## Quick setup
+
+### New machine (full setup)
+```bash
+git clone git@github.com:Arlencho/dev-agents.git
+cd dev-agents
+./scripts/setup-machine.sh
+```
+Installs Homebrew, Go, Node, Docker, Claude Code; bootstraps all roles to `~/.claude/agents/`; authenticates GitHub + GCP. Interactive — prompts for logins.
+
+### Existing machine (agents only)
+```bash
+git clone git@github.com:Arlencho/dev-agents.git
+cd dev-agents
+./scripts/bootstrap.sh claude
+```
+
+### Paperclip orchestration platform (secondary)
+```bash
+./scripts/paperclip-up.sh        # start local Paperclip on 127.0.0.1:3100
+./scripts/paperclip-status.sh    # health + version + companies + agents
+./scripts/paperclip-refresh.sh   # pull latest Paperclip release
+./scripts/paperclip-down.sh      # stop
+```
+Pinned version + release scan log: [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md).
+
+### Live-agent sync (post-merge ritual)
+
+`providers/claude/agents/*.md` is the **single source of truth** for all agent instructions. The live Paperclip instance reads `~/.paperclip/instances/default/companies/<id>/agents/<aid>/instructions/AGENTS.md`. These diverge over time unless synced.
+
+**After every merge to `dev-agents/main`** that touches `providers/claude/agents/`:
+
+```bash
+make paperclip-sync   # push providers/ → all live AGENTS.md files (provider wins)
+```
+
+To check drift without applying:
+```bash
+make paperclip-check  # report only; exits 1 if any drift or missing provider
+```
+
+For **negative drift** (live has content not yet in providers — e.g., you edited a live file directly):
+```bash
+./scripts/paperclip-sync.sh --reverse <slug>
+# e.g.: ./scripts/paperclip-sync.sh --reverse devops
+# Copies live AGENTS.md → providers/claude/agents/<slug>.md (with backup)
+# Then review the diff and open a PR to dev-agents/main.
+```
+
+The sync script resolves agent → provider file via a 3-level lookup:
+1. `providers/<kebab(name)>.md` — e.g., "Backend Engineer" → `backend-engineer.md`
+2. `providers/<role>.md` — e.g., role=`devops` → `devops.md`
+3. Frontmatter `name:` in the live file — e.g., `name: go-backend` → `go-backend.md`
 
 ## Available agents (full roster)
 
@@ -299,24 +474,26 @@ To onboard a new product, follow the checklist in [`PAPERCLIP.md`](PAPERCLIP.md)
 
 ## Provider status
 
-| Provider | Status | Adapter |
-|---|---|---|
-| Claude Code (local) | Ready | Markdown + YAML frontmatter in `~/.claude/agents/` |
-| Claude Code (Paperclip-orchestrated) | Ready | `claude_local` adapter, runs under Paperclip on `127.0.0.1:3100` |
-| OpenAI | Placeholder | TBD |
-| Cursor | Placeholder | `.cursorrules` files |
-| Grok | Placeholder | TBD |
+| Provider | Status | Auth | Adapter |
+|---|---|---|---|
+| Claude Code | Ready | `claude login` | Markdown + YAML frontmatter in `~/.claude/agents/` |
+| Kimi Code CLI | Ready | `kimi login` | `providers/kimi/launch.sh` + role charter injection |
+| Grok Build | Ready | `grok login` | `providers/grok/launch.sh` + role charter injection |
+| OpenAI | Placeholder | TBD | TBD |
+| Cursor | Placeholder | TBD | TBD |
 
 ## Documentation
 
 | Doc | What it covers |
 |---|---|
+| [`docs/plan-file-format.md`](docs/plan-file-format.md) | Detailed WAVE format spec, parsing rules, pipe character / VERDICT line warnings |
 | [`docs/org-chart.md`](docs/org-chart.md) | Mermaid + ASCII visualization of reporting + pairing edges (Paperclip's tree UI can't draw peer edges; this is canonical) |
 | [`docs/paperclip-architecture.md`](docs/paperclip-architecture.md) | Paperclip platform architecture — companies, agents, issues, runs, adapters |
 | [`docs/architecture.md`](docs/architecture.md) | Single-machine, multi-machine, agent communication topology |
 | [`docs/issue-lifecycle.md`](docs/issue-lifecycle.md) | Paperclip issue states (backlog → todo → in_progress → in_review → done) + label-flip discipline |
-| [`docs/plan-file-format.md`](docs/plan-file-format.md) | Wave-plan markdown format |
 | [`docs/scenarios.md`](docs/scenarios.md) | Real-world examples — bug fix, feature request, sprint planning, multi-machine, pre-launch audit |
+| [`providers/kimi/README.md`](providers/kimi/README.md) | Kimi K3 producer setup, rate-cap behavior, trial gate for cross-vendor pairs |
+| [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic and judgment-seat launcher |
 | [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md) | Weekly Paperclip release scan log |
 
 ## Real-world results
