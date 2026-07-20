@@ -48,6 +48,14 @@ Across the first 3 Backend Critic activations on payment / state-machine code in
 
 All loops converged within the 2-loop ceiling. No CTO escalation. The executable-only critic charter (failing test diff + `file:line` citation, prose rejected) is load-bearing — it's what stops critics from producing LGTM noise.
 
+### Cross-vendor seats (2026-07)
+
+The heterogeneity invariant extended across vendors — same-vendor different-tier pairs still share training lineage; cross-vendor pairs decorrelate harder.
+
+- **Grok Plan Critic** (`roles/plan-critic.md`, `providers/grok/plan-critic.sh`) — one-shot adversarial review of every wave plan, runs as Pass 4 of `autoplan.sh` when `XAI_API_KEY` is set. The plan was the only unreviewed artifact in the pipeline; now its review comes from a different vendor than the three passes that precede it. Degrades gracefully: no key → skipped, API failure → warn and continue.
+- **Kimi K3 frontend trial** (`providers/kimi/README.md`) — K3 as `web-frontend` producer via Moonshot's Anthropic-compatible endpoint, inside the same Claude Code harness (guardrails and charters unchanged). Opt-in via routing.yaml + `KIMI_API_KEY`. Frontend Critic stays on Opus → first true cross-vendor producer-critic pair. Gated on 5–10 tasks of critic-block-rate evidence vs the Sonnet baseline before any expansion.
+- **Non-goals**: no vendor swap on orchestrator, CTO gate, or critics — trust-critical seats stay on harness-proven Claude.
+
 ### Per-role model tier routing
 
 `config/routing.yaml → model_routing:` pins each role to `opus`, `sonnet`, or `haiku`. Tier aliases (not version IDs) so config doesn't churn when Anthropic ships a new version. ~51% cost reduction vs uniform Opus.

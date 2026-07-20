@@ -34,6 +34,12 @@ model_routing:
 
   # Implementation roles — balanced tier
   go-backend:                sonnet
+  # K3 trial (cross-vendor producer — see providers/kimi/README.md):
+  # uncomment the kimi line and comment the sonnet line to route frontend
+  # work to Kimi K3 through run-remote.sh's Kimi hook. Requires KIMI_API_KEY
+  # exported on the dispatching machine. Frontend Critic stays on opus,
+  # making this the fleet's first true cross-vendor producer-critic pair.
+  # web-frontend:            kimi-k3
   web-frontend:              sonnet
   mobile:                    sonnet
   db-architect:              sonnet

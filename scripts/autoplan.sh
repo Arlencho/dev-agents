@@ -1,8 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Autoplan chaining — runs 3 sequential review passes on a wave plan.
-# Uses the plan-reviewer agent for strategy, design, and engineering review.
+# Autoplan chaining — runs sequential review passes on a wave plan.
+# Uses the plan-reviewer agent for strategy, design, and engineering review,
+# plus a cross-vendor Grok pass when XAI_API_KEY is set.
 #
 # Usage:
 #   ./scripts/autoplan.sh <plan-file>
@@ -11,6 +12,7 @@ set -euo pipefail
 #   1. Strategy  — "Does this plan address the right problem?"
 #   2. Design    — "Are wave dependencies and agent assignments correct?"
 #   3. Engineering — "Are tasks scoped correctly? Any missing infrastructure?"
+#   4. Cross-vendor — Grok plan critic (roles/plan-critic.md); skipped without XAI_API_KEY
 
 # ---- Colors ----
 RED='\033[0;31m'
@@ -119,6 +121,46 @@ $(echo "$REVIEW_OUTPUT" | tail -20)"
     echo ""
 done
 
+# ---- Pass 4: Cross-vendor plan critic (Grok) ----
+# Different vendor by design: the three passes above share one vendor's blind
+# spots. Skips cleanly when XAI_API_KEY is absent; an API failure warns and
+# continues rather than blocking dispatch on a third-party outage.
+GROK_CRITIC="$REPO_DIR/providers/grok/plan-critic.sh"
+if [ -x "$GROK_CRITIC" ] && [ -n "${XAI_API_KEY:-}" ]; then
+    echo -e "${BOLD}------------------------------------------${NC}"
+    echo -e "${BOLD}  Pass 4: Cross-vendor (Grok)${NC}"
+    echo -e "${BOLD}------------------------------------------${NC}"
+    echo ""
+
+    set +e
+    GROK_OUTPUT=$(PRIOR_FEEDBACK="$PRIOR_FEEDBACK" "$GROK_CRITIC" "$PLAN_FILE")
+    GROK_EXIT=$?
+    set -e
+
+    if [ "$GROK_EXIT" -eq 0 ]; then
+        echo "$GROK_OUTPUT"
+        echo ""
+        VERDICT=$(echo "$GROK_OUTPUT" | grep -oE "VERDICT: (APPROVE|REVISE|REJECT)" | tail -1 | sed 's/VERDICT: //')
+        VERDICT="${VERDICT:-APPROVE}"
+        PASS_NAMES+=("Cross-vendor")
+        VERDICTS+=("$VERDICT")
+        FEEDBACKS+=("$GROK_OUTPUT")
+        if [ "$VERDICT" = "APPROVE" ]; then
+            echo -e "  ${GREEN}Pass 4 (Cross-vendor): APPROVE${NC}"
+        elif [ "$VERDICT" = "REVISE" ]; then
+            echo -e "  ${YELLOW}Pass 4 (Cross-vendor): REVISE${NC}"
+        else
+            echo -e "  ${RED}Pass 4 (Cross-vendor): REJECT${NC}"
+        fi
+    else
+        echo -e "  ${YELLOW}Cross-vendor pass failed (exit $GROK_EXIT) — continuing without it${NC}"
+    fi
+    echo ""
+else
+    echo -e "  ${CYAN}Pass 4 (Cross-vendor/Grok): skipped — XAI_API_KEY not set${NC}"
+    echo ""
+fi
+
 # ---- Summary ----
 echo -e "${BOLD}==========================================${NC}"
 echo -e "${BOLD}  Review Summary${NC}"
@@ -128,7 +170,7 @@ echo ""
 HAS_REJECT=false
 HAS_REVISE=false
 
-for i in 0 1 2; do
+for i in "${!VERDICTS[@]}"; do
     v="${VERDICTS[$i]}"
     name="${PASS_NAMES[$i]}"
     if [ "$v" = "REJECT" ]; then
@@ -147,7 +189,7 @@ echo ""
 if [ "$HAS_REJECT" = true ]; then
     echo -e "${RED}Plan REJECTED by one or more reviewers.${NC}"
     echo ""
-    for i in 0 1 2; do
+    for i in "${!VERDICTS[@]}"; do
         if [ "${VERDICTS[$i]}" = "REJECT" ]; then
             echo -e "${RED}--- ${PASS_NAMES[$i]} rejection reasons ---${NC}"
             echo "${FEEDBACKS[$i]}" | grep -A 100 "REASONS:" | head -20
@@ -158,7 +200,7 @@ if [ "$HAS_REJECT" = true ]; then
 elif [ "$HAS_REVISE" = true ]; then
     echo -e "${YELLOW}Plan has revision suggestions:${NC}"
     echo ""
-    for i in 0 1 2; do
+    for i in "${!VERDICTS[@]}"; do
         if [ "${VERDICTS[$i]}" = "REVISE" ]; then
             echo -e "${YELLOW}--- ${PASS_NAMES[$i]} suggestions ---${NC}"
             echo "${FEEDBACKS[$i]}" | grep -A 100 "SUGGESTIONS:" | head -20
@@ -173,5 +215,5 @@ elif [ "$HAS_REVISE" = true ]; then
     fi
     echo -e "${GREEN}Continuing despite revision suggestions.${NC}"
 else
-    echo -e "${GREEN}Plan approved by all 3 reviewers. Ready to dispatch.${NC}"
+    echo -e "${GREEN}Plan approved by all ${#VERDICTS[@]} reviewers. Ready to dispatch.${NC}"
 fi

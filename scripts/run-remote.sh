@@ -52,6 +52,22 @@ else
     MODEL_FLAG=""
 fi
 
+# Cross-vendor: models starting with "kimi"/"k3" run under the same Claude Code
+# harness but against Moonshot's Anthropic-compatible endpoint (providers/kimi/).
+# The env prefix rides the unquoted heredoc to the remote invocation, so the
+# key must be exported on the DISPATCHING machine, not provisioned on workers.
+MODEL_ENV=""
+case "$MODEL" in
+    kimi*|k3*)
+        if [ -z "${KIMI_API_KEY:-}" ]; then
+            echo "ERROR: model '$MODEL' routes to Kimi but KIMI_API_KEY is not set"
+            echo "Export KIMI_API_KEY or revert the agent to a Claude tier in config/routing.yaml"
+            exit 1
+        fi
+        MODEL_ENV="ANTHROPIC_BASE_URL=${KIMI_BASE_URL:-https://api.kimi.com/coding} ANTHROPIC_AUTH_TOKEN=$KIMI_API_KEY"
+        ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_NAME=$(basename "$REPO_URL" .git)
 WORK_DIR="~/dev/$REPO_NAME"
@@ -143,8 +159,10 @@ command -v claude >/dev/null 2>&1 || {
 # unquoted heredoc to the remote shell.
 echo "Starting claude --agent $AGENT ${MODEL_FLAG}..."
 echo "Logging to: $LOG_DIR/$LOG_FILE"
+# MODEL_ENV (Kimi cross-vendor) expands locally like MODEL_FLAG; "env" with
+# zero assignments is a no-op passthrough for the default Claude path.
 # shellcheck disable=SC2086
-claude --agent "$AGENT" ${MODEL_FLAG} --dangerously-skip-permissions "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
+env ${MODEL_ENV} claude --agent "$AGENT" ${MODEL_FLAG} --dangerously-skip-permissions "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
 AGENT_EXIT=\${PIPESTATUS[0]}
 
 # Push the branch
