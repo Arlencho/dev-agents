@@ -1,5 +1,8 @@
 # Operator Guide — Dev Agents Fleet
 
+> **Phase 1 — provisional.** The multi-vendor dispatch path, plan format, and failure modes below are production-proven. The **handoff ledger / A/B experiment** sections describe Phase 1 machinery that exists in-tree; treat shared-brain Phases 2–5 as **parked** after the A/B kill criterion unless you re-run a harder experiment. Do not assume full “project brain” productization yet.
+
+
 This guide covers running the dev-agents fleet from dispatch to handoff — when to use a single CLI, how to author plans, and how to troubleshoot production runs.
 
 **Audience**: Operations engineers and orchestrators running multi-agent waves. Assumes bash, git, and basic SSH familiarity.
