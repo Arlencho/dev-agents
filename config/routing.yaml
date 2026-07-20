@@ -84,6 +84,7 @@ title_patterns:
 # Resolution: [provider_preferences from workers.yaml] + chain, deduplicated.
 provider_failover:
   web-frontend: [kimi, claude]
+  plan-critic: [grok, claude]
   default: [claude, kimi]
 
 # Rate-cap sentinel: a vendor that emits a ratecap pattern (config/

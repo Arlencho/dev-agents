@@ -22,6 +22,7 @@ provider_preferences:
   frontend-critic: claude
   database-critic: claude
   api-critic: claude
+  plan-critic: grok
   security-reviewer: claude
   cto: claude
   # Meta / ops
