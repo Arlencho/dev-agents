@@ -487,6 +487,7 @@ The sync script resolves agent → provider file via a 3-level lookup:
 | Doc | What it covers |
 |---|---|
 | [`docs/plan-file-format.md`](docs/plan-file-format.md) | Detailed WAVE format spec, parsing rules, pipe character / VERDICT line warnings |
+| [`docs/operator-guide.md`](docs/operator-guide.md) | Running the fleet: single CLI vs dispatch, plans, logs, handoff Phase 1, common failures + cookbook |
 | [`docs/org-chart.md`](docs/org-chart.md) | Mermaid + ASCII visualization of reporting + pairing edges (Paperclip's tree UI can't draw peer edges; this is canonical) |
 | [`docs/paperclip-architecture.md`](docs/paperclip-architecture.md) | Paperclip platform architecture — companies, agents, issues, runs, adapters |
 | [`docs/architecture.md`](docs/architecture.md) | Single-machine, multi-machine, agent communication topology |
