@@ -25,10 +25,13 @@ Source-of-truth product repo: [`olympus-platform/`](../../olympus-platform/) —
 
 | Item | Value |
 |---|---|
-| Wave plan in flight | `wave-plans/olympus-booking-checkout-2026-04-24.md` |
-| Demo deadline | 2026-05-15 (London) |
+| Wave plan in flight | `wave-plans/olympus-golive-from-sandbox-2026-07-21.md` |
+| Soft-live definition | **Friends & Family Beta** (invite-only): search → book → pay — see product doc |
+| Soft-live doc (source of truth) | `olympus-platform/docs/operations/soft-live-friends-family-beta.md` |
+| Demo deadline | 2026-05-15 (London) — historical; Soft-live is the current north star |
 | Production URLs | `api.olympus-ai.tech` (Cloud Run), `app.olympus-ai.tech` (Vercel) |
-| Stage | Alpha — near-zero real users |
+| Stage | Beta infrastructure; Soft-live F&F not yet formally opened |
+| Legal entity | Pelops AI AB (559579-1574) — Stripe/Duffel KYB under this entity for real money |
 
 ## Budget cap
 
