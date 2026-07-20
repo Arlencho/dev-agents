@@ -17,6 +17,7 @@ skills/_candidates/         # promotion drafts only — never injected at runtim
 4. **No producer self-merge** of skill files on ordinary feature tasks.
 5. Every imperative bullet should carry an `[ev: …]` citation (path, learning, brief §, or SHA).
 6. Run `scripts/skills-lint.sh` before merging skill changes.
+7. **Delivery face:** no AI/vendor branding on commits or PRs (`skills/git-ship` v2 + commit-msg guardrail).
 
 ## Map
 

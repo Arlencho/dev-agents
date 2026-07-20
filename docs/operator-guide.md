@@ -526,7 +526,7 @@ rm logs/provider-state/kimi.cooldown
 **Fix:** Not retryable. Review the agent's work manually and re-dispatch with a corrected task description.
 
 **Common guardrail violations:**
-- Missing `Co-Authored-By` trailer in commit (fix: add it)
+- AI branding on commits/PRs (`Co-Authored-By:` Claude/Kimi/…, "Made with …", "Generated with …") — **forbidden**; strip and recommit (fix: fleet law in `skills/git-ship`)
 - Committing to `main` directly (fix: task must use a branch)
 - Modifying `.env` or secrets (fix: task must work on public code only)
 

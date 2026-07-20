@@ -106,15 +106,12 @@ cmd_install() {
     local hooks_dir="$repo_dir/.git/hooks"
     mkdir -p "$hooks_dir"
 
+    # ── pre-push: block force-push to main/master ──
     local hook_file="$hooks_dir/pre-push"
-
-    # If hook exists and already has our guardrail marker, skip
     if [ -f "$hook_file" ] && grep -q "# guardrails:agent-safety" "$hook_file" 2>/dev/null; then
         echo -e "${GREEN}Guardrail pre-push hook already installed in $repo_dir${NC}"
-        return 0
-    fi
-
-    cat > "$hook_file" <<'HOOK'
+    else
+        cat > "$hook_file" <<'HOOK'
 #!/usr/bin/env bash
 # guardrails:agent-safety — blocks force-push to main/master
 # Installed by dev-agents/scripts/guardrails.sh
@@ -137,9 +134,37 @@ done
 
 exit 0
 HOOK
+        chmod +x "$hook_file"
+        echo -e "${GREEN}Installed guardrail pre-push hook in $repo_dir${NC}"
+    fi
 
-    chmod +x "$hook_file"
-    echo -e "${GREEN}Installed guardrail pre-push hook in $repo_dir${NC}"
+    # ── commit-msg: block AI/vendor branding on the public delivery face ──
+    local cm_hook="$hooks_dir/commit-msg"
+    if [ -f "$cm_hook" ] && grep -q "# guardrails:no-ai-branding" "$cm_hook" 2>/dev/null; then
+        echo -e "${GREEN}Guardrail commit-msg hook already installed in $repo_dir${NC}"
+    else
+        cat > "$cm_hook" <<'HOOK'
+#!/usr/bin/env bash
+# guardrails:no-ai-branding — commits must not advertise vendor models
+# Installed by dev-agents/scripts/guardrails.sh
+# Provenance belongs in handoffs/logs, not commit messages or PR footers.
+
+msg_file="$1"
+[ -f "$msg_file" ] || exit 0
+
+if grep -qiE \
+  'Co-Authored-By:.*(Claude|Anthropic|Kimi|Moonshot|Grok|xAI|OpenAI|GPT|Gemini|Cursor|Copilot)|Made (by|with) (Claude|Kimi|Grok|GPT|ChatGPT)|Generated with|🤖 Generated|claude\.com/claude-code' \
+  "$msg_file"; then
+    echo "BLOCKED by guardrails: AI/vendor branding in commit message is forbidden."
+    echo "Remove Co-Authored-By AI trailers, 'Made with…', 'Generated with…', etc."
+    echo "Provenance stays in handoffs/logs only (fleet delivery-face law)."
+    exit 1
+fi
+exit 0
+HOOK
+        chmod +x "$cm_hook"
+        echo -e "${GREEN}Installed guardrail commit-msg hook (no AI branding) in $repo_dir${NC}"
+    fi
 }
 
 # --------------------------------------------------

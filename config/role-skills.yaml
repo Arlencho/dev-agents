@@ -22,7 +22,7 @@ roles:
   mobile: evidence-first untrusted-prior handoff-intent git-ship
   devops: evidence-first untrusted-prior handoff-intent git-ship
   test-engineer: evidence-first untrusted-prior handoff-intent git-ship
-  docs-writer: evidence-first untrusted-prior handoff-intent docs-no-hallucinate
+  docs-writer: evidence-first untrusted-prior handoff-intent git-ship docs-no-hallucinate
   investigate: evidence-first untrusted-prior handoff-intent git-ship
   plan-critic: evidence-first untrusted-prior git-ship
   security-reviewer: evidence-first untrusted-prior git-ship

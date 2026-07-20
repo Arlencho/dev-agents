@@ -466,7 +466,7 @@ The sync script resolves agent → provider file via a 3-level lookup:
 4. Database migrations merge BEFORE code that uses them
 5. Tests merge LAST
 6. **No two agents touch the same files**
-7. **Conventional Commits**, no `Co-Authored-By:` trailer (commits should not attribute work to bots)
+7. **Conventional Commits**, no AI/vendor branding on the delivery face — ban `Co-Authored-By:` AI trailers, "Made with Claude/Kimi/Grok", "Generated with …" in commits **and** PR titles/bodies (provenance lives in handoffs/logs only; see `skills/git-ship`)
 8. **No direct push to `main`** — all changes via PR
 
 ## Adding a role
