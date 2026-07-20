@@ -221,6 +221,76 @@ get_provider() {
 }
 
 # --------------------------------------------------
+# Get the failover chain for an agent from routing.yaml provider_failover:.
+# Returns space-separated vendors (agent-specific, else default:, else empty).
+# --------------------------------------------------
+get_failover_chain() {
+    local agent="$1"
+    [ -f "$ROUTING_CONFIG" ] || { echo ""; return; }
+    local in_block=false default_chain=""
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// /}" ]] && continue
+        if [[ "$line" =~ ^[[:space:]]*provider_failover: ]]; then in_block=true; continue; fi
+        if [ "$in_block" = true ]; then
+            [[ "$line" =~ ^[a-zA-Z] ]] && { in_block=false; continue; }
+            if [[ "$line" =~ ^[[:space:]]*${agent}:[[:space:]]*\[(.*)\] ]]; then
+                echo "${BASH_REMATCH[1]}" | tr ',' ' '; return
+            fi
+            if [[ "$line" =~ ^[[:space:]]*default:[[:space:]]*\[(.*)\] ]]; then
+                default_chain=$(echo "${BASH_REMATCH[1]}" | tr ',' ' ')
+            fi
+        fi
+    done < "$ROUTING_CONFIG"
+    echo "$default_chain"
+}
+
+# Cooldown window (minutes) from routing.yaml rate_caps:, default 60.
+get_cooldown_minutes() {
+    local v
+    v=$(grep -A2 '^rate_caps:' "$ROUTING_CONFIG" 2>/dev/null \
+        | grep -oE 'cooldown_minutes:[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | head -1)
+    echo "${v:-60}"
+}
+
+# True (0) if a vendor is currently cooling from a recent rate-cap.
+provider_cooling() {
+    local vendor="$1"
+    local f="$REPO_DIR/logs/provider-state/${vendor}.cooldown"
+    [ -f "$f" ] || return 1
+    local ts now mins
+    ts=$(cat "$f" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    mins=$(get_cooldown_minutes)
+    [ $((now - ts)) -lt $((mins * 60)) ]
+}
+
+# Pick the provider to run <agent>: primary (workers.yaml) then failover chain,
+# skipping any vendor in the excluded set (already tried this task) or cooling.
+# Never deadlocks — if every candidate is excluded/cooling, returns the primary
+# anyway (same philosophy as find_worker's forced third pass).
+resolve_provider() {
+    local agent="$1"; shift
+    local excluded="$*"
+    local primary chain candidate ordered=""
+    primary=$(get_provider "$agent")
+    chain=$(get_failover_chain "$agent")
+    for candidate in $primary $chain; do
+        case " $ordered " in *" $candidate "*) ;; *) ordered="$ordered $candidate" ;; esac
+    done
+    for candidate in $ordered; do
+        case " $excluded " in *" $candidate "*) continue ;; esac
+        provider_cooling "$candidate" && continue
+        echo "$candidate"; return 0
+    done
+    for candidate in $ordered; do
+        case " $excluded " in *" $candidate "*) continue ;; esac
+        echo "$candidate"; return 0
+    done
+    echo "$primary"
+}
+
+# --------------------------------------------------
 # Get model tier for an agent from routing.yaml
 # Returns tier alias (opus/sonnet/haiku) or explicit model ID.
 # Returns empty string if no routing config — caller should skip --model
@@ -410,7 +480,11 @@ check_worker_capacity() {
     local max
     max=$(get_max_agents "$wname")
     local running
-    running=$(ssh -o ConnectTimeout=5 "$host" "pgrep -c claude 2>/dev/null || echo 0" 2>/dev/null || echo 0)
+    # Count all three vendor CLIs — a worker may be running kimi/grok agents too.
+    # `pgrep … | wc -l` (not `pgrep -c`) — BSD/macOS pgrep has no -c flag; the
+    # old `pgrep -c claude` silently returned 0 on Mac workers via the fallback.
+    running=$(ssh -o ConnectTimeout=5 "$host" "pgrep -fl 'claude|kimi|grok' 2>/dev/null | wc -l | tr -d ' '" 2>/dev/null || echo 0)
+    running="${running:-0}"
     if [ "$running" -ge "$max" ]; then
         return 1  # at capacity
     fi
@@ -466,6 +540,8 @@ find_worker() {
 # Result tracking
 # --------------------------------------------------
 declare -A RESULT_STATUS RESULT_DURATION RESULT_WORKER RESULT_BRANCH
+declare -A RESULT_PROVIDER    # idx -> vendor that ran the task (feeds scorecard)
+declare -A TASK_TRIED_PROVIDERS  # idx -> space-separated vendors already tried (failover exclusion)
 
 # --------------------------------------------------
 # Dispatch a single task, returns PID
@@ -481,8 +557,11 @@ dispatch_task() {
     worker_info=$(find_worker "$agent" "$exclude_worker")
     IFS='|' read -r wname whost <<< "$worker_info"
 
+    # Resolve provider through the failover chain, skipping vendors already
+    # tried on this task (rate-capped/unavailable) and any currently cooling.
     local provider
-    provider=$(get_provider "$agent")
+    provider=$(resolve_provider "$agent" "${TASK_TRIED_PROVIDERS[$idx]:-}")
+    RESULT_PROVIDER[$idx]="$provider"
 
     local model="${TASK_MODEL[$idx]:-}"
 
@@ -498,10 +577,11 @@ dispatch_task() {
     RESULT_WORKER[$idx]="$wname"
     RESULT_BRANCH[$idx]="$branch"
 
-    # Run in subshell to capture exit code. Pass model via env var so
-    # run-remote.sh can forward --model to the remote claude invocation.
+    # Run in subshell to capture exit code. Pass model + provider via env so
+    # run-remote.sh selects the right launcher and forwards --model.
     (
-        AGENT_MODEL="$model" "$SCRIPT_DIR/run-remote.sh" "$whost" "$REPO_URL" "$agent" "$task" "$branch"
+        AGENT_MODEL="$model" AGENT_PROVIDER="$provider" \
+            "$SCRIPT_DIR/run-remote.sh" "$whost" "$REPO_URL" "$agent" "$task" "$branch"
     ) &
     echo $!
 }
@@ -589,6 +669,21 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             FAILED_TASKS[$idx]=0
             echo -e "  ${RED}■${NC} ${TASK_AGENT[$idx]} ${RED}BLOCKED by guardrails${NC} after ${duration}s (not retryable)"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "blocked" 2>/dev/null || true
+        elif [ $status -eq 75 ]; then
+            # Rate-cap: exclude this vendor and let the retry loop fail over.
+            RESULT_STATUS[$idx]="ratecap(${RESULT_PROVIDER[$idx]})"
+            FAILED_TASKS[$idx]=0
+            TASK_TRIED_PROVIDERS[$idx]="${TASK_TRIED_PROVIDERS[$idx]:-} ${RESULT_PROVIDER[$idx]}"
+            echo -e "  ${YELLOW}⏳${NC} ${TASK_AGENT[$idx]} — ${RESULT_PROVIDER[$idx]} rate-capped after ${duration}s (failing over)"
+            [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "ratecap" "${RESULT_PROVIDER[$idx]}" 2>/dev/null || true
+        elif [ $status -eq 69 ]; then
+            # Provider CLI missing / not logged in on this worker — per-task
+            # exclusion only (not a vendor-wide cooldown).
+            RESULT_STATUS[$idx]="unavailable(${RESULT_PROVIDER[$idx]})"
+            FAILED_TASKS[$idx]=0
+            TASK_TRIED_PROVIDERS[$idx]="${TASK_TRIED_PROVIDERS[$idx]:-} ${RESULT_PROVIDER[$idx]}"
+            echo -e "  ${YELLOW}✗${NC} ${TASK_AGENT[$idx]} — ${RESULT_PROVIDER[$idx]} unavailable on ${RESULT_WORKER[$idx]} after ${duration}s (failing over)"
+            [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true
         else
             RESULT_STATUS[$idx]="failed"
             FAILED_TASKS[$idx]=0
@@ -624,11 +719,18 @@ for wave_num in "${SORTED_WAVES[@]}"; do
                 RESULT_DURATION[$idx]="${duration}s"
 
                 if [ $retry_status -eq 0 ]; then
-                    RESULT_STATUS[$idx]="success (retry $local_attempts)"
-                    echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$idx]} succeeded on retry $local_attempts in ${duration}s"
+                    RESULT_STATUS[$idx]="success (retry $local_attempts, ${RESULT_PROVIDER[$idx]})"
+                    echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$idx]} succeeded on retry $local_attempts via ${RESULT_PROVIDER[$idx]} in ${duration}s"
                     [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "success" 2>/dev/null || true
                     unset 'FAILED_TASKS[$idx]'
                     break
+                elif [ $retry_status -eq 75 ] || [ $retry_status -eq 69 ]; then
+                    # Still capped/unavailable on this vendor — exclude it so the
+                    # next retry's resolve_provider advances down the chain.
+                    TASK_TRIED_PROVIDERS[$idx]="${TASK_TRIED_PROVIDERS[$idx]:-} ${RESULT_PROVIDER[$idx]}"
+                    [ $retry_status -eq 75 ] && RESULT_STATUS[$idx]="ratecap(${RESULT_PROVIDER[$idx]})" || RESULT_STATUS[$idx]="unavailable(${RESULT_PROVIDER[$idx]})"
+                    echo -e "  ${YELLOW}⏳${NC} ${TASK_AGENT[$idx]} retry $local_attempts: ${RESULT_PROVIDER[$idx]} unavailable/capped (failing over)"
+                    [ $retry_status -eq 75 ] && [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "ratecap" "${RESULT_PROVIDER[$idx]}" 2>/dev/null || true
                 else
                     echo -e "  ${RED}✗${NC} ${TASK_AGENT[$idx]} retry $local_attempts failed after ${duration}s"
                     [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true
@@ -776,11 +878,11 @@ EXEC_LOG="$WAVE_PLANS_DIR/${REPO_SLUG_SHORT}-${PLAN_DATE}.log"
     echo "# Execution log for $REPO_SLUG_SHORT — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "# Repo: $REPO_URL"
     echo ""
-    printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s %-25s %s\n" "#" "Wave" "Agent" "Model" "Branch" "Worker" "Duration" "Status" "Log"
-    printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s %-25s %s\n" "---" "----" "-----------------" "-------" "-----------------------------" "-------------" "---------" "------------------------" "---"
+    printf "%-4s %-5s %-18s %-8s %-8s %-30s %-14s %-10s %-25s %s\n" "#" "Wave" "Agent" "Provider" "Model" "Branch" "Worker" "Duration" "Status" "Log"
+    printf "%-4s %-5s %-18s %-8s %-8s %-30s %-14s %-10s %-25s %s\n" "---" "----" "-----------------" "-------" "-------" "-----------------------------" "-------------" "---------" "------------------------" "---"
     for i in "${!TASK_AGENT[@]}"; do
-        printf "%-4s %-5s %-18s %-8s %-30s %-14s %-10s %-25s %s\n" \
-            "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "${TASK_MODEL[$i]:-}" "${TASK_BRANCH[$i]}" \
+        printf "%-4s %-5s %-18s %-8s %-8s %-30s %-14s %-10s %-25s %s\n" \
+            "$i" "${TASK_WAVE[$i]}" "${TASK_AGENT[$i]}" "${RESULT_PROVIDER[$i]:-n/a}" "${TASK_MODEL[$i]:-}" "${TASK_BRANCH[$i]}" \
             "${RESULT_WORKER[$i]:-n/a}" "${RESULT_DURATION[$i]:-n/a}" \
             "${RESULT_STATUS[$i]:-unknown}" "${RESULT_LOG[$i]:-none}"
     done

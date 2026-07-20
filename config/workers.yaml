@@ -2,13 +2,16 @@
 # Edit this file with your Mac Mini details after running setup-machine.sh on each.
 # The orchestrator and dispatch.sh read this to know where to send work.
 
-# Provider preference per agent role.
-# dispatch.sh reads this to select the right CLI tool.
-# For now all map to claude — structure is ready for other providers.
+# Provider preference per agent role — PRIMARY provider only.
+# dispatch.sh reads this to select the CLI tool (claude | kimi | grok),
+# then walks provider_failover in routing.yaml when the primary is
+# rate-capped (exit 75) or unavailable (exit 69).
 provider_preferences:
   # Producers
   go-backend: claude
-  web-frontend: claude
+  # web-frontend: K3 producer; fails over to claude per routing.yaml provider_failover.
+  # NOTE: parsers here don't strip inline comments — keep values bare.
+  web-frontend: kimi
   db-architect: claude
   api-designer: claude
   devops: claude

@@ -27,8 +27,12 @@ shift 5 2>/dev/null || shift $#
 # Parse optional flags
 LOG_DIR="~/dev/agent-logs"
 # Model tier or ID, set by dispatch.sh via AGENT_MODEL env var (e.g. opus,
-# sonnet, haiku, or an explicit model ID). Empty means use claude's default.
+# sonnet, haiku, or an explicit model ID). Empty means use the CLI default.
 MODEL="${AGENT_MODEL:-}"
+# Provider (CLI vendor) set by dispatch.sh via AGENT_PROVIDER (claude|kimi|grok).
+# Selects which providers/<provider>/launch.sh runs the agent. All authenticate
+# via subscription login on the worker — no API keys anywhere.
+PROVIDER="${AGENT_PROVIDER:-claude}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --log-dir)
@@ -44,29 +48,6 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
-
-# Build --model flag for the remote claude invocation (empty if not set)
-if [ -n "$MODEL" ]; then
-    MODEL_FLAG="--model $MODEL"
-else
-    MODEL_FLAG=""
-fi
-
-# Cross-vendor: models starting with "kimi"/"k3" run under the same Claude Code
-# harness but against Moonshot's Anthropic-compatible endpoint (providers/kimi/).
-# The env prefix rides the unquoted heredoc to the remote invocation, so the
-# key must be exported on the DISPATCHING machine, not provisioned on workers.
-MODEL_ENV=""
-case "$MODEL" in
-    kimi*|k3*)
-        if [ -z "${KIMI_API_KEY:-}" ]; then
-            echo "ERROR: model '$MODEL' routes to Kimi but KIMI_API_KEY is not set"
-            echo "Export KIMI_API_KEY or revert the agent to a Claude tier in config/routing.yaml"
-            exit 1
-        fi
-        MODEL_ENV="ANTHROPIC_BASE_URL=${KIMI_BASE_URL:-https://api.kimi.com/coding} ANTHROPIC_AUTH_TOKEN=$KIMI_API_KEY"
-        ;;
-esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_NAME=$(basename "$REPO_URL" .git)
@@ -116,6 +97,27 @@ else
     echo "WARNING: Guardrails not found locally, skipping safety hooks"
 fi
 
+# Ship the provider launcher runtime to the worker (same scp precedent as
+# guardrails above). lib.sh + the chosen provider's launch.sh land flat in
+# ~/dev/agent-runtime/; non-claude providers also get the role charter, which
+# their launcher injects into the prompt (claude resolves --agent natively).
+PROVIDER_LAUNCHER="$SCRIPT_DIR/../providers/$PROVIDER/launch.sh"
+PROVIDER_LIB="$SCRIPT_DIR/../providers/lib.sh"
+RATECAP_CONF="$SCRIPT_DIR/../config/ratecap-patterns.conf"
+if [ -f "$PROVIDER_LAUNCHER" ] && [ -f "$PROVIDER_LIB" ]; then
+    echo "Shipping $PROVIDER launcher runtime to $HOST..."
+    ssh "$HOST" "mkdir -p ~/dev/agent-runtime/roles"
+    scp -q "$PROVIDER_LIB" "$HOST:~/dev/agent-runtime/lib.sh"
+    scp -q "$PROVIDER_LAUNCHER" "$HOST:~/dev/agent-runtime/launch.sh"
+    [ -f "$RATECAP_CONF" ] && scp -q "$RATECAP_CONF" "$HOST:~/dev/agent-runtime/ratecap-patterns.conf"
+    if [ "$PROVIDER" != "claude" ] && [ -f "$SCRIPT_DIR/../roles/$AGENT.md" ]; then
+        scp -q "$SCRIPT_DIR/../roles/$AGENT.md" "$HOST:~/dev/agent-runtime/roles/$AGENT.md"
+    fi
+else
+    echo "ERROR: launcher runtime for provider '$PROVIDER' not found ($PROVIDER_LAUNCHER)" >&2
+    exit 1
+fi
+
 # Execute on remote
 echo "Starting agent on $HOST..."
 ssh "$HOST" bash -s <<REMOTE_SCRIPT
@@ -145,25 +147,18 @@ if [ -x ~/dev/guardrails/guardrails.sh ]; then
     ~/dev/guardrails/guardrails.sh install "$WORK_DIR"
 fi
 
-# Verify claude is installed
-command -v claude >/dev/null 2>&1 || {
-    echo "ERROR: Claude Code not installed on $HOST"
-    echo "Run: npm install -g @anthropic-ai/claude-code"
-    exit 1
-}
-
-# Run the agent with output capture.
-# MODEL_FLAG is deliberately unquoted so that when empty it contributes
-# zero args, and when set (e.g. "--model sonnet") word-splits into two.
-# A bash array would be cleaner but doesn't serialize through this
-# unquoted heredoc to the remote shell.
-echo "Starting claude --agent $AGENT ${MODEL_FLAG}..."
+# Run the agent through the provider launcher (it verifies its own CLI is
+# installed + logged in, exiting 69 if not). $MODEL / $AGENT / $FULL_TASK
+# expand dispatcher-side through the unquoted heredoc; the ~ paths expand here
+# on the worker. set +e so a launcher exit (69/75/1) is captured, not aborted.
+echo "Starting $PROVIDER launcher for agent $AGENT (model: ${MODEL:-default})..."
 echo "Logging to: $LOG_DIR/$LOG_FILE"
-# MODEL_ENV (Kimi cross-vendor) expands locally like MODEL_FLAG; "env" with
-# zero assignments is a no-op passthrough for the default Claude path.
-# shellcheck disable=SC2086
-env ${MODEL_ENV} claude --agent "$AGENT" ${MODEL_FLAG} --dangerously-skip-permissions "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
+set +e
+AGENT_MODEL="$MODEL" ROLES_DIR=~/dev/agent-runtime/roles \
+    RATECAP_PATTERNS=~/dev/agent-runtime/ratecap-patterns.conf \
+    bash ~/dev/agent-runtime/launch.sh "$AGENT" "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
 AGENT_EXIT=\${PIPESTATUS[0]}
+set -e
 
 # Push the branch
 echo "Pushing branch $BRANCH..."
@@ -178,8 +173,21 @@ REMOTE_SCRIPT
 REMOTE_EXIT=$?
 REMOTE_LOG_PATH="$LOG_DIR/$LOG_FILE"
 
-# On failure, auto-record a learning from the last 3 log lines
-if [ "$REMOTE_EXIT" -ne 0 ] && [ -x "$SCRIPT_DIR/learnings.sh" ]; then
+# Rate-cap sentinel (exit 75): mark the vendor cooling, log the event, learn it.
+# run-remote RECORDS; dispatch.sh REACTS (fails over per routing.yaml chain).
+if [ "$REMOTE_EXIT" -eq 75 ]; then
+    STATE_DIR="$SCRIPT_DIR/../logs/provider-state"
+    mkdir -p "$STATE_DIR"
+    date +%s > "$STATE_DIR/${PROVIDER}.cooldown"
+    echo "$(date -u +%FT%TZ)|$PROVIDER|$AGENT|$HOST|ratecap" >> "$STATE_DIR/ratecap.log"
+    [ -x "$SCRIPT_DIR/learnings.sh" ] && "$SCRIPT_DIR/learnings.sh" add "$REPO_NAME" "$PROVIDER" failure \
+        "RATE_CAP: $PROVIDER consumer cap hit by $AGENT on $HOST" --severity high 2>/dev/null || true
+    echo "RATE_CAP recorded for $PROVIDER — dispatch will fail over"
+fi
+
+# On other failures, auto-record a learning from the last 3 log lines
+# (skip 75 — already logged high above).
+if [ "$REMOTE_EXIT" -ne 0 ] && [ "$REMOTE_EXIT" -ne 75 ] && [ -x "$SCRIPT_DIR/learnings.sh" ]; then
     FAIL_TAIL=$(ssh "$HOST" "tail -3 $LOG_DIR/$LOG_FILE 2>/dev/null" || echo "no log available")
     "$SCRIPT_DIR/learnings.sh" add "$REPO_NAME" "$AGENT" failure \
         "Agent exited $REMOTE_EXIT. Last output: $FAIL_TAIL" \

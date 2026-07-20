@@ -4,9 +4,10 @@ set -euo pipefail
 # Send completion notifications for agent tasks.
 #
 # Usage:
-#   ./scripts/notify.sh <agent> <worker> <branch> <status>
+#   ./scripts/notify.sh <agent> <worker> <branch> <status> [detail]
 #
-# Status: "success" or "failure"
+# Status: "success" | "failure" | "ratecap"
+# Detail: optional 5th arg — for "ratecap", the vendor name being failed over
 #
 # Notification channels:
 #   - macOS: native notification via osascript (always, if on macOS)
@@ -16,18 +17,21 @@ set -euo pipefail
 # Environment variables:
 #   GITHUB_ISSUE  — if set, posts a comment on the issue (e.g., "Arlencho/olympus-platform#42")
 
-AGENT="${1:?Usage: notify.sh <agent> <worker> <branch> <status>}"
+AGENT="${1:?Usage: notify.sh <agent> <worker> <branch> <status> [detail]}"
 WORKER="${2:?Missing worker name}"
 BRANCH="${3:?Missing branch name}"
-STATUS="${4:?Missing status (success/failure)}"
+STATUS="${4:?Missing status (success/failure/ratecap)}"
+DETAIL="${5:-}"
 
 if [ "$STATUS" = "success" ]; then
-    ICON="checkmark.circle.fill"
     TITLE="Agent Succeeded"
     MSG="$AGENT on $WORKER completed ($BRANCH)"
     GH_EMOJI=":white_check_mark:"
+elif [ "$STATUS" = "ratecap" ]; then
+    TITLE="Provider Rate-Capped"
+    MSG="$AGENT on $WORKER: ${DETAIL:-provider} cap hit — failing over ($BRANCH)"
+    GH_EMOJI=":hourglass_flowing_sand:"
 else
-    ICON="xmark.circle.fill"
     TITLE="Agent Failed"
     MSG="$AGENT on $WORKER failed ($BRANCH)"
     GH_EMOJI=":x:"
@@ -48,7 +52,7 @@ if [ -n "${GITHUB_ISSUE:-}" ]; then
     if [[ "$GITHUB_ISSUE" =~ ^(.+)#([0-9]+)$ ]]; then
         GH_REPO="${BASH_REMATCH[1]}"
         GH_NUMBER="${BASH_REMATCH[2]}"
-        COMMENT="$GH_EMOJI **$AGENT** on \`$WORKER\`: $STATUS (\`$BRANCH\`)"
+        COMMENT="$GH_EMOJI **$AGENT** on \`$WORKER\`: $STATUS${DETAIL:+ ($DETAIL)} (\`$BRANCH\`)"
         gh issue comment "$GH_NUMBER" -R "$GH_REPO" --body "$COMMENT" 2>/dev/null || \
             echo "WARNING: Failed to comment on $GITHUB_ISSUE"
     else

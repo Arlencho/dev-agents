@@ -34,12 +34,6 @@ model_routing:
 
   # Implementation roles — balanced tier
   go-backend:                sonnet
-  # K3 trial (cross-vendor producer — see providers/kimi/README.md):
-  # uncomment the kimi line and comment the sonnet line to route frontend
-  # work to Kimi K3 through run-remote.sh's Kimi hook. Requires KIMI_API_KEY
-  # exported on the dispatching machine. Frontend Critic stays on opus,
-  # making this the fleet's first true cross-vendor producer-critic pair.
-  # web-frontend:            kimi-k3
   web-frontend:              sonnet
   mobile:                    sonnet
   db-architect:              sonnet
@@ -84,3 +78,16 @@ title_patterns:
   "^bug:": investigate
   "^debug:": investigate
   "^fix:.*flaky": investigate
+
+# Per-role provider failover chains (walked by dispatch.sh when the earlier
+# provider is rate-capped/cooling — exit 75 — or unavailable — exit 69).
+# Resolution: [provider_preferences from workers.yaml] + chain, deduplicated.
+provider_failover:
+  web-frontend: [kimi, claude]
+  default: [claude, kimi]
+
+# Rate-cap sentinel: a vendor that emits a ratecap pattern (config/
+# ratecap-patterns.conf) is marked cooling for this window and skipped by
+# resolve_provider until it expires.
+rate_caps:
+  cooldown_minutes: 60

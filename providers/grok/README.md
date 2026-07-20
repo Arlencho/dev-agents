@@ -1,27 +1,39 @@
 # Grok Provider
 
-xAI Grok integration. Deliberately minimal: Grok holds **one-shot judgment seats** (no tool harness, no agentic loop), where cross-vendor decorrelation adds signal without handing a vendor with no proven harness integration the keys to anything.
+xAI Grok via the **Grok Build CLI** — subscription login (`grok login`), **no API keys**. Grok holds **one-shot judgment seats** (no long agentic loop), where cross-vendor decorrelation adds signal without handing a vendor the keys to a trust-critical seat.
 
 ## Plan Critic (active)
 
 `plan-critic.sh` — one-shot adversarial review of a wave plan, run automatically as **Pass 4 (Cross-vendor)** of `scripts/autoplan.sh`. Charter: `roles/plan-critic.md`. Rationale: the plan is the highest-leverage artifact in the pipeline (a bad plan poisons every downstream agent), and the three Claude passes share one vendor's blind spots.
 
-```bash
-# standalone
-XAI_API_KEY=... ./providers/grok/plan-critic.sh wave-plans/my-plan.txt
+It calls `providers/grok/launch.sh plan-critic "<plan>"` (which injects the charter and runs the headless Grok CLI). Same `VERDICT: APPROVE|REVISE|REJECT` grammar as the Claude passes, so autoplan's summary/gate logic is unchanged.
 
-# as part of dispatch (runs automatically when the key is set)
-XAI_API_KEY=... ./scripts/dispatch.sh <repo-url> plan.txt --review
+```bash
+grok login    # once, against SuperGrok / X Premium+
+
+# standalone
+./providers/grok/plan-critic.sh wave-plans/my-plan.txt
+
+# as part of dispatch (runs automatically when grok is installed)
+./scripts/dispatch.sh <repo-url> plan.txt --review
 ```
 
-- **Env**: `XAI_API_KEY` (required; https://console.x.ai), `GROK_MODEL` (default `grok-4.3`), `GROK_ENDPOINT` (default `https://api.x.ai/v1/chat/completions`), `GROK_DRY_RUN` (print request, don't call).
-- **Degradation**: no key → pass skipped with a notice; API failure → warning, dispatch continues. The cross-vendor pass adds signal; it must never make dispatch depend on a third-party outage.
-- **Contract**: output ends with `VERDICT: APPROVE | REVISE | REJECT` — same grammar as the Claude passes, so autoplan's summary/gate logic is unchanged.
+- **Degradation**: grok not installed / not logged in → pass skipped (exit 3); rate-capped → cooldown recorded, pass skipped; any error → warn and continue. The cross-vendor pass adds signal; it must never block dispatch on a third-party outage.
 
-## Candidate second seat (not built)
+## As a producer launcher
 
-Security second-pass: one-shot re-review of PRs already approved by the Opus security reviewer. Build only if the plan-critic seat proves out in `learnings/`.
+`providers/grok/launch.sh` is also a full producer launcher (charter injection + rate-cap classification), usable by setting a role's `provider_preferences` to `grok`. Not currently assigned to any producer seat — Grok's benchmarked strength here is judgment, not the frontend producer role K3 holds.
+
+### ⚠️ Verify the headless flag
+
+The exact non-interactive invocation is quarantined at the top of `launch.sh` (`GROK_HEADLESS_ARGS=(-p)`). Confirm against the installed CLI before first real use:
+
+```bash
+grok --help | grep -iE 'print|prompt|headless|non-interactive'
+```
+
+Update the array if it differs; everything else in the launcher is flag-agnostic.
 
 ## Non-goals
 
-Grok as orchestrator, CTO gate, or any producer role. Those seats are trust-critical and harness-proven on Claude; a vendor swap there trades a quota irritation for an integration downgrade.
+Grok as orchestrator, CTO gate, or any critic paired with a producer. Those seats are trust-critical and harness-proven on Claude.

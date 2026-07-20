@@ -1,39 +1,37 @@
 # Kimi (Moonshot) Provider
 
-Kimi K3 as a **producer** — starting with `web-frontend`, the seat where we have direct benchmark evidence (K3 produced a production-grade single-file cinematic site, zero-dependency compliant, on the Black Aces test, 2026-07-19).
+Kimi K3 as a **producer** via the **Kimi Code CLI** — subscription login, **no API keys**. Currently the primary provider for `web-frontend` (the seat with direct benchmark evidence: K3 produced a production-grade single-file cinematic site, zero-dependency compliant, on the Black Aces test, 2026-07-19), with `claude` as its failover.
 
-## Integration path: Claude Code harness, Moonshot endpoint
+## How it runs
 
-Moonshot's coding service exposes an **Anthropic-compatible** API, so K3 runs inside the *same* Claude Code harness as every other agent — same role charters, same guardrails, same logs. No second CLI, no new adapter surface.
-
-`scripts/run-remote.sh` triggers this automatically for any routed model matching `kimi*`/`k3*`:
+`providers/kimi/launch.sh` is invoked by `run-remote.sh` on the worker (selected by `AGENT_PROVIDER=kimi` from `provider_preferences` in `workers.yaml`). Because the Kimi CLI has no `--agent` equivalent, the launcher injects the role charter (`roles/<role>.md` body) at the top of the prompt, then runs:
 
 ```
-ANTHROPIC_BASE_URL=https://api.kimi.com/coding  ANTHROPIC_AUTH_TOKEN=$KIMI_API_KEY  claude --agent web-frontend --model kimi-k3 ...
+kimi -p "<charter + task>" --output-format text
 ```
 
-### Enable the trial
+`-p` runs non-interactively with `--auto` permissions by default. Guardrails still apply — they're git hooks installed per-repo by `guardrails.sh`, vendor-agnostic.
 
-1. Get a key from https://www.kimi.com (Kimi Coding / API console) and `export KIMI_API_KEY=...` on the **dispatching** machine (the key rides the ssh heredoc; workers need nothing).
-2. In `config/routing.yaml`, uncomment `web-frontend: kimi-k3` and comment the sonnet line.
-3. Verify the model ID before first dispatch — Moonshot's public IDs shift (`kimi-k3`, `k3`, 1M-context variants). Check with:
-   ```bash
-   curl -s https://api.kimi.com/coding/v1/models -H "Authorization: Bearer $KIMI_API_KEY" | jq -r '.data[].id'
-   ```
-   If the ID differs, use the exact ID in routing.yaml (the `kimi*`/`k3*` prefix match in run-remote.sh covers both spellings). Override the endpoint with `KIMI_BASE_URL` if Moonshot moves it.
+## Setup (once per machine)
 
-### Revert
+```bash
+kimi login    # device-code OAuth against your Kimi for Coding subscription
+kimi -p "say ok" --output-format text   # smoke test
+```
 
-Flip the two routing.yaml lines back. Nothing else changes.
+No key export, nothing provisioned on the dispatcher. If `kimi` is missing or not logged in, the launcher exits 69 and dispatch **fails over to the next provider** in `routing.yaml provider_failover` (`web-frontend: [kimi, claude]`).
 
-## Trial protocol (gate before expanding)
+## Rate-cap behavior
 
-The invariant that matters: **Frontend Critic stays on Opus** — this pairing is the fleet's first true cross-vendor producer-critic pair, strictly stronger decorrelation than tier-only heterogeneity. K3's known unknown is edit stability across critic loops, so:
+If Kimi returns a cap/quota message (patterns in `config/ratecap-patterns.conf`), the launcher exits 75: `run-remote.sh` marks kimi cooling (`logs/provider-state/kimi.cooldown`, 60 min) and logs the event; `dispatch.sh` fails the task over to `claude` and notifies you. See `make scorecard`.
 
-- Run K3 on 5–10 real frontend tasks; compare critic-block rate and loop-convergence vs the Sonnet baseline in `learnings/`.
-- If K3 can't converge within the 2-loop ceiling at a rate comparable to Sonnet, demote it (revert routing) and record the evidence.
-- Do NOT expand K3 to other producer seats (go-backend etc.) without seat-specific evidence.
+## Trial gate (before expanding K3 to other seats)
 
-## Alternative path (not used): Kimi CLI
+The **Frontend Critic stays on Opus** — this pairing is the fleet's first true cross-vendor producer-critic pair. K3's known unknown is edit stability across critic loops:
+- Run 5–10 real frontend tasks; compare critic-block rate + loop convergence vs the Sonnet baseline in `learnings/`.
+- If K3 can't converge within the 2-loop ceiling comparably, revert `web-frontend` to `claude` in `workers.yaml` and record the evidence.
+- Do NOT expand K3 to other producer seats without seat-specific evidence.
 
-Moonshot ships its own CLI (`kimi --yolo` for headless auto-approve). Rejected for now: it would bypass the Claude Code guardrails hooks and role-charter loading that run-remote.sh assumes. Revisit only if the Anthropic-compatible endpoint proves limiting.
+## Model selection
+
+`AGENT_MODEL` claude tier aliases (opus/sonnet/haiku) are ignored here — the launcher uses the CLI default model. Pass a Kimi-native model ID via `routing.yaml model_routing` only if you need to pin one.

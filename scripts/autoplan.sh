@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Autoplan chaining — runs sequential review passes on a wave plan.
 # Uses the plan-reviewer agent for strategy, design, and engineering review,
-# plus a cross-vendor Grok pass when XAI_API_KEY is set.
+# plus a cross-vendor Grok CLI pass when the grok CLI is installed.
 #
 # Usage:
 #   ./scripts/autoplan.sh <plan-file>
@@ -12,7 +12,7 @@ set -euo pipefail
 #   1. Strategy  — "Does this plan address the right problem?"
 #   2. Design    — "Are wave dependencies and agent assignments correct?"
 #   3. Engineering — "Are tasks scoped correctly? Any missing infrastructure?"
-#   4. Cross-vendor — Grok plan critic (roles/plan-critic.md); skipped without XAI_API_KEY
+#   4. Cross-vendor — Grok plan critic (roles/plan-critic.md); skipped if grok CLI absent
 
 # ---- Colors ----
 RED='\033[0;31m'
@@ -123,10 +123,11 @@ done
 
 # ---- Pass 4: Cross-vendor plan critic (Grok) ----
 # Different vendor by design: the three passes above share one vendor's blind
-# spots. Skips cleanly when XAI_API_KEY is absent; an API failure warns and
-# continues rather than blocking dispatch on a third-party outage.
+# spots. Runs via the Grok Build CLI (subscription login, no API key); skips
+# cleanly when grok isn't installed/logged in, and warns-and-continues on error
+# rather than blocking dispatch on a third-party outage.
 GROK_CRITIC="$REPO_DIR/providers/grok/plan-critic.sh"
-if [ -x "$GROK_CRITIC" ] && [ -n "${XAI_API_KEY:-}" ]; then
+if [ -x "$GROK_CRITIC" ] && command -v grok >/dev/null 2>&1; then
     echo -e "${BOLD}------------------------------------------${NC}"
     echo -e "${BOLD}  Pass 4: Cross-vendor (Grok)${NC}"
     echo -e "${BOLD}------------------------------------------${NC}"
@@ -157,7 +158,7 @@ if [ -x "$GROK_CRITIC" ] && [ -n "${XAI_API_KEY:-}" ]; then
     fi
     echo ""
 else
-    echo -e "  ${CYAN}Pass 4 (Cross-vendor/Grok): skipped — XAI_API_KEY not set${NC}"
+    echo -e "  ${CYAN}Pass 4 (Cross-vendor/Grok): skipped — grok CLI not installed${NC}"
     echo ""
 fi
 

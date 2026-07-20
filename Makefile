@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status
+.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -79,6 +79,9 @@ paperclip-agent-off: ## Disable heartbeat for one agent (usage: make paperclip-a
 
 fleet-status: ## Unified dashboard: Paperclip agents, heartbeat states, local Ollama, Sentinel activity (the single command you want)
 	@./scripts/fleet-status.sh
+
+scorecard: ## Cross-vendor provider scorecard: cooldown state, rate-cap events, per-provider task outcomes
+	@./scripts/provider-scorecard.sh
 
 local-sentinel: ## Run the local (zero-cost) PR Sentinel once (uses olympus-coder via Ollama)
 	@./scripts/local-pr-sentinel.sh
