@@ -41,9 +41,8 @@ model_routing:
   devops:                    sonnet
   test-engineer:             sonnet
 
-  # Docs can be design-heavy (proposals, architecture) — sonnet default.
-  # Use opus when the wave task is strategic design (override in plan or bump here).
-  docs-writer:               opus
+  # Explicit model ID (not opus/sonnet/haiku tier). Claude Fable 5 = flagship.
+  docs-writer:               claude-fable-5
 
   # Default when a role isn't listed above
   default:                   sonnet
