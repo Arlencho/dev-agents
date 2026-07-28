@@ -45,24 +45,23 @@ Use when:
 
 ### Format
 
-Each line is pipe-delimited:
+Canonical grammar: **[`docs/plan-file-format.md`](plan-file-format.md)** (must match `scripts/dispatch.sh`).
 
 ```
 WAVE | AGENT | TASK_DESCRIPTION | [BRANCH_NAME]
 ```
 
-- **WAVE** (integer): Tasks in the same wave run in parallel; higher waves block on lower.
-- **AGENT** (string): Agent role name from `roles/` (e.g., `go-backend`, `frontend-critic`).
-- **TASK_DESCRIPTION** (string): What the agent should do. May contain `|` (e.g., "VERDICT: PASS|REVISE" in critic tasks).
-- **BRANCH_NAME** (optional): Git branch. Auto-generated if omitted.
+- **WAVE** (integer): Same wave parallel; higher waves wait.
+- **AGENT**: Role id under `roles/` (e.g. `go-backend`, `web-frontend`).
+- **TASK_DESCRIPTION**: Free text. **Pipes `|` inside the description are preserved** (middle fields re-joined). Do **not** escape as `\|`.
+- **BRANCH_NAME** (optional): Last field only if it looks like a branch (`contains /`, no spaces). Else auto `fix/<agent>-<timestamp>`.
 
 ### Rules
 
-1. **No file conflicts within a wave.** If wave 1 has two tasks, they must touch different files/directories.
-2. **Dependencies require separate waves.** If task B needs task A's output, put A in wave N and B in wave N+1.
-3. **Comments and blank lines are ignored.** Start with `#`.
-4. **Branch names must contain `/` to be recognized as branches.** Otherwise, a `fix/<agent>-<timestamp>` is generated.
-5. **Description pipes (`|`) are preserved.** Only the LAST field matching `/...` patterns is treated as a branch.
+1. **No file conflicts within a wave.**
+2. **Dependencies require separate waves.**
+3. **Comments and blank lines ignored** (`#` prefix).
+4. **Producer + critic on the same branch → different waves.**
 
 ### Example Plan
 
@@ -97,8 +96,9 @@ Before dispatching, you can run `autoplan.sh` to review your plan with the CTO a
 1. **Strategy** — Does the plan address the right problem?
 2. **Design** — Are wave dependencies and assignments correct?
 3. **Engineering** — Are tasks scoped for single agents? Any missing infrastructure?
+4. **Cross-vendor (Grok plan-critic)** — Decorrelated review via `providers/grok/plan-critic.sh`. **Skipped** if `grok` is missing; **warn-and-continue** on error. Never blocks dispatch on third-party outage. See `providers/grok/README.md`.
 
-The script runs all three passes sequentially, accumulating feedback. Each pass sees feedback from prior passes. Output ends with `VERDICT: APPROVE | REVISE | REJECT`.
+Passes 1–3 run sequentially with accumulated feedback. Pass 4 is best-effort. Verdicts use `VERDICT: APPROVE | REVISE | REJECT`.
 
 **Optional.** You can skip and dispatch directly. Use when your plan is complex or multi-day.
 

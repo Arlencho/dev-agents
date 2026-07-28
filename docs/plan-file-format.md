@@ -1,97 +1,54 @@
 # Plan File Format
 
-Plan files define what agents work on, in what order, and on which branches. The orchestrator produces these; `dispatch.sh` consumes them.
+Canonical grammar for wave plans consumed by `scripts/dispatch.sh`.
+If `README.md` or `docs/operator-guide.md` disagree with this file, **this file wins** — and both must be updated to match.
 
-## Format
+## Record shape
 
-Each line is a pipe-delimited record:
-
-```
-WAVE | AGENT | TASK_DESCRIPTION | BRANCH_NAME
-```
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `WAVE` | Yes | Integer wave number. Tasks in the same wave run in parallel. Higher waves wait for lower waves to finish. |
-| `AGENT` | Yes | Agent role name (must match a file in `roles/`, e.g. `go-backend`) |
-| `TASK_DESCRIPTION` | Yes | Plain-text description of what the agent should do |
-| `BRANCH_NAME` | Yes | Git branch name the agent will create and push to |
-
-## Rules
-
-- **Wave ordering**: Wave 1 runs first, then wave 2, etc. Tasks within a wave run in parallel.
-- **No file conflicts**: Two tasks in the same wave must NOT touch the same files.
-- **Dependencies**: If task B depends on task A, put them in different waves (A in a lower wave).
-- **Branch names**: Use descriptive names like `feat/payments-db` or `fix/auth-token`.
-- Comments start with `#` and are ignored.
-- Blank lines are ignored.
-
-## Hard Rules (Production-Learned)
-
-These rules were discovered through production orchestration. Breaking them causes failures.
-
-### Branch Naming
-- **Branch is always the last field** in the pipe-delimited record.
-- **Format**: `feat/<slash-slug>` or `fix/<slash-slug>` (kebab-case with forward slashes allowed for grouping).
-  - ✅ Good: `feat/payments-db`, `fix/auth-token`, `feat/api/payment-endpoints`
-  - ❌ Bad: `feat-payments_db`, `feat/PAYMENTS_DB`, `payments-db` (no scope prefix)
-
-### Task Description — No Unescaped Pipes
-- **Never put unescaped pipe characters (`|`) inside the task description.**
-- Plan files are pipe-delimited; unescaped pipes break the parser.
-- **For verdicts / decisions in descriptions, use space-separated format:**
-  - ✅ Good: `review payment service — verdict PASS` or `audit code: REVISE async patterns`
-  - ❌ Bad: `review | PASS | approved` or `verdict: PASS | REVISE | BLOCK`
-- If you need to include a literal pipe, escape it: `\|` (not parsed by the orchestrator, but documents intent).
-
-### Producer & Critic on Same Branch → Different Waves
-- **When a Producer and Critic both work on the same branch, they must be in different waves.**
-  - Producer wave N creates/pushes branch `feat/payments-svc`
-  - Critic wave N+1 reviews on that same branch
-- **Rationale**: Critic needs Producer's commits to exist before reviewing; same-wave parallel execution would cause race conditions.
-- Example:
-  ```
-  2 | go-backend     | implement payment service              | feat/payments-svc
-  3 | backend-critic | review payment service implementation | feat/payments-svc
-  ```
-
-### Critic Tasks & Existing Branches
-- **When a Critic task reviews an existing branch** (not created by this plan), `run-remote` will check out that branch before invoking the agent.
-- You do not need to specify branch creation logic in the task description.
-- Example:
-  ```
-  4 | backend-critic | review PR #542 changes to payment flow | main
-  ```
-  The critic will check out `main`, load the diff, and review.
-
-## Legacy Format
-
-For simple (non-wave) plans, the wave number can be omitted. All tasks are treated as wave 1:
+Each non-empty, non-comment line is pipe-delimited:
 
 ```
-AGENT | TASK_DESCRIPTION | BRANCH_NAME
+WAVE | AGENT | TASK_DESCRIPTION | [BRANCH_NAME]
 ```
 
-## Example
+| Field | Required | Meaning |
+|-------|----------|---------|
+| `WAVE` | Yes (wave format) | Integer wave number. Tasks with the same wave run in parallel; higher waves wait. |
+| `AGENT` | Yes | Role id matching a file under `roles/<agent>.md` (e.g. `web-frontend`, `go-backend`). |
+| `TASK_DESCRIPTION` | Yes | Free text. **May contain `\|` characters.** |
+| `BRANCH_NAME` | No | Git branch. Auto-generated as `fix/<agent>-<timestamp>` if omitted or not detected. |
+
+Legacy (no wave column):
 
 ```
-# Payments feature — 3 waves
-# Wave 1: schema + API spec (no conflicts, safe to parallelize)
+AGENT | TASK_DESCRIPTION | [BRANCH_NAME]
+```
+
+All such lines become wave `1`.
+
+## Parser rules (matches `scripts/dispatch.sh`)
+
+1. Fields are split on `|`.
+2. **Branch detection:** the **last** field is a branch only when it looks like a branch slug: contains `/`, has no spaces, and matches safe slug characters.
+3. Everything between agent and branch is **re-joined with `|`** as the description. So pipes inside the task text are **preserved** (e.g. `VERDICT: PASS|REVISE` is fine).
+4. Do **not** escape pipes as `\|` — the backslash would be passed to the agent literally.
+5. Style tip: for human-readable alternatives in prose, prefer ` / ` over `|` when you do not need a literal pipe.
+6. **Producer and critic on the same branch must be different waves** (producer ships, next wave critic reviews).
+7. Branch names: kebab-case, e.g. `feat/payments-db`.
+
+## Examples
+
+```
 1 | db-architect   | create payments tables migration        | feat/payments-db
-1 | api-designer   | add payment endpoints to OpenAPI spec   | feat/payments-spec
-1 | devops         | add Stripe webhook route to CI          | feat/payments-ci
-
-# Wave 2: implementation (depends on schema + spec from wave 1)
-2 | go-backend     | implement payment service and handlers  | feat/payments-svc
-2 | web-frontend   | build checkout page with Stripe Elements| feat/payments-ui
-
-# Wave 3: quality (depends on implementation from wave 2)
-3 | test-engineer  | add payment flow integration tests      | feat/payments-tests
-3 | security-reviewer | audit payment code for vulnerabilities | feat/payments-audit
+1 | api-designer   | add PaymentIntent endpoints to api.yaml | feat/payments-api
+2 | go-backend     | implement payment service handlers      | feat/payments-svc
+2 | web-frontend   | checkout payment UI                     | feat/payments-ui
+3 | test-engineer  | add payment flow integration tests     | feat/payments-tests
+3 | backend-critic | review payment handlers                 | feat/payments-svc
 ```
 
-## Where Plan Files Live
+## Related
 
-- **Active plans**: `wave-plans/<repo>-<date>.plan` (auto-saved by dispatch.sh)
-- **Execution logs**: `wave-plans/<repo>-<date>.log` (results after dispatch completes)
-- **Temporary plans**: `/tmp/wave*.txt` (for one-off dispatches)
+- Operator cookbook: [`docs/operator-guide.md`](operator-guide.md)
+- Dispatch: `scripts/dispatch.sh`
+- Live seats: `config/workers.yaml` + `config/routing.yaml` (config wins over any prose table)

@@ -5,56 +5,67 @@
 # Also defines model tier routing per agent — dispatch.sh reads model_routing
 # to pick the right Claude tier for each role.
 #
-# Lean roster (refactor/lean-roster, 2026-06): 18 active roles. The redundant
-# "reviewer" layer and niche meta-roles were archived to roles/_archived/.
-# Their review coverage folds into the 4 Critics + Security + CTO gate.
-# See roles/_archived/README.md to reactivate any of them.
+# Lean roster (refactor/lean-roster, 2026-06): 19 active roles under roles/.
+# Niche / redundant reviewers are in roles/_archived/. See that README to
+# reactivate. Live seats always win: if prose docs disagree with this file
+# or workers.yaml, **this config wins**.
 
 # Model routing per agent role (passed as AGENT_MODEL → launcher --model).
 # Claude accepts tier aliases (opus/sonnet/haiku) OR full IDs (e.g. claude-fable-5).
 # Kimi launcher IGNORES opus/sonnet/haiku and uses the CLI default (Kimi K3).
 # Grok launcher: same — tier aliases are not Claude models; leave default unless pinning.
 #
-# Owner multi-vendor defaults (do not "optimize" without asking):
+# Owner multi-vendor defaults:
 #   Claude docs/design  → claude-fable-5 (Fable 5)
 #   Kimi producers      → provider kimi + CLI default = K3
 #   Grok plan-critic    → provider grok (see workers.yaml)
 #
+# Quality-first value policy (owner 2026-07-28):
+#   Optimize for output quality and leverage, not raw token thrift.
+#   Best value still prefers producer sonnet × critic opus (heterogeneous pair)
+#   for code implementation — the critic is the expensive judgment seat.
+#   Use opus on producers when mistakes are hard to reverse or the seat IS
+#   the judgment (DB migrations, contracts, test-first, infra, gates).
+#
 # Tier guidance (Claude only):
-#   claude-fable-5 — owner flagship for design/docs (above opus)
-#   opus           — strategic/judgment-heavy: planning, adversarial critique, gate
-#   sonnet         — implementation and routine work (default for Claude dev work)
-#   haiku          — lightweight, mechanical, or high-volume tasks
+#   claude-fable-5 — flagship for design/docs
+#   opus           — judgment, critique, irreversible or contract work, gates
+#   sonnet         — implementation producers paired with an opus critic
+#   haiku          — not used for fleet seats (insufficient quality bar)
 model_routing:
-  # High-reasoning roles — Claude flagship tier alias
+  # Gates / strategy / investigation
   orchestrator:              opus
   cto:                       opus
   retro:                     opus
   security-reviewer:         opus
   investigate:               opus
 
-  # Critics — adversarial review (Claude seats)
+  # Critics — adversarial review (always opus)
   backend-critic:            opus
   frontend-critic:           opus
   database-critic:           opus
   api-critic:                opus
 
-  # Implementation roles — Claude sonnet; web-frontend is Kimi so sonnet is ignored → K3
+  # Producers where quality = best value at sonnet + opus critic
   go-backend:                sonnet
-  web-frontend:              sonnet
+  web-frontend:              sonnet   # ignored when provider=kimi → K3
   mobile:                    sonnet
-  db-architect:              sonnet
-  api-designer:              sonnet
-  devops:                    sonnet
-  test-engineer:             sonnet
 
-  # Claude Fable 5 — owner default for docs / design proposals
+  # Producers / specialists where mistakes are expensive → opus
+  db-architect:              opus     # irreversible migrations (DB exception)
+  api-designer:              opus     # OpenAPI contract is product law
+  devops:                    opus     # CI/deploy/infra blast radius
+  test-engineer:             opus     # test-first quality bar before producers
+
+  # High-volume mechanical routing (not code review)
+  pr-sentinel:               sonnet
+
+  # Claude Fable 5 — docs / design proposals
   docs-writer:               claude-fable-5
 
   # plan-critic is Grok (workers.yaml); no Claude model pin
   # plan-critic:             (omit — vendor default)
 
-  # Default when a role isn't listed above
   default:                   sonnet
 
 # Label-based routing: exact match on GitHub issue labels

@@ -8,7 +8,7 @@ A PR can enter the producer-critic + Security + CTO chain via three paths:
 
 1. **User files a Paperclip task** → CEO routes it (most common). CEO creates a corresponding GitHub issue at top-of-chain per the Paperclip ↔ GitHub mirror discipline below.
 2. **User files a GitHub issue first** → user manually creates a Paperclip task referencing it.
-3. **PR opens directly without a Paperclip task** → the **PR Sentinel** (`roles/pr-sentinel.md`, runs every 30 min) detects un-attached PRs in the GitHub queue and files Paperclip tasks for the appropriate review chain. Tracking comment `[paperclip-sentinel: tracked-as OLY-N]` is posted on the PR so subsequent Sentinel scans skip it.
+3. **PR opens directly without a Paperclip task** → the **PR Sentinel** (`roles/pr-sentinel.md`) detects un-attached PRs and files Paperclip tasks for the review chain. Deployment may be a Paperclip routine and/or the **local launchd sentinel** (`docs/local-pr-sentinel.md`) — both share the charter; local mode can replace expensive heartbeat polling. Tracking comment `[paperclip-sentinel: tracked-as OLY-N]` skips re-triage on later scans.
 
 Path 3 closes the gap where dependabot / direct-board / external-contrib PRs would otherwise sit unreviewed because the producer-critic chain only fires on Paperclip-filed work.
 
