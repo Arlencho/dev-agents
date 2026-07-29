@@ -52,6 +52,17 @@ LOGS_DIR="$REPO_DIR/logs"
 WAVE_PLANS_DIR="$REPO_DIR/wave-plans"
 NOTIFY_SCRIPT="$SCRIPT_DIR/notify.sh"
 
+# Fleet Desk Phase B — append-only event stream for the Ops Floor.
+# Best-effort and opt-out (FLEET_EVENTS=0); a missing library never blocks a
+# dispatch, so every call site can assume fleet_event exists.
+if [ -f "$SCRIPT_DIR/fleet-events.sh" ]; then
+    # shellcheck source=scripts/fleet-events.sh
+    . "$SCRIPT_DIR/fleet-events.sh"
+else
+    fleet_events_init() { :; }
+    fleet_event() { :; }
+fi
+
 # --------------------------------------------------
 # Usage
 # --------------------------------------------------
@@ -502,6 +513,47 @@ done
 echo ""
 
 # --------------------------------------------------
+# Fleet Desk event stream — open the run
+# --------------------------------------------------
+# Mode is derived, never guessed loosely: a plan living under a conductor
+# directory, or a multi-wave plan where every wave holds exactly one seat, is a
+# serial Conductor chain. Everything else renders as parallel wave lanes.
+detect_dispatch_mode() {
+    case "$PLAN_SOURCE" in
+        *conductor*) echo "conductor"; return ;;
+    esac
+    [ "${#SORTED_WAVES[@]}" -gt 1 ] || { echo "wave"; return; }
+    local w idxs
+    for w in "${SORTED_WAVES[@]}"; do
+        IFS=',' read -ra idxs <<< "${WAVE_TASKS[$w]}"
+        [ "${#idxs[@]}" -eq 1 ] || { echo "wave"; return; }
+    done
+    echo "conductor"
+}
+
+DISPATCH_MODE="$(detect_dispatch_mode)"
+REPO_SLUG_EVENTS="$(basename "$REPO_URL" .git)"
+fleet_events_init "$REPO_SLUG_EVENTS" "$DISPATCH_MODE" "$PLAN_SOURCE"
+fleet_event dispatch_plan waves="${#SORTED_WAVES[@]}" seats="${#TASK_AGENT[@]}" format="$FORMAT"
+if [ -n "${FLEET_EVENTS_FILE:-}" ]; then
+    echo -e "Live events: ${CYAN}logs/fleet-events/$(basename "$FLEET_EVENTS_FILE")${NC}  (watch: make desk-live)"
+    echo ""
+fi
+
+# Honest close-out even on Ctrl-C / early exit: the Floor must never show a run
+# that is still "running" after the dispatcher is gone.
+FLEET_DISPATCH_CLOSED=false
+fleet_close_dispatch() {
+    local status="${1:-aborted}"
+    [ "$FLEET_DISPATCH_CLOSED" = true ] && return 0
+    FLEET_DISPATCH_CLOSED=true
+    fleet_event dispatch_end status="$status" \
+        total="${TOTAL_TASKS:-0}" succeeded="${TOTAL_SUCCESS:-0}" failed="${TOTAL_FAIL:-0}" \
+        duration_s="$(( $(date +%s) - ${OVERALL_START:-$(date +%s)} ))"
+}
+trap 'fleet_close_dispatch aborted' EXIT
+
+# --------------------------------------------------
 # Vendor auth preflight (session validity before any launch)
 # --------------------------------------------------
 # Fail-closed for seats the plan needs (primary + failover). Validate only —
@@ -646,6 +698,7 @@ find_worker() {
 declare -A RESULT_STATUS RESULT_DURATION RESULT_WORKER RESULT_BRANCH
 declare -A RESULT_PROVIDER    # idx -> vendor that ran the task (feeds scorecard)
 declare -A TASK_TRIED_PROVIDERS  # idx -> space-separated vendors already tried (failover exclusion)
+declare -A TASK_ATTEMPT          # idx -> attempt number (1 = first run) for the event stream
 
 # --------------------------------------------------
 # Dispatch a single task, returns PID
@@ -669,6 +722,8 @@ dispatch_task() {
     local worker_info wname whost
     if ! worker_info=$(find_worker "$agent" "$exclude_worker"); then
         echo -e "  ${RED}✗${NC} $agent — no worker available" >&2
+        fleet_event seat_exit task_id="$idx" agent="$agent" branch="$branch" \
+            wave="${CURRENT_WAVE:-1}" status=failed exit=1 reason=no_worker
         # Keep the "always returns a waitable pid" contract: reports as failed.
         ( exit 1 ) &
         DISPATCH_PID=$!
@@ -696,6 +751,11 @@ dispatch_task() {
 
     RESULT_WORKER[$idx]="$wname"
 
+    # Seat is going out — record the facts only (no task text ever).
+    fleet_event seat_dispatch task_id="$idx" agent="$agent" branch="$branch" \
+        wave="${CURRENT_WAVE:-1}" provider="$provider" model="${model:-default}" \
+        worker="$wname" attempt="${TASK_ATTEMPT[$idx]:-1}"
+
     # Run in subshell to capture exit code. Pass model + provider via env so
     # run-remote.sh selects the right launcher and forwards --model.
     # The PID travels via the DISPATCH_PID global — callers must NOT capture
@@ -706,6 +766,20 @@ dispatch_task() {
             "$SCRIPT_DIR/run-remote.sh" "$whost" "$REPO_URL" "$agent" "$task" "$branch"
     ) &
     DISPATCH_PID=$!
+}
+
+# --------------------------------------------------
+# Seat outcome → event stream
+# --------------------------------------------------
+# fleet_seat_exit <idx> <status> <exit_code> <duration_s>
+# status: success | failed | blocked | ratecap | unavailable
+emit_seat_exit() {
+    local idx="$1" status="$2" code="$3" duration="$4"
+    fleet_event seat_exit task_id="$idx" agent="${TASK_AGENT[$idx]}" \
+        branch="${TASK_BRANCH[$idx]}" wave="${TASK_WAVE[$idx]}" \
+        provider="${RESULT_PROVIDER[$idx]:-}" worker="${RESULT_WORKER[$idx]:-}" \
+        status="$status" exit="$code" duration_s="$duration" \
+        attempt="${TASK_ATTEMPT[$idx]:-1}"
 }
 
 # --------------------------------------------------
@@ -732,7 +806,16 @@ retry_task() {
         echo -e "  ${YELLOW}Excluding previous worker:${NC} $exclude" >&2
     fi
 
+    local prev_provider="${RESULT_PROVIDER[$idx]:-}"
+    TASK_ATTEMPT[$idx]=$((attempt + 1))
     dispatch_task "$idx" "$exclude"
+
+    # A retry that landed on a different vendor is a failover — say so plainly.
+    if [ -n "$prev_provider" ] && [ "${RESULT_PROVIDER[$idx]:-}" != "$prev_provider" ]; then
+        fleet_event failover task_id="$idx" agent="$agent" branch="$branch" \
+            wave="${CURRENT_WAVE:-1}" from_provider="$prev_provider" \
+            to_provider="${RESULT_PROVIDER[$idx]:-}" attempt="$((attempt + 1))"
+    fi
 }
 
 # --------------------------------------------------
@@ -753,12 +836,15 @@ for wave_num in "${SORTED_WAVES[@]}"; do
     echo ""
     echo "Dispatching..."
 
+    fleet_event wave_start wave="$wave_num" seats="${#wave_indices[@]}" mode="$DISPATCH_MODE"
+
     # Track PIDs for this wave
     declare -A WAVE_PIDS  # pid -> task_idx
     declare -A TASK_START # idx -> epoch
 
     for idx in "${wave_indices[@]}"; do
         TASK_START[$idx]=$(date +%s)
+        TASK_ATTEMPT[$idx]=1
         dispatch_task "$idx"
         WAVE_PIDS[$DISPATCH_PID]="$idx"
     done
@@ -786,11 +872,13 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             RESULT_STATUS[$idx]="success"
             wave_success=$((wave_success + 1))
             echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$idx]} completed in ${duration}s"
+            emit_seat_exit "$idx" success "$status" "$duration"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "success" 2>/dev/null || true
         elif [ $status -eq 77 ]; then
             RESULT_STATUS[$idx]="BLOCKED"
             FAILED_TASKS[$idx]=0
             echo -e "  ${RED}■${NC} ${TASK_AGENT[$idx]} ${RED}BLOCKED by guardrails${NC} after ${duration}s (not retryable)"
+            emit_seat_exit "$idx" blocked "$status" "$duration"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "blocked" 2>/dev/null || true
         elif [ $status -eq 75 ]; then
             # Rate-cap: exclude this vendor and let the retry loop fail over.
@@ -798,6 +886,10 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             FAILED_TASKS[$idx]=0
             TASK_TRIED_PROVIDERS[$idx]="${TASK_TRIED_PROVIDERS[$idx]:-} ${RESULT_PROVIDER[$idx]}"
             echo -e "  ${YELLOW}⏳${NC} ${TASK_AGENT[$idx]} — ${RESULT_PROVIDER[$idx]} rate-capped after ${duration}s (failing over)"
+            fleet_event ratecap task_id="$idx" agent="${TASK_AGENT[$idx]}" \
+                wave="${TASK_WAVE[$idx]}" provider="${RESULT_PROVIDER[$idx]:-}" \
+                worker="${RESULT_WORKER[$idx]:-}" cooldown_minutes="$(get_cooldown_minutes)"
+            emit_seat_exit "$idx" ratecap "$status" "$duration"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "ratecap" "${RESULT_PROVIDER[$idx]}" 2>/dev/null || true
         elif [ $status -eq 69 ]; then
             # Provider CLI missing / not logged in on this worker — per-task
@@ -806,11 +898,13 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             FAILED_TASKS[$idx]=0
             TASK_TRIED_PROVIDERS[$idx]="${TASK_TRIED_PROVIDERS[$idx]:-} ${RESULT_PROVIDER[$idx]}"
             echo -e "  ${YELLOW}✗${NC} ${TASK_AGENT[$idx]} — ${RESULT_PROVIDER[$idx]} unavailable on ${RESULT_WORKER[$idx]} after ${duration}s (failing over)"
+            emit_seat_exit "$idx" unavailable "$status" "$duration"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true
         else
             RESULT_STATUS[$idx]="failed"
             FAILED_TASKS[$idx]=0
             echo -e "  ${RED}✗${NC} ${TASK_AGENT[$idx]} failed (exit $status) after ${duration}s"
+            emit_seat_exit "$idx" failed "$status" "$duration"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true
         fi
     done
@@ -845,6 +939,7 @@ for wave_num in "${SORTED_WAVES[@]}"; do
                 if [ $retry_status -eq 0 ]; then
                     RESULT_STATUS[$idx]="success (retry $local_attempts, ${RESULT_PROVIDER[$idx]})"
                     echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$idx]} succeeded on retry $local_attempts via ${RESULT_PROVIDER[$idx]} in ${duration}s"
+                    emit_seat_exit "$idx" success "$retry_status" "$duration"
                     [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "success" 2>/dev/null || true
                     unset 'FAILED_TASKS[$idx]'
                     break
@@ -854,9 +949,18 @@ for wave_num in "${SORTED_WAVES[@]}"; do
                     TASK_TRIED_PROVIDERS[$idx]="${TASK_TRIED_PROVIDERS[$idx]:-} ${RESULT_PROVIDER[$idx]}"
                     [ $retry_status -eq 75 ] && RESULT_STATUS[$idx]="ratecap(${RESULT_PROVIDER[$idx]})" || RESULT_STATUS[$idx]="unavailable(${RESULT_PROVIDER[$idx]})"
                     echo -e "  ${YELLOW}⏳${NC} ${TASK_AGENT[$idx]} retry $local_attempts: ${RESULT_PROVIDER[$idx]} unavailable/capped (failing over)"
+                    if [ $retry_status -eq 75 ]; then
+                        fleet_event ratecap task_id="$idx" agent="${TASK_AGENT[$idx]}" \
+                            wave="${TASK_WAVE[$idx]}" provider="${RESULT_PROVIDER[$idx]:-}" \
+                            worker="${RESULT_WORKER[$idx]:-}" cooldown_minutes="$(get_cooldown_minutes)"
+                        emit_seat_exit "$idx" ratecap "$retry_status" "$duration"
+                    else
+                        emit_seat_exit "$idx" unavailable "$retry_status" "$duration"
+                    fi
                     [ $retry_status -eq 75 ] && [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "ratecap" "${RESULT_PROVIDER[$idx]}" 2>/dev/null || true
                 else
                     echo -e "  ${RED}✗${NC} ${TASK_AGENT[$idx]} retry $local_attempts failed after ${duration}s"
+                    emit_seat_exit "$idx" failed "$retry_status" "$duration"
                     [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true
                 fi
             done
@@ -892,6 +996,9 @@ for wave_num in "${SORTED_WAVES[@]}"; do
         echo -e "Wave $wave_num: ${RED}$wave_fail_final failed${NC}"
     fi
 
+    fleet_event wave_end wave="$wave_num" seats="${#wave_indices[@]}" \
+        succeeded="$wave_success_final" failed="$wave_fail_final"
+
     # Inter-wave prompt (skip after last wave)
     if [ "$wave_num" != "${SORTED_WAVES[-1]}" ]; then
         echo ""
@@ -912,11 +1019,15 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             echo -e "${YELLOW}WARNING: Some tasks in wave $wave_num failed.${NC}"
             if [ "$AUTO_CONTINUE" = false ]; then
                 echo -n "Continue to wave $next_wave_f? [y/N] "
+                fleet_event human_wait kind=failure_gate wave="$wave_num" \
+                    next_wave="$next_wave_f" waiting_on="continue after failed wave $wave_num?"
                 read -r answer
                 if [[ ! "$answer" =~ ^[Yy] ]]; then
+                    fleet_event human_resume kind=failure_gate wave="$wave_num" answer=abort
                     echo -e "${RED}Aborted by user.${NC}"
                     break
                 fi
+                fleet_event human_resume kind=failure_gate wave="$wave_num" answer=continue
             else
                 echo -e "${YELLOW}--auto: continuing despite failures${NC}"
             fi
@@ -930,7 +1041,10 @@ for wave_num in "${SORTED_WAVES[@]}"; do
                     fi
                 done
                 echo -e "${GREEN}Wave $wave_num complete.${NC} Merge PRs and press Enter for wave $next_wave..."
+                fleet_event human_wait kind=wave_gate wave="$wave_num" \
+                    next_wave="$next_wave" waiting_on="merge PRs, then start wave $next_wave"
                 read -r
+                fleet_event human_resume kind=wave_gate wave="$wave_num" answer=continue
             else
                 echo -e "${GREEN}Wave $wave_num complete.${NC} --auto: continuing to next wave..."
             fi
@@ -1045,6 +1159,17 @@ echo ""
 echo -e "${BOLD}==========================================${NC}"
 echo -e "${BOLD}  Dispatch Results${NC}"
 echo -e "${BOLD}==========================================${NC}"
+# Log filenames only — the Floor links a name, never a transcript body.
+for i in "${!TASK_AGENT[@]}"; do
+    if [ -n "${RESULT_LOG[$i]:-}" ]; then
+        fleet_event seat_log task_id="$i" agent="${TASK_AGENT[$i]}" \
+            log="$(basename "${RESULT_LOG[$i]}")"
+    fi
+done
+
+fleet_close_dispatch completed
+trap - EXIT
+
 echo ""
 echo -e "Total duration: ${OVERALL_DURATION}s"
 echo -e "Tasks: ${GREEN}$TOTAL_SUCCESS/$TOTAL_TASKS succeeded${NC}, ${RED}$TOTAL_FAIL failed${NC}"

@@ -1,0 +1,8 @@
+{"schema":"fleet-events/1","seq":1,"ts":"2026-07-29T12:00:00Z","dispatch_id":"20260729-120000-olympus-platform","event":"dispatch_start","mode":"conductor","repo":"olympus-platform","plan":"conductor-chain.plan"}
+{"schema":"fleet-events/1","seq":2,"ts":"2026-07-29T12:00:00Z","dispatch_id":"20260729-120000-olympus-platform","event":"dispatch_plan","waves":3,"seats":3,"format":"wave"}
+{"schema":"fleet-events/1","seq":3,"ts":"2026-07-29T12:00:01Z","dispatch_id":"20260729-120000-olympus-platform","event":"wave_start","wave":1,"seats":1,"mode":"conductor"}
+{"schema":"fleet-events/1","seq":4,"ts":"2026-07-29T12:00:02Z","dispatch_id":"20260729-120000-olympus-platform","event":"seat_dispatch","task_id":"0","agent":"go-backend","branch":"feat/payments-svc","wave":1,"provider":"claude","model":"opus","worker":"mac-mini-1","attempt":1}
+{"schema":"fleet-events/1","seq":5,"ts":"2026-07-29T12:09:00Z","dispatch_id":"20260729-120000-olympus-platform","event":"seat_exit","task_id":"0","agent":"go-backend","branch":"feat/payments-svc","wave":1,"provider":"claude","worker":"mac-mini-1","status":"blocked","exit":77,"duration_s":538,"attempt":1}
+{"schema":"fleet-events/1","seq":6,"ts":"2026-07-29T12:09:01Z","dispatch_id":"20260729-120000-olympus-platform","event":"seat_log","task_id":"0","agent":"go-backend","log":"olympus-platform-feat-payments-svc-20260729-120002.log"}
+{"schema":"fleet-events/1","seq":7,"ts":"2026-07-29T12:09:02Z","dispatch_id":"20260729-120000-olympus-platform","event":"wave_end","wave":1,"seats":1,"succeeded":0,"failed":1}
+{"schema":"fleet-events/1","seq":8,"ts":"2026-07-29T12:09:03Z","dispatch_id":"20260729-120000-olympus-platform","event":"human_wait","kind":"failure_gate","wave":1,"next_wave":2,"waiting_on":"continue after failed wave 1?"}

@@ -22,6 +22,9 @@ learnings/*.jsonl
 # Rate-cap sentinel runtime state (per-machine)
 logs/provider-state/
 
+# Fleet Desk Phase B live event streams (per-machine runtime truth, never history)
+logs/fleet-events/
+
 # Evidence scorecard outputs (aggregates; no secrets expected)
 logs/evidence.csv
 logs/evidence-latest.txt

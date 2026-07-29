@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk
+.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once experience-live
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -33,6 +33,14 @@ experience-open: ## Build Fleet Desk and open in browser
 		echo "Open file://$$(pwd)/site/experience/index.html"
 
 desk: experience ## Alias for make experience (Fleet Desk)
+
+desk-live: ## Ops Floor watcher: tail logs/fleet-events/ → live.json + serve site/experience (PORT=8777)
+	@python3 ./scripts/desk_live.py --port $(or $(PORT),8777) $(LIVE_FLAGS)
+
+experience-live: desk-live ## Alias for make desk-live (live Ops Floor during a dispatch)
+
+desk-live-once: ## Write site/experience/data/live.json once from the newest event stream (no server)
+	@python3 ./scripts/desk_live.py --once $(LIVE_FLAGS)
 
 dispatch: ## Dispatch wave plan (usage: make dispatch REPO=x PLAN=y)
 	@./scripts/dispatch.sh $(REPO) $(PLAN)
@@ -93,6 +101,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, autoplan fail-cl
 	@echo ""
 	@echo "== fleet desk experience =="
 	@./tests/run-experience-tests.sh
+	@echo ""
+	@echo "== fleet desk live (events + Ops Floor projection) =="
+	@./tests/run-desk-live-tests.sh
 	@echo ""
 	@echo "All test suites passed."
 
