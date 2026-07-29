@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint test learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard
+.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -60,6 +60,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, autoplan fail-cl
 	@echo "== autoplan fail-closed =="
 	@./tests/run-autoplan-failclosed-tests.sh
 	@echo ""
+	@echo "== evidence scorecard =="
+	@./tests/run-evidence-tests.sh
+	@echo ""
 	@echo "All test suites passed."
 
 paperclip-up: ## Start local Paperclip (idempotent — installs first run, starts subsequently)
@@ -97,6 +100,9 @@ fleet-status: ## Unified dashboard: Paperclip agents, heartbeat states, local Ol
 
 scorecard: ## Cross-vendor provider scorecard: cooldown state, rate-cap events, per-provider task outcomes
 	@./scripts/provider-scorecard.sh
+
+evidence: ## Fleet Evidence Scorecard (handoffs + ab-metrics → tables + logs/evidence.csv)
+	@./scripts/wave-report.sh
 
 local-sentinel: ## Run the local (zero-cost) PR Sentinel once (uses olympus-coder via Ollama)
 	@./scripts/local-pr-sentinel.sh
