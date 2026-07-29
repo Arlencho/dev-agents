@@ -1,136 +1,125 @@
-# Critic loop 2 — PR #48 `feat/fleet-desk-phase1-data`
+# CRITIC VERDICT — PR #49 `feat/fleet-desk-phase1-ui`
 
-**VERDICT: APPROVE.**
+**VERDICT: APPROVE** — both blocking defects from loop 1 are closed, and the
+fixes are pinned by assertions that I killed by mutation. Loop 2 of 2. No third
+loop needed; nothing escalates to CTO.
 
-Verify-only pass over `abd6736` (producer REVISE) + `59b7bff` (handoff), branch
-tip `59b7bff`. Every blocking item B1–B4 was re-killed by re-introducing the
-original mutant against the **committed** tree. All four are load-bearing. No
-production logic moved. Nothing was redesigned or re-implemented.
+Verified independently on `feat/fleet-desk-phase1-ui` @ `8a22cd2`
+(`git rev-parse HEAD` == `origin/feat/fleet-desk-phase1-ui`). Producer handoff
+claims were re-derived by execution, not taken on trust.
 
-## Built
+## C1 — CLOSED. Sub-P3 roles no longer advertise the P3 gate as satisfied
 
-Nothing. This is a review. `git status` is empty, `scripts/experience_data.py`
-was never edited in the working tree — all mutation ran in throwaway copies
-under `/tmp/mut/` (`cp -R` of the repo incl. `.git`, so git-derived facts stay
-real). The only file this pass writes is this `handoff.md`.
+`scripts/experience_build.py:574` now branches on `evidence and pmi["band"] == "P3"`.
 
-## Evidence
+Rendered from the shipped fixture
+(`python3 scripts/experience_data.py --repo tests/fixtures/experience-mini --out /tmp/fx --no-gh && python3 scripts/experience_build.py --out /tmp/fx`):
 
-Control first: the isolated copy reproduces the committed baseline, so a RED
-result below is attributable to the mutant and not to the harness.
+| role | band | n_done | ev | rendered copy |
+|---|---|---|---|---|
+| `fixture-builder` | **P3** | 6 | 1 | `Proven loop evidence (P3 gate):` + list — positive framing kept |
+| `fixture-runner` | **P1** | 4 | 1 | `…recorded, but the P3 gate is not met — the role is still short of the P2 outcome bar (band P1), so this evidence cannot promote it yet.` |
+| `fixture-critic` P0, `fixture-flaky` P1, `fixture-scribe` P0, `fixture-solo` P2, `fixture-veteran` P2 | — | — | 0 | unchanged honest `none recorded … is not met` branch |
 
-```
-make test              (working tree)  == 188 passed, 0 failed ==  All test suites passed.
-tests/run-experience-tests.sh (/tmp/mut/base, pristine copy)
-                                       == 188 passed, 0 failed ==
-```
+The two pages that were byte-identical in this region now differ. Requirement
+"only band P3 keeps positive proven-loop framing" holds.
 
-Each mutant re-applied to a fresh copy of the committed tree, each proven
-non-no-op by `git diff` before running:
-
-| # | Mutation (anchor verified unique) | Result | Killing assertions |
-| --- | --- | --- | --- |
-| **B1** | `proven_loop_evidence(specialized, …)` → `(packs, …)` | **179 / 9 RED** | `shared default pack never grants P3`, `no role cites a default pack as evidence`, `no git: default pack promotion still grants no P3`, `git: over-qualified default pack still grants no P3` (+5) |
-| **B2** | `if p2_ok and evidence:` → `if evidence:` | **184 / 4 RED** | `evidence without the P2 outcome bar stays below P3`, `P3 needs the P2 outcome bar too`, `n_done<5 stays P1 even at 80%`, `specialized pack alone never grants P2` |
-| **B3** | drop `and s["revisions"] >= PMI_GATES["p3_min_pack_revisions"]` | **186 / 2 RED** | `pack born at v2 but never revised is not a proven loop`, `git: v2 pack with exactly 1 commit is not a proven loop` |
-| **B4** | remove `f"-n{int(depth)}"` from `git_file_history` | **187 / 1 RED** | `git: history is truncated AT the published depth` |
-
-Every count matches the producer's reported figures exactly (188/0, 179/9,
-184/4, 186/2, 187/1). The claimed evidence is reproducible, not narrated.
-
-**B1 and B3 are each killed in more than one environment** (fixture build,
-`--no-git` projection, throwaway git repo), so a single weak environment cannot
-hide either mutant — the producer's multi-environment claim holds.
-
-### No silent production change (P3 path intact)
+**Stronger than the fixture — the copy is *entailed*, not merely plausible.** I
+exhausted the band × evidence state space against `compute_pmi` directly
+(n 0–8 × n_done × success ∈ {0,.5,.6,.75,.8,1} × evidence ∈ {∅,{e}}):
 
 ```
-git diff 7cb1bd6..HEAD -- scripts/     -> empty
-git diff 3f6669d..HEAD -- scripts/experience_data.py -> empty
-git diff --name-only 3f6669d..HEAD | grep -vE '^(tests/|docs/|handoff.md)'  -> no matches
+reachable (band, has_evidence):
+   ('P0', False) ('P0', True) ('P1', False) ('P1', True) ('P2', False) ('P3', True)
+evidence + band P2 reachable? -> False
+sub-P3 WITH evidence -> [('P0', True), ('P1', True)]
 ```
 
-`scripts/experience_data.py` is byte-identical to the originally reviewed
-commit. The P3 gate (`compute_pmi` ll. 946–955, `proven_loop_evidence` ll.
-912–937) is unchanged. The REVISE fixed *tests*, which is exactly what the
-REVISE asked for — no defect was invented to justify a production edit.
+Because `experience_data.py:950` makes band P3 ⟺ `p2_ok and evidence`, a role
+carrying evidence below P3 has `p2_ok == False` **by construction**. So "still
+short of the P2 outcome bar" can never be a false statement, in any input. The
+band domain is exactly `P0|P1|P2|P3` (`experience_data.py:950,956,969,981`), so
+the `== "P3"` equality is exhaustive — no band escapes into the wrong branch.
 
-### Independent mutants (not in the producer's set)
+Full page context on the P1 role is coherent end to end: badge `P1`, reason
+`needs n_done≥5 for P2 (have 4)`, then the not-met evidence block. No residual
+overclaim anywhere in the region.
 
-I did not simply re-run the producer's script. Four extra mutants on the areas
-flagged for re-check, all **RED**:
+## C2 — CLOSED. Cited refs survive partial resolution
 
-| Area | Mutation | Result |
-| --- | --- | --- |
-| pairing | `p["reviewed_by"] = [...]` → `[]` | 185 / 3 RED |
-| schema v2 | `SCHEMA_VERSION = 2` → `3` | 184 / 4 RED |
-| snapshot privacy | leak `handoff_sections` into snapshot trails | 187 / 1 RED |
-| git-history | hardcode `history_truncated: True` | 187 / 1 RED |
+`scripts/experience_build.py:393-405` unions instead of replacing:
+`covered = {x["ref"] for x in resolved}`, `unresolved = [u for u in t["issue_links"] if u not in covered]`,
+guarded by `if resolved or unresolved:`.
 
-The last one confirms the "asserts the cap from both sides" claim: the flag
-cannot be hardcoded, `git: an untruncated pack is not falsely flagged` catches it.
+Probed by injecting into `data/index.json` and re-rendering — 5 cases, including
+**3 the producer's test does not cover**:
 
-### Schema v2 honesty
+| case | issue_links | resolved | cited refs dropped | rendered Links row |
+|---|---|---|---|---|
+| partial | 3 | 1 | **none** | `#12 (open · an issue) · https://…/other/product/issues/9 · #77` |
+| none resolved | 3 | 0 | **none** | `#12 · https://…/other/product/issues/9 · #77` (raw branch intact, no regression) |
+| empty | 0 | 0 | **none** | `none parsed` (preserved) |
+| **truncation** | 12 | 8 | **none** | 8 enriched + `#9 · #10 · #11 · #12` raw |
 
-Docs match code, checked against constants rather than prose:
-`MARKDOWN_CAP = 12000` (l. 72) vs doc "≤ 12000 chars"; `GIT_LOG_DEPTH = 20`
-(l. 61) vs doc "≤ `history_depth` (20)". The two newly documented rows are real,
-verified against built output, not just declared:
+The truncation case closes the `resolved[:8]` sub-point I raised in loop 1: refs
+past the cap now fall through to the raw branch instead of vanishing.
 
-```
-trail has handoff_truncated: True
-role_stats has role:         True
-```
+**Contract-level soundness, not just probe-level.** `experience_data.py:884`
+appends `{"ref": ref, **hit}` where `ref` is the *original token* being iterated,
+so `covered` always holds the exact source string and the set-difference is
+total. `parse_issue_links` (`experience_data.py:290-294`) dedupes and returns
+`out[:8]`, so `issue_links` is ≤ 8 unique entries — `resolved[:8]` can never
+truncate below it, and duplicate rendering is unreachable.
 
-### gh soft-fail (the producer's own open question) — verified by hand
+*(I constructed one synthetic duplicate — resolved `ref="#12"` while `issue_links`
+held only the URL form — and it does render twice. I am **not** filing it: the
+data layer cannot produce that pair, since the resolver derives `ref` from the
+token it iterates. Reporting it would be a false positive.)*
 
-Exercised with a poisoned `PATH`, since the suite does not cover it:
+## Loop-1 assertions: landed, green, and non-vacuous
 
-```
-PATH=/usr/bin:/bin            -> BUILD OK, gh_enrichment: unavailable | gh not on PATH
-gh stub exiting 1             -> BUILD OK, gh_enrichment: unauthenticated | gh auth status failed
-gh stub: junk stdout, exit 0  -> BUILD OK, gh_enrichment: ok, 0 PRs / 0 issues resolved
-```
+Landed at `tests/run-experience-tests.sh:355-364` (C1) and `:574,590-594` (C2).
 
-The contract "gh enrichment never fails the build" **holds in all three**, and
-no links are invented in any of them (`trails with pr_url: 0`). `gh_index`
-returns a status/reason on every failure path and never raises.
+Green is worthless on its own, so I killed each fix and confirmed the assertion
+dies with it:
 
-## Decisions
+| mutation | command | result |
+|---|---|---|
+| A — whole renderer → pre-fix `fd3e78c` | `git show fd3e78c:scripts/experience_build.py > …` | **218 passed, 3 failed** — exactly the 3 critic assertions RED, nothing else |
+| B — C1 hunk only (`and pmi["band"] == "P3"` removed) | targeted edit | **220 passed, 1 failed** — only `P1 role with evidence states the P3 gate is still unmet` |
+| C — C2 hunk only (union → replace) | targeted edit | **219 passed, 2 failed** — only the 2 dropped-ref assertions |
 
-- **Approving with the gh gap open.** B1–B4 were the blocking set; all four are
-  now pinned and independently re-killed. The untested gh degradation paths are
-  a coverage gap, not a defect — I verified the actual behavior by hand and it
-  is correct. Blocking a green, reproducible fix on a follow-up test would be
-  scope creep.
-- **Accepted the deleted assertion.** `git: a single-commit pack is not a proven
-  loop` was removed as doubly vacuous. Its replacement, `git: v2 pack with
-  exactly 1 commit is not a proven loop`, is confirmed load-bearing by the B3
-  mutant, so coverage went up, not down.
-- **Did not sign off on counts alone.** 188 green assertions prove nothing by
-  themselves; the eight mutants above are the actual basis for this APPROVE.
+B and C are the decisive ones: each assertion is pinned to **its own** fix, not
+passing incidentally off the other. Working tree restored to `8a22cd2` after
+every mutation (`git status --short` clean, `git diff --stat` empty).
 
-## Do not repeat
+Whole Phase 1 block is non-vacuous too: reverting the renderer to `origin/main`
+turns **22** assertions RED. The C2 pair is correctly *absent* from that list —
+`main` has no resolution rendering at all, so its raw branch printed every ref.
+That is the positive confirmation that C2 was a regression introduced by
+`fd3e78c` and is now closed, rather than a pre-existing wart.
 
-- Don't re-run the producer's mutation script and call that verification. It
-  proves the script works, not that the tests bite. Mutate the **committed**
-  tree yourself and diff before running.
-- Don't mutate in the working tree. Use `cp -R` including `.git` — B1's revision
-  counts and B4's depth cap are read from real git history, so a copy without
-  `.git` silently changes what is being tested.
-- Don't treat `== N passed, 0 failed ==` as the control. Run the pristine copy
-  first; without that, a RED could be the harness rather than the mutant.
+## Remaining gates (re-verified this loop, not carried forward)
 
-## Open questions (non-blocking, for follow-up)
+| Gate | Result | Evidence |
+|---|---|---|
+| `make test` green | **PASS** | `221 passed, 0 failed` — "All test suites passed." |
+| `experience_data.py` untouched | **PASS** | `git diff --stat origin/main...HEAD -- scripts/experience_data.py` → 0 lines |
+| renderer JSON-only | **PASS** | no `subprocess`/`urllib`/`requests`/`socket`/git shell-out; sole input `data_path.read_text()` at `:869`. The `rglob`/`iterdir` at `:51-59` walk the **out** dir (pre-existing stale-page prune), never the repo |
+| scope held | **PASS** | 4 files vs main: `docs/experience.md`, `handoff.md`, `scripts/experience_build.py`, `tests/run-experience-tests.sh`. No data-contract change, no new CSS |
 
-1. **Cosmetic honesty nit, new observation.** A `gh` that exits 0 while emitting
-   non-JSON gets `status: "ok"` with the garbage echoed into
-   `gh_enrichment.repo` (observed: `"repo": "not json <<<"`). No links are
-   invented and the build is fine, so this is not a defect — but `repo` is
-   currently whatever `gh repo view -q .nameWithOwner` prints, unvalidated. A
-   one-line slug shape check (`owner/name`) would close it. Contrived scenario;
-   filed, not blocked.
-2. `role_name_fallback` remains unexercised by the suite (producer's note, still
-   true).
-3. `make experience-snapshot` output path still not gitignored — deliberate per
-   SYNTHESIS §10, owner call, untouched.
+## Non-blocking observations (do not action in this PR)
+
+1. `proven_loop = True` still appears in the raw **PMI inputs** dump on a sub-P3
+   page. It is a faithful echo of a JSON input under a table explicitly labelled
+   `PMI inputs (from data/index.json)`, and the not-met copy sits directly above
+   it. Changing it would misrepresent the JSON. Not a defect.
+2. The C1 honesty grep's third alternative `\|not met` is broader than the other
+   two. Mutation B proves it is currently pinned (no other "not met" on that
+   page — only one of the three branches ever renders). Flagging only as
+   optional future hardening.
+
+## Loop accounting
+
+Loop 1: 2 blocking defects. Loop 2: both closed, mutation-verified. Budget spent,
+nothing outstanding. **Ship.**
