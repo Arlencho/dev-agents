@@ -144,6 +144,15 @@ still succeeds and the JSON says so instead of guessing.
 counts, PMI bands + reasons, critic pairs, skill versions, one-line trail rows.
 Free-text bodies are dropped, so it is safe to share; committing it is your call.
 
+**Where Phase 1 lands on the pages:** trail detail shows the PR row and resolved
+issue titles (only when `gh` matched this repo) plus `Reviewed by` / `Reviews`
+links between trails that share a branch; role detail expands a P3 badge into its
+`proven_loop_evidence` lines (and P2 roles say plainly why the gate is not met);
+skill detail lists revisions, first/last commit and up to 20 commit subjects —
+or an honest *git history unavailable* line when the projection had no git;
+Home carries a **critic pairs** stat; About states the `critic_rate_method` with
+its raw basis counts and the `gh_enrichment` status of the build.
+
 Exact gates, field lists and the v1 → v2 migration:
 [`docs/experience-data.md`](experience-data.md).
 

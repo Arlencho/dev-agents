@@ -290,6 +290,7 @@ class Renderer:
       <div class="stat"><div class="num">{n_trails}</div><div class="lbl">trails</div></div>
       <div class="stat"><div class="num">{esc(done_pct)} <small>· n={fleet["n_done"]}</small></div><div class="lbl">done</div></div>
       <div class="stat"><div class="num">{fleet["critic_rate"]:.0%} <small>{esc(fleet.get("critic_rate_label", "of trails"))}</small></div><div class="lbl">critic share</div></div>
+      <div class="stat"><div class="num">{c["critic_pairs"]} <small>· branches with producer + critic</small></div><div class="lbl">critic pairs</div></div>
       <div class="stat"><div class="num">{c["waves"]}</div><div class="lbl">waves</div></div>
       <div class="stat"><div class="num">{c["companies"]}</div><div class="lbl">companies</div></div>
       <div class="stat"><div class="num fit">{esc(vendor_mix)}</div><div class="lbl">vendor mix</div></div>
@@ -388,13 +389,43 @@ class Renderer:
     def trail_pages(self) -> None:
         for t in self.trails:
             sec = t["handoff_sections"]
-            links = (
-                " · ".join(
-                    f'<a href="{esc(u)}">{esc(u)}</a>' if u.startswith("http") else f'<span class="mono">{esc(u)}</span>'
-                    for u in t["issue_links"]
+            resolved = t["issue_links_resolved"]
+            if resolved:
+                # gh enrichment: ref links to this repo's issue/PR, with title.
+                links = " · ".join(
+                    f'<a href="{esc(x["url"])}">{esc(x["ref"])}</a>'
+                    f' <span class="muted">({esc(str(x["state"]).lower())} · {esc(x["title"])})</span>'
+                    for x in resolved
                 )
-                or '<span class="muted">none parsed</span>'
-            )
+            else:
+                links = (
+                    " · ".join(
+                        f'<a href="{esc(u)}">{esc(u)}</a>' if u.startswith("http") else f'<span class="mono">{esc(u)}</span>'
+                        for u in t["issue_links"]
+                    )
+                    or '<span class="muted">none parsed</span>'
+                )
+            pr_row = ""
+            if t["pr_url"]:
+                pr_row = (
+                    f'<div><dt>PR</dt><dd><a href="{esc(t["pr_url"])}">#{esc(t["pr_number"])}</a>'
+                    f' <span class="pill">{esc(str(t["pr_state"]).lower())}</span></dd></div>'
+                )
+
+            def pair_link(task_id: str) -> str:
+                return f'<a href="../../trail/{esc(task_id)}/index.html" class="mono">{esc(task_id)}</a>'
+
+            pair_rows = ""
+            if t["reviewed_by"]:
+                pair_rows += (
+                    f'<div><dt>Reviewed by</dt><dd>{" · ".join(pair_link(x) for x in t["reviewed_by"])}'
+                    f' <span class="muted">(critic on the same branch)</span></dd></div>'
+                )
+            if t["reviews"]:
+                pair_rows += (
+                    f'<div><dt>Reviews</dt><dd>{" · ".join(pair_link(x) for x in t["reviews"])}'
+                    f' <span class="muted">(producer trails this critic reviewed)</span></dd></div>'
+                )
             scope_label = t["company_id"] or t["project_label"] or "unlinked"
             if t["company_id"]:
                 work_href = f"../../company/{esc(t['company_id'])}/work/index.html"
@@ -423,11 +454,13 @@ class Renderer:
       <dl class="meta">
         <div><dt>Vendor · model</dt><dd class="mono">{esc(prov["vendor"])} · {esc(prov["model"])} <span class="muted">({esc(prov["host"])})</span></dd></div>
         <div><dt>Branch</dt><dd class="mono">{esc(t["branch"] or "—")}</dd></div>
+        {pr_row}
         <div><dt>Base → head</dt><dd class="mono">{esc(t["base_sha"])}→{esc(t["head_sha"])}</dd></div>
         <div><dt>Exit</dt><dd class="mono">{esc(t["agent_exit"])}</dd></div>
         <div><dt>When</dt><dd class="mono">{esc(t["ts"])}</dd></div>
         <div><dt>Join</dt><dd><span class="mono">{esc(t["join_method"])}</span>{join_note}</dd></div>
         <div><dt>Links</dt><dd>{links}</dd></div>
+        {pair_rows}
         <div><dt>Source</dt><dd class="mono muted">{esc(t["source"]["jsonl"])}</dd></div>
       </dl>
     </div>
@@ -535,6 +568,19 @@ class Renderer:
             packs = ", ".join(st["packs"]) or "—"
             specialized = ", ".join(st["specialized_packs"]) or "none"
             critic = ' <span class="pill">critic seat</span>' if st["is_critic"] else ""
+            evidence = inputs.get("proven_loop_evidence") or []
+            if evidence:
+                loop_html = (
+                    '<p class="muted">Proven loop evidence (P3 gate):</p><ul class="tight">'
+                    + "".join(f"<li>{esc(e)}</li>" for e in evidence)
+                    + "</ul>"
+                )
+            else:
+                loop_html = (
+                    '<p class="muted">Proven loop evidence: none recorded — the P3 gate '
+                    "(a specialized pack with version ≥ 2 and ≥ 2 recorded revisions, or one "
+                    "citing a promoted learning) is not met.</p>"
+                )
             body = f"""
     {self.crumb([("← Roles", "../../roles/index.html"), (role, None)])}
     <div class="pagehead">
@@ -549,6 +595,7 @@ class Renderer:
         <div class="stat"><div class="num">{st["success_rate"]:.0%} <small>· n={st["n_known"]}</small></div><div class="lbl">success</div></div>
       </div>
       <p class="muted">Display capped at {esc(pmi["cap"])} — {esc(pmi["cap_reason"])}.</p>
+      {loop_html}
       <details open><summary>PMI inputs (from data/index.json)</summary>
         <ul class="tight mono">{input_rows}</ul>
       </details>
@@ -567,9 +614,21 @@ class Renderer:
             cls = "accent" if status == "candidate" else "ok"
             return f'<span class="pill {cls}">{esc(status)}</span>'
 
+        hist = self.d["skill_history"]
+        hist_available = hist["available"]
+        hist_note = (
+            ""
+            if hist_available
+            else f'<p class="muted">git history unavailable in this projection ({esc(hist["reason"])}) — versions come from pack frontmatter.</p>'
+        )
+
+        def ver_cell(s: Dict[str, Any]) -> str:
+            rev = f' <span class="muted">· {s["revisions"]} rev</span>' if hist_available else ""
+            return f'<td class="mono">v{esc(s["version"])}{rev}</td>'
+
         rows = "".join(
             f'<tr><td><a href="../skill/{esc(s["id"])}/index.html" class="mono">{esc(s["id"])}</a></td>'
-            f'<td class="mono">v{esc(s["version"])}</td><td>{pill(s["status"])}</td>'
+            f'{ver_cell(s)}<td>{pill(s["status"])}</td>'
             f'<td class="muted">{esc(s["summary"])}</td>'
             f'<td class="mono muted">{esc(", ".join(s["roles"]) or "—")}</td></tr>'
             for s in self.d["skills"]
@@ -578,6 +637,7 @@ class Renderer:
     <div class="pagehead">
       <h1>Skills</h1>
       <p class="lede">Pack library with promotion status. Promotion stays PR-only — this page never writes skills.</p>
+      {hist_note}
     </div>
     <div class="card">
       {('<div class="tablewrap"><table><thead><tr><th>Pack</th><th>Ver</th><th>Status</th><th>Summary</th><th>Injected by</th></tr></thead><tbody>' + rows + "</tbody></table></div>") if rows else '<p class="empty">No skill packs found under <code>skills/</code>.</p>'}
@@ -585,6 +645,41 @@ class Renderer:
 """
         write(self.out / "skills" / "index.html", self.page("Skills", body, 1, "global", "skills"))
         for s in self.d["skills"]:
+            if not hist_available:
+                hist_rows = (
+                    '<div><dt>Revisions</dt><dd class="muted">git history unavailable in this '
+                    "projection — version comes from pack frontmatter</dd></div>"
+                )
+            elif s["revisions"]:
+                trunc = (
+                    f' <span class="muted">(newest {s["history_depth"]} shown)</span>' if s["history_truncated"] else ""
+                )
+                hist_rows = (
+                    f'<div><dt>Revisions</dt><dd class="mono">{s["revisions"]}{trunc}</dd></div>'
+                    f'<div><dt>First → last commit</dt><dd class="mono">{esc(s["first_commit"])} → {esc(s["last_commit"])}</dd></div>'
+                )
+            else:
+                # Available but empty: the file has no commits yet — never
+                # conflated with "git could not be read" (docs/experience-data.md).
+                hist_rows = '<div><dt>Revisions</dt><dd class="muted">no commits recorded yet</dd></div>'
+            hist_block = ""
+            if s["git_history"]:
+                items = "".join(
+                    f'<li><span class="mono">{esc(c["sha"])}</span> <span class="muted mono">{esc(c["date"])}</span> {esc(c["subject"])}</li>'
+                    for c in s["git_history"]
+                )
+                cap_note = (
+                    f'<p class="muted flush">Capped at {s["history_depth"]} commits — see <span class="mono">git log -- {esc(s["path"])}</span> for more.</p>'
+                    if s["history_truncated"]
+                    else ""
+                )
+                hist_block = f"""
+    <div class="card mt">
+      <div class="cardhead"><h2>Git history</h2></div>
+      <ul class="tight">{items}</ul>
+      {cap_note}
+    </div>
+"""
             body = f"""
     {self.crumb([("← Skills", "../../skills/index.html"), (s["id"], None)])}
     <div class="pagehead">
@@ -594,12 +689,14 @@ class Renderer:
     <div class="card">
       <dl class="meta">
         <div><dt>Version</dt><dd class="mono">v{esc(s["version"])}</dd></div>
+        {hist_rows}
         <div><dt>Scope</dt><dd class="mono">{esc(s["scope"])}</dd></div>
         <div><dt>Injected by</dt><dd class="mono">{esc(", ".join(s["roles"]) or "—")}</dd></div>
         <div><dt>Path</dt><dd class="mono muted">{esc(s["path"])}</dd></div>
       </dl>
       <p class="muted flush">To promote a candidate or change a pack: open a PR — never from this UI.</p>
     </div>
+    {hist_block}
     <div class="card mt">
       <div class="cardhead"><h2>Body</h2></div>
       <div class="body">{esc(s["body"])}</div>
@@ -660,6 +757,17 @@ class Renderer:
             f'<li><span class="mono">{esc(r["method"])}</span> — {esc(r["source"])}</li>' for r in self.d["join_rules"]
         )
         policy = self.d["pmi_policy"]
+        fleet = self.d["fleet"]
+        basis = fleet["critic_rate_basis"]
+        basis_bits = " · ".join(f"{k} {v}" for k, v in basis.items())
+        gh = self.d["gh_enrichment"]
+        if gh["status"] == "ok":
+            gh_line = (
+                f'<span class="mono">ok</span> — {gh["prs_indexed"]} PRs and {gh["issues_indexed"]} issues '
+                f'indexed from <span class="mono">{esc(gh["repo"])}</span>; {gh["trails_with_pr"]} trails matched a PR'
+            )
+        else:
+            gh_line = f'<span class="mono">{esc(gh["status"])}</span> — {esc(gh["reason"])}'
         warnings = (
             '<ul class="tight">' + "".join(f"<li>{esc(w)}</li>" for w in self.d["warnings"]) + "</ul>"
             if self.d["warnings"]
@@ -674,6 +782,8 @@ class Renderer:
       <h2 class="sec">This build</h2>
       <p>Generated <strong>{esc(self.generated)}</strong> · {c["trails"]} trails · {c["companies"]} companies ·
       {c["skills"]} skill packs · {c["learnings"]} learnings · {c["unlinked_trails"]} unlinked trails</p>
+      <p class="muted">gh enrichment: {gh_line}. Skill git history:
+      {"available" if self.d["skill_history"]["available"] else "unavailable"}.</p>
       <p class="muted">Unlinked trails are join-boundary behavior, not a broken page: a trail joins a
       company only through the rules below, so a company with no matching trails shows n=0 by design.
       Teach the join — <span class="mono">config/experience-joins.yaml</span> or a
@@ -696,6 +806,10 @@ class Renderer:
       <p>P0 n&lt;{policy["p1_min_n"]} · P1 n≥{policy["p1_min_n"]} ·
       P2 n_done≥{policy["p2_min_done"]} AND success≥{policy["p2_min_success"]:.0%} ·
       P3 P2 plus proven-loop evidence (display capped at {esc(policy["display_cap"])}: {esc(policy["cap_reason"])}).</p>
+      <h2 class="sec">Critic pairing</h2>
+      <p>critic_rate {fleet["critic_rate"]:.0%} · method <span class="mono">{esc(fleet["critic_rate_method"])}</span>
+      ({esc(fleet.get("critic_rate_label", ""))}) · {c["critic_pairs"]} paired branch{"es" if c["critic_pairs"] != 1 else ""}.</p>
+      <p class="muted">Basis: {esc(basis_bits)}.</p>
       <h2 class="sec">Build warnings</h2>
       {warnings}
       <h2 class="sec">How to refresh</h2>

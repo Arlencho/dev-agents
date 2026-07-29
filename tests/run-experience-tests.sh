@@ -335,6 +335,36 @@ grep -q 'class="chip dim"' "$FIXOUT/index.html" \
   && ok "dim chip marks placeholder status as visible text" || bad "dim chip marks placeholder status as visible text"
 assert_links_resolve "fixture: every relative href resolves (BROKEN: 0)" "$FIXOUT"
 
+# ── Phase 1 UI bind (fixture) ───────────────────────────────────────
+grep -q '<dt>Reviewed by</dt>' "$FIXOUT/trail/1-fixture-builder-widget-x/index.html" \
+  && grep -q 'trail/6-fixture-critic-1/index.html' "$FIXOUT/trail/1-fixture-builder-widget-x/index.html" \
+  && ok "trail detail links its critic (reviewed_by)" || bad "trail detail links its critic (reviewed_by)"
+grep -q '<dt>Reviews</dt>' "$FIXOUT/trail/6-fixture-critic-1/index.html" \
+  && grep -q 'trail/1-fixture-builder-widget-x/index.html' "$FIXOUT/trail/6-fixture-critic-1/index.html" \
+  && ok "critic trail links the producer it reviewed" || bad "critic trail links the producer it reviewed"
+if grep -q '<dt>Reviewed by</dt>' "$FIXOUT/trail/3-fixture-builder-plain/index.html"; then
+  bad "unpaired trail invents no review row"
+else
+  ok "unpaired trail invents no review row"
+fi
+grep -q 'Proven loop evidence (P3 gate)' "$FIXOUT/role/fixture-builder/index.html" \
+  && grep -q 'fixture-pack promotes lesson-one' "$FIXOUT/role/fixture-builder/index.html" \
+  && ok "P3 role shows its proven-loop evidence" || bad "P3 role shows its proven-loop evidence"
+grep -q 'Proven loop evidence: none recorded' "$FIXOUT/role/fixture-veteran/index.html" \
+  && ok "P2 role states honestly why P3 is not met" || bad "P2 role states honestly why P3 is not met"
+grep -q '<h2>Git history</h2>' "$FIXOUT/skill/fixture-pack/index.html" \
+  && grep -q 'First → last commit' "$FIXOUT/skill/fixture-pack/index.html" \
+  && ok "skill detail shows git history + first/last commit" || bad "skill detail shows git history + first/last commit"
+grep -q 'critic pairs' "$FIXOUT/index.html" && ok "home stat strip shows critic pairs" || bad "home stat strip shows critic pairs"
+grep -q 'branch_pairing' "$FIXOUT/about/index.html" && ok "about declares the critic rate method" || bad "about declares the critic rate method"
+grep -q 'gh enrichment: <span class="mono">disabled' "$FIXOUT/about/index.html" \
+  && ok "about reports gh enrichment status honestly (--no-gh)" || bad "about reports gh enrichment status honestly (--no-gh)"
+if grep -q '<dt>PR</dt>' "$FIXOUT/trail/1-fixture-builder-widget-x/index.html"; then
+  bad "no PR row invented when gh enrichment is off"
+else
+  ok "no PR row invented when gh enrichment is off"
+fi
+
 # HTML must refuse a data contract it does not understand
 python3 - "$FJ" "$TMP/bad.json" <<'PY'
 import json, sys
@@ -376,6 +406,15 @@ assert_json "no git: default pack promotion still grants no P3" "$NJ" \
   '(S["evidence-first"]["promotes"] == ["lesson-default"]
     and R["fixture-veteran"]["pmi"]["band"] == "P2"
     and R["fixture-veteran"]["pmi"]["inputs"]["proven_loop_evidence"] == [])'
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$NOGIT" --out "$TMP/nogit-site" >"$TMP/nogit-html.log" 2>&1 \
+  && ok "renderer succeeds without git" || bad "renderer succeeds without git"
+grep -q 'git history unavailable' "$TMP/nogit-site/skill/fixture-pack/index.html" \
+  && ok "no git: skill detail says history unavailable, not zero" || bad "no git: skill detail says history unavailable, not zero"
+if grep -q '<h2>Git history</h2>' "$TMP/nogit-site/skill/fixture-pack/index.html"; then
+  bad "no git: no history card invented"
+else
+  ok "no git: no history card invented"
+fi
 
 # A2.2 — real commits: the version-history path to P3 is proven with actual
 # `git log` output, never a hand-written fixture of fake commits.
@@ -456,6 +495,14 @@ assert_json "git: history is truncated AT the published depth" "$GJ" \
 assert_json "git: an untruncated pack is not falsely flagged" "$GJ" \
   '(S["fixture-pack"]["history_truncated"] is False
     and len(S["fixture-pack"]["git_history"]) < S["fixture-pack"]["history_depth"])'
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$GITREPO" --out "$TMP/gitrepo-site" >"$TMP/gitrepo-html.log" 2>&1 \
+  && ok "renderer succeeds on the git-history projection" || bad "renderer succeeds on the git-history projection"
+grep -q 'skills: revise fixture pack to v2' "$TMP/gitrepo-site/skill/fixture-pack/index.html" \
+  && ok "skill detail lists real commit subjects" || bad "skill detail lists real commit subjects"
+grep -q 'Revisions</dt><dd class="mono">2' "$TMP/gitrepo-site/skill/fixture-pack/index.html" \
+  && ok "skill detail shows the real revision count" || bad "skill detail shows the real revision count"
+grep -q '(newest 20 shown)' "$TMP/gitrepo-site/skill/fixture-deep-pack/index.html" \
+  && ok "truncated history says so on the page" || bad "truncated history says so on the page"
 assert_absent "no secret shapes in git-repo projection"  "$TMP/gitrepo-site" "$SECRET_SHAPES"
 
 # A2.3 — env kill switch must work the same as the flag
@@ -503,6 +550,37 @@ red = ed.redact("ghp_" + "A" * 24)
 assert "ghp_" not in red and "redacted" in red, red
 PY
 then ok "gh: mapping resolves only this repo's PR/issues (offline unit)"; else bad "gh: mapping resolves only this repo's PR/issues (offline unit)"; fi
+
+# A2.3c — gh-enriched fields render on trail detail: inject them into the
+# fixture contract (offline, no network) and check the HTML projection.
+python3 - "$FJ" "$TMP/gh.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for t in d["trails"]:
+    if t["task_id"] == "1-fixture-builder-widget-x":
+        t["pr_url"] = "https://github.com/acme/widget/pull/7"
+        t["pr_state"] = "MERGED"
+        t["pr_number"] = 7
+        t["issue_links_resolved"] = [
+            {"ref": "#12", "number": 12, "url": "https://github.com/acme/widget/issues/12",
+             "state": "OPEN", "title": "an issue", "kind": "issue"}
+        ]
+json.dump(d, open(sys.argv[2], "w"))
+PY
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$TMP/ghsite" --data "$TMP/gh.json" >"$TMP/gh-html.log" 2>&1 \
+  && ok "renderer succeeds with gh-enriched fields" || bad "renderer succeeds with gh-enriched fields"
+GHT="$TMP/ghsite/trail/1-fixture-builder-widget-x/index.html"
+grep -q 'href="https://github.com/acme/widget/pull/7"' "$GHT" \
+  && grep -q 'pill">merged' "$GHT" \
+  && ok "trail detail renders PR link + state when present" || bad "trail detail renders PR link + state when present"
+grep -q 'href="https://github.com/acme/widget/issues/12"' "$GHT" \
+  && grep -q '(open · an issue)' "$GHT" \
+  && ok "trail detail renders resolved issue title + state" || bad "trail detail renders resolved issue title + state"
+if grep -q '<dt>PR</dt>' "$TMP/ghsite/trail/2-fixture-builder-gadget/index.html"; then
+  bad "trail without a PR keeps the PR row absent"
+else
+  ok "trail without a PR keeps the PR row absent"
+fi
 
 # A2.4 — optional snapshot: redacted rollup, no bodies, small enough to commit
 SNAP="$TMP/snapshot"
@@ -559,6 +637,19 @@ grep -q 'rel="stylesheet"' "$SITE/index.html" && ok "site links external stylesh
 grep -q 'class="seg"' "$SITE/work/index.html" && ok "site work has group toggle" || bad "site work has group toggle"
 assert_absent_html "no inline styles in site HTML" "$SITE" '[[:space:]]style=|<style'
 assert_links_resolve "site: every relative href resolves (BROKEN: 0)" "$SITE"
+
+# Phase 1 UI bind on the real projection
+grep -q 'critic pairs' "$SITE/index.html" && ok "site home shows critic pairs" || bad "site home shows critic pairs"
+grep -q 'Critic pairing' "$SITE/about/index.html" && ok "site about has critic pairing section" || bad "site about has critic pairing section"
+grep -q 'gh enrichment:' "$SITE/about/index.html" && ok "site about reports gh status" || bad "site about reports gh status"
+grep -qE '· [0-9]+ rev' "$SITE/skills/index.html" && ok "site skills index shows revision counts" || bad "site skills index shows revision counts"
+grep -q '<h2>Git history</h2>' "$SITE/skill/git-ship/index.html" \
+  && ok "site skill detail shows git history" || bad "site skill detail shows git history"
+if grep -rlq '<dt>Reviewed by</dt>' "$SITE/trail" 2>/dev/null; then
+  ok "site trail details show review pairing"
+else
+  bad "site trail details show review pairing"
+fi
 
 assert_json "real data parses with pinned schema" "$RJ" 'd["schema_version"] == 2 and isinstance(d["trails"], list)'
 assert_json "real trails carry contract fields"   "$RJ" \
