@@ -168,6 +168,27 @@ Related: `make scorecard` (rate-cap / cooldown only).
 
 ---
 
+## Fleet Desk (experience overview)
+
+**Read-only local UI** for work trails, waves, skills, learnings, and role maturity (Playbook Maturity Index). Law: [`proposals/experience-console-SYNTHESIS.md`](proposals/experience-console-SYNTHESIS.md). Full guide: [`experience.md`](experience.md).
+
+### Start the view
+
+```bash
+# From dev-agents repo root — after a wave or anytime
+make experience          # build → site/experience/
+make experience-open     # build + open browser
+make desk                # alias for experience
+```
+
+Open `site/experience/index.html` (path is gitignored; always rebuild after dispatch).
+
+While using: **Home** for the scan · **Work** for all tasks **grouped by wave** · company chips for per-repo · **Roles** for PMI · **Skills / Learn** for playbooks and lessons. Refresh with `make experience` after new handoffs.
+
+Not a ticket system: GitHub stays source of issues; Fleet Desk shows what the fleet **did** with the tool.
+
+---
+
 ## Vendor auth preflight
 
 **Validate sessions before any wave** — do not re-login every run; only when the check fails.

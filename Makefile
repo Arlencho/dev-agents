@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth
+.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-open desk
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -17,6 +17,16 @@ vendor-auth: ## Preflight vendor CLI sessions (usage: make vendor-auth [VENDORS=
 	else \
 		./scripts/vendor-auth-check.sh; \
 	fi
+
+experience: ## Build Fleet Desk static site → site/experience/ (read-only overview)
+	@./scripts/experience-build.sh
+
+experience-open: ## Build Fleet Desk and open in browser
+	@./scripts/experience-build.sh
+	@open site/experience/index.html 2>/dev/null || xdg-open site/experience/index.html 2>/dev/null || \
+		echo "Open file://$$(pwd)/site/experience/index.html"
+
+desk: experience ## Alias for make experience (Fleet Desk)
 
 dispatch: ## Dispatch wave plan (usage: make dispatch REPO=x PLAN=y)
 	@./scripts/dispatch.sh $(REPO) $(PLAN)
@@ -74,6 +84,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, autoplan fail-cl
 	@echo ""
 	@echo "== vendor auth preflight =="
 	@./tests/run-vendor-auth-tests.sh
+	@echo ""
+	@echo "== fleet desk experience =="
+	@./tests/run-experience-tests.sh
 	@echo ""
 	@echo "All test suites passed."
 
