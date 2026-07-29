@@ -36,12 +36,34 @@ check "retry fails over to next provider" "claude" "$p2"
 check "cooldown file was written" "yes" "$([ -f "$STATE_DIR/kimi.cooldown" ] && echo yes || echo no)"
 check "kimi now reads as cooling" "yes" "$(provider_cooling kimi && echo yes || echo no)"
 
-# notify.sh ratecap path fires without error
-if "$REPO_DIR/scripts/notify.sh" web-frontend localhost feat/x ratecap kimi >/dev/null 2>&1; then
-    check "notify ratecap path" "ok" "ok"
-else
-    check "notify ratecap path" "ok" "err"
+# notify.sh ratecap path fires without error and stays stdout-only under the
+# silent switch — `make test` must never pop "Provider Rate-Capped" toasts.
+export FLEET_NOTIFY_SILENT=1
+notify_out=$("$REPO_DIR/scripts/notify.sh" web-frontend localhost feat/x ratecap kimi 2>/dev/null) \
+    && notify_rc=ok || notify_rc=err
+check "notify ratecap path" "ok" "$notify_rc"
+case "$notify_out" in
+    *"[notify] Provider Rate-Capped:"*) check "notify ratecap stdout fallback" "ok" "ok" ;;
+    *) check "notify ratecap stdout fallback" "ok" "missing" ;;
+esac
+
+# The silent switch must gate osascript itself: shim it on PATH and prove it is
+# NOT invoked while silenced and IS invoked on macOS when not silenced.
+SHIM_DIR=$(mktemp -d)
+cat > "$SHIM_DIR/osascript" <<'EOF'
+#!/bin/sh
+echo called >> "$OSASCRIPT_CALLS"
+EOF
+chmod +x "$SHIM_DIR/osascript"
+export OSASCRIPT_CALLS="$SHIM_DIR/calls"
+: > "$OSASCRIPT_CALLS"
+PATH="$SHIM_DIR:$PATH" "$REPO_DIR/scripts/notify.sh" web-frontend localhost feat/x ratecap kimi >/dev/null 2>&1
+check "silent: osascript not invoked" "0" "$(wc -l < "$OSASCRIPT_CALLS" | tr -d ' ')"
+if [ "$(uname)" = "Darwin" ]; then
+    PATH="$SHIM_DIR:$PATH" env -u FLEET_NOTIFY_SILENT "$REPO_DIR/scripts/notify.sh" web-frontend localhost feat/x ratecap kimi >/dev/null 2>&1
+    check "unsilenced on macOS: osascript invoked" "1" "$(wc -l < "$OSASCRIPT_CALLS" | tr -d ' ')"
 fi
+rm -rf "$SHIM_DIR"
 
 echo "== row 17: all chain vendors cooling -> primary anyway (never deadlock) =="
 date +%s > "$STATE_DIR/claude.cooldown"

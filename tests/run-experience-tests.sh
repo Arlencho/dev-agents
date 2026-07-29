@@ -598,6 +598,64 @@ else
   ok "trail without a PR keeps the PR row absent"
 fi
 
+# A2.3d — gh non-JSON honesty: a fake `gh` on PATH that exits 0 but prints
+# garbage must yield status bad_payload with a clear reason — never status ok
+# with garbage in gh_enrichment. Still never fatal, still offline.
+if python3 - "$REPO_DIR" "$GITREPO" "$TMP" <<'PY'
+import os, stat, sys
+from pathlib import Path
+
+repo_dir, gitrepo, tmp = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+sys.path.insert(0, str(repo_dir / "scripts"))
+import experience_data as ed
+
+toplevel = ed.git_toplevel(gitrepo)
+assert toplevel is not None and toplevel.resolve() == gitrepo.resolve(), "fixture git repo must be a work-tree root"
+
+def fake_gh(name, repo_view="", pr_list="", issue_list=""):
+    d = tmp / f"fakegh-{name}"
+    d.mkdir(exist_ok=True)
+    script = d / "gh"
+    script.write_text(
+        "#!/bin/sh\n"
+        "case \"$1 $2\" in\n"
+        "  'auth status') exit 0;;\n"
+        f"  'repo view') printf '%s\\n' '{repo_view}';;\n"
+        f"  'pr list') printf '%s\\n' '{pr_list}';;\n"
+        f"  'issue list') printf '%s\\n' '{issue_list}';;\n"
+        "esac\n"
+        "exit 0\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    os.environ["PATH"] = f"{d}{os.pathsep}{os.environ['PATH']}"
+    return ed.gh_index(gitrepo, toplevel, True)
+
+# exit 0 + non-slug repo payload -> bad_payload, repo stays empty
+r = fake_gh("badslug", repo_view="not json")
+assert r["status"] == "bad_payload" and "repo view" in r["reason"] and r["repo"] == "", r
+
+# valid slug, exit 0 + non-JSON pr list -> bad_payload, honest reason, repo kept
+r = fake_gh("badpr", repo_view="acme/widget", pr_list="not json")
+assert r["status"] == "bad_payload" and "pr list" in r["reason"] and r["repo"] == "acme/widget", r
+assert r["pr_by_branch"] == {} and r["issue_by_number"] == {}, r
+
+# valid pr list, exit 0 + non-JSON issue list -> bad_payload (ok would silently
+# drop every issue)
+r = fake_gh("badissue", repo_view="acme/widget", pr_list="[]", issue_list="not json")
+assert r["status"] == "bad_payload" and "issue list" in r["reason"], r
+
+# JSON that is valid but not an array is also bad_payload
+r = fake_gh("notlist", repo_view="acme/widget", pr_list="{}")
+assert r["status"] == "bad_payload" and "pr list" in r["reason"], r
+
+# happy path through the same harness — proves the fake-gh rig is not vacuous
+PRS = '[{"number":7,"url":"https://github.com/acme/widget/pull/7","state":"OPEN","headRefName":"feat/x","title":"t","updatedAt":"2026-01-01T00:00:00Z"}]'
+r = fake_gh("happy", repo_view="acme/widget", pr_list=PRS, issue_list="[]")
+assert r["status"] == "ok" and r["repo"] == "acme/widget" and r["prs_indexed"] == 1, r
+PY
+then ok "gh: exit-0 garbage is bad_payload, never ok (fake gh on PATH)"; else bad "gh: exit-0 garbage is bad_payload, never ok (fake gh on PATH)"; fi
+
+
 # A2.4 — optional snapshot: redacted rollup, no bodies, small enough to commit
 SNAP="$TMP/snapshot"
 python3 "$REPO_DIR/scripts/experience_data.py" --repo "$FIX" --out "$TMP/snapsite" --no-gh --snapshot-dir "$SNAP" \
@@ -680,7 +738,7 @@ assert_json "real critic rate declares its method" "$RJ" \
 # gh may be missing, logged out or offline on any machine — the only contract is
 # that the build survived and said what happened.
 assert_json "real gh enrichment never fails the build" "$RJ" \
-  '(d["gh_enrichment"]["status"] in ("ok","skipped","disabled","unavailable","unauthenticated","error")
+  '(d["gh_enrichment"]["status"] in ("ok","skipped","disabled","unavailable","unauthenticated","error","bad_payload")
     and (d["gh_enrichment"]["status"] == "ok" or d["gh_enrichment"]["reason"]))'
 assert_json "real gh PR fields stay consistent"   "$RJ" \
   'all((t["pr_url"] and t["pr_state"]) or (not t["pr_url"] and t["pr_number"] is None) for t in d["trails"])'

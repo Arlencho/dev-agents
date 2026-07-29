@@ -603,6 +603,10 @@ def load_learnings(repo: Path, skills: List[Dict[str, Any]], companies: List[Dic
         prod = next((q for q in candidates if q.exists()), None)
         if prod is None:
             continue
+        if prod.resolve() == repo.resolve():
+            # the company IS the projected repo (e.g. dev-agents, repo: ".") —
+            # its learnings were already loaded by the main loop above
+            continue
         for pattern in ("docs/qa/learning-*.md", "learnings/*.md"):
             for p in sorted(prod.glob(pattern)):
                 if not p.is_file():
@@ -737,7 +741,9 @@ def gh_index(repo: Path, toplevel: Optional[Path], enabled: bool) -> Dict[str, A
 
     Contract: this function NEVER raises and NEVER fails a build. Any missing
     tool, missing auth, timeout or parse error degrades to an empty index with
-    a machine-readable `status` + `reason`. Titles only — no issue/PR bodies,
+    a machine-readable `status` + `reason`. An exit-0 response that is not the
+    expected shape (non-slug repo name, non-JSON list) is `bad_payload` — exit
+    0 is never reported as `ok` with garbage. Titles only — no issue/PR bodies,
     no comments, no tokens.
     """
     empty = {
@@ -774,6 +780,11 @@ def gh_index(repo: Path, toplevel: Optional[Path], enabled: bool) -> Dict[str, A
         empty["status"] = "error"
         empty["reason"] = "gh repo view failed (no default repo resolved)"
         return empty
+    if not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", slug):
+        # exit 0 is not proof of a sane payload — never report ok with garbage
+        empty["status"] = "bad_payload"
+        empty["reason"] = f"gh repo view exited 0 but returned a non-slug payload: {slug[:80]!r}"
+        return empty
 
     pr_by_branch: Dict[str, Dict[str, Any]] = {}
     issue_by_number: Dict[str, Dict[str, Any]] = {}
@@ -793,9 +804,14 @@ def gh_index(repo: Path, toplevel: Optional[Path], enabled: bool) -> Dict[str, A
         empty["repo"] = slug
         return empty
     try:
-        prs = json.loads(out or "[]")
-    except json.JSONDecodeError:
-        prs = []
+        prs = json.loads(out or "")
+        if not isinstance(prs, list):
+            raise ValueError("not a JSON array")
+    except (json.JSONDecodeError, ValueError):
+        empty["status"] = "bad_payload"
+        empty["reason"] = "gh pr list exited 0 but did not return a JSON array"
+        empty["repo"] = slug
+        return empty
     for pr in prs:
         branch = str(pr.get("headRefName") or "")
         if not branch:
@@ -823,9 +839,14 @@ def gh_index(repo: Path, toplevel: Optional[Path], enabled: bool) -> Dict[str, A
     )
     if rc == 0:
         try:
-            issues = json.loads(out or "[]")
-        except json.JSONDecodeError:
-            issues = []
+            issues = json.loads(out or "")
+            if not isinstance(issues, list):
+                raise ValueError("not a JSON array")
+        except (json.JSONDecodeError, ValueError):
+            empty["status"] = "bad_payload"
+            empty["reason"] = "gh issue list exited 0 but did not return a JSON array"
+            empty["repo"] = slug
+            return empty
         for issue in issues:
             title, _ = cap(redact(str(issue.get("title") or "")), GH_TITLE_CAP)
             issue_by_number[str(issue.get("number"))] = {

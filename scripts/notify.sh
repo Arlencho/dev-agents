@@ -10,12 +10,14 @@ set -euo pipefail
 # Detail: optional 5th arg — for "ratecap", the vendor name being failed over
 #
 # Notification channels:
-#   - macOS: native notification via osascript (always, if on macOS)
+#   - macOS: native notification via osascript (unless silenced, see below)
 #   - GitHub: comment on issue if GITHUB_ISSUE env var is set (format: owner/repo#123)
 #   - Fallback: prints to stdout
 #
 # Environment variables:
-#   GITHUB_ISSUE  — if set, posts a comment on the issue (e.g., "Arlencho/olympus-platform#42")
+#   GITHUB_ISSUE        — if set, posts a comment on the issue (e.g., "Arlencho/olympus-platform#42")
+#   FLEET_NOTIFY_SILENT — if "1", skip the macOS osascript toast (stdout/GitHub still run)
+#   NOTIFY_SILENT       — alias of FLEET_NOTIFY_SILENT
 
 AGENT="${1:?Usage: notify.sh <agent> <worker> <branch> <status> [detail]}"
 WORKER="${2:?Missing worker name}"
@@ -38,9 +40,10 @@ else
 fi
 
 # --------------------------------------------------
-# macOS notification
+# macOS notification (skipped when silenced — tests and headless runs set this
+# so `make test` never pops "Provider Rate-Capped" toasts on the operator's Mac)
 # --------------------------------------------------
-if [ "$(uname)" = "Darwin" ]; then
+if [ "${FLEET_NOTIFY_SILENT:-0}" != "1" ] && [ "${NOTIFY_SILENT:-0}" != "1" ] && [ "$(uname)" = "Darwin" ]; then
     osascript -e "display notification \"$MSG\" with title \"$TITLE\"" 2>/dev/null || true
 fi
 
