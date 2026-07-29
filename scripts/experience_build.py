@@ -390,21 +390,23 @@ class Renderer:
         for t in self.trails:
             sec = t["handoff_sections"]
             resolved = t["issue_links_resolved"]
-            if resolved:
-                # gh enrichment: ref links to this repo's issue/PR, with title.
-                links = " · ".join(
+            covered = {x["ref"] for x in resolved}
+            # Union, never replace: refs gh could not resolve (foreign repos,
+            # trails dispatched elsewhere) are still cited and must render.
+            unresolved = [u for u in t["issue_links"] if u not in covered]
+            if resolved or unresolved:
+                parts = [
                     f'<a href="{esc(x["url"])}">{esc(x["ref"])}</a>'
                     f' <span class="muted">({esc(str(x["state"]).lower())} · {esc(x["title"])})</span>'
                     for x in resolved
-                )
+                ]
+                parts += [
+                    f'<a href="{esc(u)}">{esc(u)}</a>' if u.startswith("http") else f'<span class="mono">{esc(u)}</span>'
+                    for u in unresolved
+                ]
+                links = " · ".join(parts)
             else:
-                links = (
-                    " · ".join(
-                        f'<a href="{esc(u)}">{esc(u)}</a>' if u.startswith("http") else f'<span class="mono">{esc(u)}</span>'
-                        for u in t["issue_links"]
-                    )
-                    or '<span class="muted">none parsed</span>'
-                )
+                links = '<span class="muted">none parsed</span>'
             pr_row = ""
             if t["pr_url"]:
                 pr_row = (
@@ -569,9 +571,21 @@ class Renderer:
             specialized = ", ".join(st["specialized_packs"]) or "none"
             critic = ' <span class="pill">critic seat</span>' if st["is_critic"] else ""
             evidence = inputs.get("proven_loop_evidence") or []
-            if evidence:
+            if evidence and pmi["band"] == "P3":
                 loop_html = (
                     '<p class="muted">Proven loop evidence (P3 gate):</p><ul class="tight">'
+                    + "".join(f"<li>{esc(e)}</li>" for e in evidence)
+                    + "</ul>"
+                )
+            elif evidence:
+                # Evidence exists but the band is below P3, so the P2 outcome
+                # gate failed. Say so — presenting the evidence alone would
+                # read as the P3 gate being satisfied.
+                loop_html = (
+                    '<p class="muted">Proven loop evidence (P3 gate): recorded, but the '
+                    "P3 gate is not met — the role is still short of the P2 outcome bar "
+                    f"(band {esc(pmi['band'])}), so this evidence cannot promote it yet.</p>"
+                    '<ul class="tight">'
                     + "".join(f"<li>{esc(e)}</li>" for e in evidence)
                     + "</ul>"
                 )

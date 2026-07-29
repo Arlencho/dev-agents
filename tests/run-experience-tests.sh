@@ -352,6 +352,16 @@ grep -q 'Proven loop evidence (P3 gate)' "$FIXOUT/role/fixture-builder/index.htm
   && ok "P3 role shows its proven-loop evidence" || bad "P3 role shows its proven-loop evidence"
 grep -q 'Proven loop evidence: none recorded' "$FIXOUT/role/fixture-veteran/index.html" \
   && ok "P2 role states honestly why P3 is not met" || bad "P2 role states honestly why P3 is not met"
+# C1: a sub-P3 role carrying evidence must not read as if the P3 gate passed
+grep -q 'class="pmi band-p1">P1' "$FIXOUT/role/fixture-runner/index.html" \
+  && ok "precondition: fixture-runner is P1" || bad "precondition: fixture-runner is P1"
+grep -q 'Proven loop evidence (P3 gate)' "$FIXOUT/role/fixture-runner/index.html" \
+  && ok "precondition: P1 role renders the P3-gate evidence list" \
+  || bad "precondition: P1 role renders the P3-gate evidence list"
+grep -q 'P3 gate is not met\|does not meet the P3 gate\|not met' \
+     "$FIXOUT/role/fixture-runner/index.html" \
+  && ok "P1 role with evidence states the P3 gate is still unmet" \
+  || bad "P1 role with evidence states the P3 gate is still unmet"
 grep -q '<h2>Git history</h2>' "$FIXOUT/skill/fixture-pack/index.html" \
   && grep -q 'First → last commit' "$FIXOUT/skill/fixture-pack/index.html" \
   && ok "skill detail shows git history + first/last commit" || bad "skill detail shows git history + first/last commit"
@@ -561,6 +571,7 @@ for t in d["trails"]:
         t["pr_url"] = "https://github.com/acme/widget/pull/7"
         t["pr_state"] = "MERGED"
         t["pr_number"] = 7
+        t["issue_links"] = ["#12", "https://github.com/other/product/issues/9", "#77"]
         t["issue_links_resolved"] = [
             {"ref": "#12", "number": 12, "url": "https://github.com/acme/widget/issues/12",
              "state": "OPEN", "title": "an issue", "kind": "issue"}
@@ -576,6 +587,11 @@ grep -q 'href="https://github.com/acme/widget/pull/7"' "$GHT" \
 grep -q 'href="https://github.com/acme/widget/issues/12"' "$GHT" \
   && grep -q '(open · an issue)' "$GHT" \
   && ok "trail detail renders resolved issue title + state" || bad "trail detail renders resolved issue title + state"
+# C2: partial gh resolution must not drop the refs that stayed unresolved
+for ref in '#12' 'other/product/issues/9' '#77'; do
+  grep -qF "$ref" "$GHT" \
+    && ok "Links row still shows cited ref $ref" || bad "Links row still shows cited ref $ref"
+done
 if grep -q '<dt>PR</dt>' "$TMP/ghsite/trail/2-fixture-builder-gadget/index.html"; then
   bad "trail without a PR keeps the PR row absent"
 else

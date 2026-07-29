@@ -1,132 +1,72 @@
-# CRITIC VERDICT — PR #49 `feat/fleet-desk-phase1-ui`
+# PRODUCER HANDOFF — PR #49 `feat/fleet-desk-phase1-ui`, loop 2 (REVISE fixes)
 
-**VERDICT: REVISE** — 2 executable failures, both in the honesty surfaces this
-PR exists to build. Loop 1 of 2.
+Critic verdict `edffe2e` (REVISE) had 2 blocking defects, both renderer-only.
+Both fixed in `scripts/experience_build.py` plus assertions landed in
+`tests/run-experience-tests.sh`. No `experience_data.py` change, no visual
+redesign, no new CSS — scope held.
 
-Verified independently on `feat/fleet-desk-phase1-ui` @ `fd3e78c`. Producer
-handoff claims were re-derived from the code, not taken on trust.
+## Built
 
-## What passed (re-verified, not assumed)
+- **C1 — sub-P3 role no longer reads as P3-gate-satisfied**
+  (`scripts/experience_build.py`, roles loop). The evidence branch now splits
+  on `pmi["band"]`:
+  - band P3 + evidence → unchanged positive framing `Proven loop evidence (P3 gate):` + list.
+  - band ≠ P3 + evidence → keeps the literal `Proven loop evidence (P3 gate):`
+    label but states `recorded, but the P3 gate is not met — the role is still
+    short of the P2 outcome bar (band P1), so this evidence cannot promote it
+    yet.` before listing the evidence.
+  - no evidence → unchanged honest negative branch.
+- **C2 — Links row unions resolved + unresolved refs** (trail_pages). Resolved
+  gh entries render first (link + state + title), then every raw `issue_links`
+  entry whose ref is not already covered by a resolved entry. `none parsed`
+  only when both lists are empty. No ref is silently dropped on partial
+  resolution anymore.
+- **Tests**: critic's failing assertions landed verbatim in spirit —
+  - C1: 3 greps on `$FIXOUT/role/fixture-runner/index.html` (P1 badge
+    precondition, evidence-label precondition, "not met" honesty).
+  - C2: the A2.3c injection now sets
+    `issue_links = ["#12", "https://github.com/other/product/issues/9", "#77"]`
+    with only `#12` in `issue_links_resolved`; 3 `grep -qF` assertions on the
+    rendered trail page.
 
-| Gate | Result | Evidence |
-|---|---|---|
-| (5) `experience_data.py` join/PMI untouched | **PASS** | `git diff --stat origin/main...HEAD` lists only `docs/experience.md`, `handoff.md`, `scripts/experience_build.py`, `tests/run-experience-tests.sh` |
-| (5) renderer still JSON-only | **PASS** | `experience_build.py:855` is the only read (`data/index.json`); no `subprocess`, no git, no repo walk |
-| (3) skill history: 3 states never conflated | **PASS** | no-git render → "git history unavailable…", 0 history cards, 0 rev counts. `available:true, revisions:0` → "no commits recorded yet", 0 history cards. Present → real subjects + rev count |
-| (4) Home/About | **PASS** | home `critic pairs = 1`; about renders `gh enrichment: disabled — …`, `method branch_pairing`, full `critic_rate_basis` |
-| (1) PR row + pairing links | **PASS** | injected `pr_url` → `PR #49 open`; `Reviewed by`/`Reviews` resolve (dir at `:480` uses the same raw `task_id` as `pair_link`, and `assert_links_resolve` crawls it) |
-| (2) no false "capped at P2" | **PASS** | no such copy in the renderer; guard test still green |
-| (6) `make test` | **PASS** | `215 passed, 0 failed`; "All test suites passed." |
-| (6) smokes non-vacuous | **PASS** | reverting **only** `experience_build.py` to `origin/main` turns **20** new assertions RED (`195 passed, 20 failed`) — genuinely targeted, not decorative |
+## Decisions (+why)
 
-The test work here is strong. The two defects below are the ones no assertion covers.
+- Kept the literal string `Proven loop evidence (P3 gate)` in the sub-P3
+  branch: the critic's precondition grep asserts that label stays present on
+  the P1 page, and it is still the accurate section name — the dishonesty was
+  the missing "gate not met", not the label.
+- Non-P3 + evidence always means "short of the P2 outcome bar", never
+  "evidence insufficient": `compute_pmi` (`experience_data.py:948-950`) makes
+  p2_ok ∧ evidence ⇒ P3 unconditionally, so evidence on a sub-P3 role can only
+  come from a failed P2 gate. The copy can state that safely.
+- C2 dedupes on the raw ref string (`x["ref"]`), not on normalized URLs —
+  matches how `apply_gh` records refs (verbatim from `issue_links`).
+- Did NOT add a `resolved[:8]` truncation note: critic flagged it as an aside,
+  the mandate was the union only. Left for a future pass if wanted.
 
----
+## Do not repeat
 
-## C1 — A sub-P3 role advertises the P3 gate as satisfied
+- Don't "verify" new assertions by `git stash` — that reverts the tests too.
+  Revert only `scripts/experience_build.py` (`git checkout -- <file>`) with the
+  new tests in place; that reproduces the critic's exact 3 FAILs.
+- The C1 precondition greps must stay green: any rewording of the P3 branch
+  must keep both `Proven loop evidence (P3 gate)` and a `not met` phrase on
+  sub-P3 pages.
 
-`scripts/experience_build.py:571-583`
+## Evidence
 
-`proven_loop_evidence` is computed independently of the band
-(`experience_data.py:1022`), so a role can carry evidence while **failing the P2
-outcome gate**. The renderer branches on evidence only, never on band. The
-negative branch says the gate "is not met"; the positive branch says nothing
-about the gate at all. Result: the two pages below are **byte-identical** in this
-region, and only the badge distinguishes them.
+- Non-vacuity (old renderer `fd3e78c` + new tests): `218 passed, 3 failed` —
+  `FAIL P1 role with evidence states the P3 gate is still unmet`,
+  `FAIL Links row still shows cited ref other/product/issues/9`,
+  `FAIL Links row still shows cited ref #77`. Matches critic's observed RED.
+- With fixes: `bash tests/run-experience-tests.sh` → `== 221 passed, 0 failed ==`.
+- `make test` → `== 221 passed, 0 failed ==` / `All test suites passed.`
+- Diff scope: `git status --short` → only `scripts/experience_build.py`,
+  `tests/run-experience-tests.sh` (+ this handoff).
 
-Already reachable in the shipped fixture — no synthetic input needed:
+## Next hint (critic, loop 2)
 
-```
-fixture-runner  | band P1 | n_done 4 (<5, P2 outcome gate FAILS) | ev ['fixture-pack promotes lesson-one']
-fixture-builder | band P3 | n_done 6                             | ev ['fixture-pack promotes lesson-one']
-```
-
-Rendered `role/fixture-runner/index.html` (band **P1**):
-
-> …Display capped at P3 — **P3 needs proven-loop evidence**: a specialized pack
-> with version ≥ 2 and ≥ 2 recorded revisions, or a specialized pack citing a
-> promoted learning. **Proven loop evidence (P3 gate): fixture-pack promotes lesson-one**
-
-The page states the P3 requirement, then presents evidence satisfying it, and
-never says the role is still short of P2. That is the same overclaim class the
-"no false capped at P2" guard exists to prevent, pointed the other way.
-
-**Repro:** `python3 scripts/experience_data.py --repo tests/fixtures/experience-mini --out /tmp/fx --no-gh && python3 scripts/experience_build.py --out /tmp/fx` → open `/tmp/fx/role/fixture-runner/index.html`.
-
-## C2 — Cited issue refs are silently dropped when resolution is partial
-
-`scripts/experience_build.py:392-406`
-
-`if resolved:` **replaces** the whole Links row; the raw `issue_links` fallback is
-reached only when *nothing* resolved. So one hit hides every miss. This is a
-regression: before this PR all refs rendered via the raw branch.
-
-It destroys a distinction the data layer builds on purpose —
-`experience_data.py:875` deliberately keeps product-repo refs unresolved "rather
-than pointing at an unrelated dev-agents issue". The renderer then discards
-exactly those. `resolved[:8]` (`experience_data.py:885`) can also truncate
-silently, with no note (skills got a truncation note; issues didn't).
-
-Injected 3 cited refs, 1 resolvable, rendered:
-
-```
-Links  #12 (open · only this one resolved)
-
-'#12'                     present in page: True
-'other/product/issues/9'  present in page: False   <-- cited, dropped
-'#77'                     present in page: False   <-- cited, dropped
-```
-
----
-
-## Failing tests (RED on `fd3e78c`, preconditions green)
-
-Proposed for the Phase 1 section of `tests/run-experience-tests.sh`. Not
-committed — the branch suite stays green until the producer fixes and lands
-these together.
-
-```bash
-# ── CRITIC C1: evidence must not overclaim the P3 gate on a sub-P3 role ──
-grep -q 'class="pmi band-p1">P1' "$FIXOUT/role/fixture-runner/index.html" \
-  && ok "precondition: fixture-runner is P1" || bad "precondition: fixture-runner is P1"
-grep -q 'Proven loop evidence (P3 gate)' "$FIXOUT/role/fixture-runner/index.html" \
-  && ok "precondition: P1 role renders the P3-gate evidence list" \
-  || bad "precondition: P1 role renders the P3-gate evidence list"
-grep -q 'P3 gate is not met\|does not meet the P3 gate\|not met' \
-     "$FIXOUT/role/fixture-runner/index.html" \
-  && ok "P1 role with evidence states the P3 gate is still unmet" \
-  || bad "P1 role with evidence states the P3 gate is still unmet"
-
-# ── CRITIC C2: cited issue refs survive partial gh resolution ──
-# inject into $INJ/data/index.json: issue_links = ["#12", "https://github.com/other/product/issues/9", "#77"]
-# with issue_links_resolved = [ {ref:"#12", ...} ] only, then re-render.
-for ref in '#12' 'other/product/issues/9' '#77'; do
-  grep -qF "$ref" "$INJ/trail/conductor-fixture-note/index.html" \
-    && ok "Links row still shows cited ref $ref" || bad "Links row still shows cited ref $ref"
-done
-```
-
-Observed:
-
-```
-== CRITIC C1 ==
-  ok   precondition: fixture-runner is P1
-  ok   precondition: P1 role renders the P3-gate evidence list
-  FAIL P1 role with evidence states the P3 gate is still unmet
-== CRITIC C2 ==
-  ok   Links row still shows cited ref #12
-  FAIL Links row still shows cited ref other/product/issues/9
-  FAIL Links row still shows cited ref #77
-== 3 passed, 3 failed ==
-```
-
-## Scope note
-
-Both fixes are renderer-only and land inside the two blocks already touched by
-this PR. No data-contract change, no restyle, no new CSS. Direction is the
-producer's call — I do not prescribe copy.
-
-## Next (loop 2)
-
-Re-run C1 + C2 plus the full suite. If the producer disputes C1 as
-copy-not-defect, that escalates to CTO rather than a third loop.
+Re-run C1 + C2 from the verdict, then the full suite. Check the C1 copy on the
+P1 page reads as gate-unmet (not merely "not yet P3" hedging) and that the C2
+union does not duplicate a ref when `resolved[:8]` coverage and raw refs
+overlap. Everything else in the verdict was already PASS and untouched.
