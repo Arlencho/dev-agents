@@ -116,8 +116,35 @@ assert_json "redaction: token-shaped strings replaced" "$FJ" \
   '"[redacted" in T["3-fixture-builder-secrets"]["handoff_markdown"] and "FIXTURE" not in T["3-fixture-builder-secrets"]["handoff_markdown"]'
 assert_absent "no secret-shaped tokens in fixture JSON+HTML" "$FIXOUT" "$SECRET_SHAPES"
 assert_absent "no operator home paths in fixture JSON+HTML"  "$FIXOUT" "$HOME_PATHS"
-assert_json "no agent transcript bodies (log filename only)" "$FJ" \
-  'all("/" not in t["source"]["log_name"] for t in d["trails"])'
+
+# ── agent transcripts (SYNTHESIS: "Still reject … transcript dumps") ──
+# These assertions are only worth anything if the fixtures actually carry
+# agent-log paths and a transcript body on disk. Guard that first — an empty
+# `log` field made every check below silently vacuous before.
+LOG_MARKER='FIXTURE_TRANSCRIPT_BODY_MUST_NOT_BE_INGESTED'
+FIXTURE_LOG="$FIX/logs/dev-agents-feat-secrets-20260101-101112.log"
+exists "fixture plants a real agent transcript on disk" "$FIXTURE_LOG"
+grep -q "$LOG_MARKER" "$FIXTURE_LOG" 2>/dev/null \
+  && ok "fixture transcript carries the marker (not vacuous)" \
+  || bad "fixture transcript carries the marker (not vacuous)"
+grep -REq "$SECRET_SHAPES" "$FIXTURE_LOG" 2>/dev/null \
+  && ok "fixture transcript carries secret shapes (not vacuous)" \
+  || bad "fixture transcript carries secret shapes (not vacuous)"
+if grep -REl "$HOME_PATHS" "$FIX" >/dev/null 2>&1; then
+  ok "fixture input carries operator home paths (not vacuous)"
+else
+  bad "fixture input carries operator home paths (not vacuous)"
+fi
+assert_json "fixtures supply absolute agent-log paths (not vacuous)" "$FJ" \
+  'sum(1 for t in d["trails"] if t["source"]["log_name"]) >= 4'
+
+# The contract: filename only, as a join hint. Directory, operator home and
+# transcript body must never cross into the projection.
+assert_json "agent log kept as filename only, directories stripped" "$FJ" \
+  '(T["3-fixture-builder-secrets"]["source"]["log_name"] == "dev-agents-feat-secrets-20260101-101112.log"
+    and all("/" not in t["source"]["log_name"] for t in d["trails"]))'
+assert_absent "no agent transcript bodies in fixture JSON+HTML" "$FIXOUT" "$LOG_MARKER|FIXTURELOG"
+assert_absent "no agent-log directory dumps in fixture JSON+HTML" "$FIXOUT" 'agent-logs/|dev/agent-logs'
 
 # ── HTML projection ──────────────────────────────────────────────────
 for page in index work/index roles/index skills/index learnings/index conductor/index about/index \
@@ -181,6 +208,43 @@ fi
 for target in experience experience-open desk; do
   make -n "$target" >/dev/null 2>&1 && ok "make $target resolves" || bad "make $target resolves"
 done
+
+echo ""
+echo "== C. make experience-data must not wipe the rendered site =="
+# Regression: experience_data.py used to rmtree the whole out dir, so a data
+# refresh deleted every HTML page built moments earlier.
+make experience >"$TMP/mk-exp.log" 2>&1 && ok "make experience" || bad "make experience"
+exists "HTML index built"        "$SITE/index.html"
+exists "trail-level page built"  "$SITE/work/index.html"
+# Stamp the JSON so a genuine refresh is provable, and mark HTML we expect to survive.
+python3 -c "import json,sys;p=sys.argv[1];d=json.load(open(p));d['generated_at']='STALE-STAMP';json.dump(d,open(p,'w'))" "$RJ"
+sleep 1
+make experience-data >"$TMP/mk-data.log" 2>&1 && ok "make experience-data" || bad "make experience-data"
+
+exists "index.html survives experience-data"      "$SITE/index.html"
+exists "work/index.html survives experience-data" "$SITE/work/index.html"
+exists "about/index.html survives experience-data" "$SITE/about/index.html"
+exists "data/index.json still present"            "$RJ"
+assert_json "data/index.json refreshed (stale stamp gone)" "$RJ" \
+  'd["generated_at"] != "STALE-STAMP" and d["schema_version"] == 1'
+if compgen -G "$SITE/*/index.html" >/dev/null; then
+  ok "sub-page tree survives experience-data"
+else
+  bad "sub-page tree survives experience-data"
+fi
+
+# The renderer, not the data step, owns stale-page cleanup.
+mkdir -p "$SITE/trail/zz-ghost-trail"
+echo "<html>stale</html>" >"$SITE/trail/zz-ghost-trail/index.html"
+make experience-data >>"$TMP/mk-data.log" 2>&1
+[ -f "$SITE/trail/zz-ghost-trail/index.html" ] \
+  && ok "experience-data leaves unrelated HTML alone" \
+  || bad "experience-data leaves unrelated HTML alone"
+make experience >>"$TMP/mk-exp.log" 2>&1
+[ -e "$SITE/trail/zz-ghost-trail" ] \
+  && bad "make experience prunes stale rendered pages" \
+  || ok "make experience prunes stale rendered pages"
+exists "data/index.json survives HTML clean" "$RJ"
 
 echo ""
 echo "== $pass passed, $fail failed =="

@@ -686,9 +686,16 @@ def build_dataset(repo: Path) -> Dict[str, Any]:
 
 
 def write_dataset(repo: Path, out_dir: Path, clean: bool = True) -> Path:
-    if clean and out_dir.exists():
-        shutil.rmtree(out_dir)
-    data_path = out_dir / "data" / "index.json"
+    """Emit the data contract at <out_dir>/data/index.json.
+
+    Cleans ONLY the `data/` tree it owns. Rendered HTML and any other sibling
+    under out_dir survives, so `make experience-data` refreshes the JSON without
+    wiping the site. HTML hygiene belongs to scripts/experience_build.py.
+    """
+    data_dir = out_dir / "data"
+    if clean and data_dir.exists():
+        shutil.rmtree(data_dir)
+    data_path = data_dir / "index.json"
     data_path.parent.mkdir(parents=True, exist_ok=True)
     data_path.write_text(json.dumps(build_dataset(repo), indent=2, sort_keys=False) + "\n", encoding="utf-8")
     return data_path
@@ -699,7 +706,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Fleet Desk data contract — emit site/experience/data/index.json")
     ap.add_argument("--repo", default=str(default_repo), help="repo root to project (default: this repo)")
     ap.add_argument("--out", default="", help="output site dir (default: <repo>/site/experience)")
-    ap.add_argument("--no-clean", action="store_true", help="do not wipe the output dir first")
+    ap.add_argument("--no-clean", action="store_true", help="do not wipe the data/ dir first (never touches rendered HTML)")
     args = ap.parse_args()
     repo = Path(args.repo).resolve()
     out_dir = Path(args.out).resolve() if args.out else repo / "site" / "experience"

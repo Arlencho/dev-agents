@@ -33,6 +33,16 @@ git artifacts → site/experience/data/index.json → site/experience/**.html
 The HTML reads **only** that JSON — see [`docs/experience-data.md`](experience-data.md)
 for the schema. If something is missing from a page, check the JSON first.
 
+Each step cleans only what it owns, so the two are safe to run independently:
+
+| Command | Rewrites | Leaves alone |
+| --- | --- | --- |
+| `make experience-data` | `site/experience/data/` | every rendered `.html` page |
+| `make experience` | `data/` then all `.html` | — (full rebuild) |
+
+So `make experience-data` refreshes the contract **without** wiping an already
+rendered site: reload the browser and the pages read the new JSON.
+
 Then open:
 
 ```text
@@ -126,6 +136,9 @@ reach the JSON, and the tests fail if any survive.
 make experience-data
 python3 -c "import json;d=json.load(open('site/experience/data/index.json'));print(d['counts'])"
 ```
+
+`make experience-data` only rewrites `site/experience/data/` — rendered HTML from
+an earlier `make experience` stays on disk.
 
 Schema and stability rules: [`docs/experience-data.md`](experience-data.md).
 

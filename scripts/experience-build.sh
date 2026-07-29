@@ -13,10 +13,10 @@ OUT_DIR="${EXPERIENCE_OUT:-$REPO_DIR/site/experience}"
 
 command -v python3 >/dev/null 2>&1 || { echo "error: python3 not found on PATH" >&2; exit 1; }
 
-# 1) data first — wipes and rewrites the output dir
+# 1) data first — rewrites data/ only, rendered HTML is left in place
 python3 "$SCRIPT_DIR/experience_data.py" --repo "$REPO_DIR" --out "$OUT_DIR"
 
-# 2) HTML second — pure projection of the JSON
+# 2) HTML second — pure projection of the JSON; clears stale pages, keeps data/
 python3 "$SCRIPT_DIR/experience_build.py" --repo "$REPO_DIR" --out "$OUT_DIR"
 
 echo ""

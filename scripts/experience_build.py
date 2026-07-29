@@ -32,6 +32,27 @@ def write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def clean_html(out: Path) -> None:
+    """Drop previously rendered HTML so pages for vanished trails cannot linger.
+
+    Owns HTML only: `<out>/data` (the contract written by experience_data.py) is
+    never touched, and non-HTML files are left alone.
+    """
+    if not out.is_dir():
+        return
+    data_dir = out / "data"
+    for page in out.rglob("*.html"):
+        if data_dir in page.parents:
+            continue
+        page.unlink()
+    # Prune directories the removed pages left empty (deepest first).
+    for d in sorted((p for p in out.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+        if d == data_dir or data_dir in d.parents:
+            continue
+        if not any(d.iterdir()):
+            d.rmdir()
+
+
 CSS = """
 :root {
   --bg: #fafaf7;
@@ -558,6 +579,7 @@ make desk              # alias</pre>
         write(self.out / "about" / "index.html", self.page("About", body, 1))
 
     def render(self) -> None:
+        clean_html(self.out)
         self.home()
         self.work()
         self.trail_pages()
