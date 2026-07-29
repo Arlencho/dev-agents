@@ -532,7 +532,7 @@ Specialty / niche roles live in [`roles/_archived/`](roles/_archived/README.md) 
 | [`providers/kimi/README.md`](providers/kimi/README.md) | Kimi launcher |
 | [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic Pass 4 |
 
-Ops: `make scorecard`, `make fleet-status` (when configured).
+Ops: `make test` (unit), `make scorecard`, `make fleet-status` (when configured).
 | [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic and judgment-seat launcher |
 | [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md) | Weekly Paperclip release scan log |
 

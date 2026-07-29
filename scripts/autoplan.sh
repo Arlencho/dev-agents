@@ -26,16 +26,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
 if [ $# -lt 1 ]; then
-    echo "Usage: autoplan.sh <plan-file>"
+    echo "Usage: autoplan.sh <plan-file> [--allow-revise]"
+    echo ""
+    echo "Fail-closed (Ground Truth):"
+    echo "  CLI failure, unparseable verdict, REJECT, or REVISE → exit 1"
+    echo "  Re-run after fixing the plan:  ./scripts/autoplan.sh <plan-file>"
+    echo "  Optional: --allow-revise  (interactive continue on REVISE only; never on REJECT)"
     exit 1
 fi
 
 PLAN_FILE="$1"
+shift
+ALLOW_REVISE=false
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --allow-revise) ALLOW_REVISE=true; shift ;;
+        *) echo "Unknown flag: $1"; exit 1 ;;
+    esac
+done
 
 if [ ! -f "$PLAN_FILE" ]; then
     echo -e "${RED}ERROR: Plan file not found: $PLAN_FILE${NC}"
     exit 1
 fi
+
+RERUN_HINT="./scripts/autoplan.sh \"$PLAN_FILE\""
 
 PLAN_CONTENT=$(cat "$PLAN_FILE")
 
@@ -94,14 +109,39 @@ VERDICT: REVISE (followed by SUGGESTIONS:)
 VERDICT: REJECT (followed by REASONS:)"
 
     # Run the CTO agent for plan review (plan-reviewer folded into CTO, lean-roster 2026-06)
-    REVIEW_OUTPUT=$(claude --agent "$REPO_DIR/providers/claude/agents/cto.md" --print "$FULL_PROMPT" 2>/dev/null || echo "VERDICT: APPROVE")
+    # Ground Truth: fail-closed — CLI failure is NOT treated as APPROVE.
+    set +e
+    REVIEW_OUTPUT=$(claude --agent "$REPO_DIR/providers/claude/agents/cto.md" --print "$FULL_PROMPT" 2>&1)
+    REVIEW_EXIT=$?
+    set -e
 
     echo "$REVIEW_OUTPUT"
     echo ""
 
-    # Extract verdict
-    VERDICT=$(echo "$REVIEW_OUTPUT" | grep -oE "VERDICT: (APPROVE|REVISE|REJECT)" | tail -1 | sed 's/VERDICT: //')
-    VERDICT="${VERDICT:-APPROVE}"
+    if [ "$REVIEW_EXIT" -ne 0 ]; then
+        echo -e "  ${RED}Pass $pass_num ($pass_name): CLI failed (exit $REVIEW_EXIT) — fail-closed${NC}"
+        echo -e "  ${CYAN}Re-run after fixing env/auth: $RERUN_HINT${NC}"
+        VERDICT="REJECT"
+        REVIEW_OUTPUT="VERDICT: REJECT
+REASONS:
+- CTO CLI exit $REVIEW_EXIT (not treated as APPROVE)
+- Re-run: $RERUN_HINT
+---
+$REVIEW_OUTPUT"
+    else
+        VERDICT=$(echo "$REVIEW_OUTPUT" | grep -oE "VERDICT: (APPROVE|REVISE|REJECT)" | tail -1 | sed 's/VERDICT: //' || true)
+        if [ -z "$VERDICT" ]; then
+            echo -e "  ${RED}Pass $pass_num ($pass_name): no VERDICT line — fail-closed as REJECT${NC}"
+            echo -e "  ${CYAN}Re-run after fixing the plan/reviewer: $RERUN_HINT${NC}"
+            VERDICT="REJECT"
+            REVIEW_OUTPUT="${REVIEW_OUTPUT}
+
+VERDICT: REJECT
+REASONS:
+- Unparseable review output (missing VERDICT line)
+- Re-run: $RERUN_HINT"
+        fi
+    fi
 
     VERDICTS+=("$VERDICT")
     FEEDBACKS+=("$REVIEW_OUTPUT")
@@ -141,8 +181,17 @@ if [ -x "$GROK_CRITIC" ] && command -v grok >/dev/null 2>&1; then
     if [ "$GROK_EXIT" -eq 0 ]; then
         echo "$GROK_OUTPUT"
         echo ""
-        VERDICT=$(echo "$GROK_OUTPUT" | grep -oE "VERDICT: (APPROVE|REVISE|REJECT)" | tail -1 | sed 's/VERDICT: //')
-        VERDICT="${VERDICT:-APPROVE}"
+        VERDICT=$(echo "$GROK_OUTPUT" | grep -oE "VERDICT: (APPROVE|REVISE|REJECT)" | tail -1 | sed 's/VERDICT: //' || true)
+        if [ -z "$VERDICT" ]; then
+            echo -e "  ${RED}Pass 4 (Cross-vendor): no VERDICT — fail-closed as REJECT${NC}"
+            VERDICT="REJECT"
+            GROK_OUTPUT="${GROK_OUTPUT}
+
+VERDICT: REJECT
+REASONS:
+- Unparseable Grok review (missing VERDICT line)
+- Re-run: $RERUN_HINT"
+        fi
         PASS_NAMES+=("Cross-vendor")
         VERDICTS+=("$VERDICT")
         FEEDBACKS+=("$GROK_OUTPUT")
@@ -154,11 +203,13 @@ if [ -x "$GROK_CRITIC" ] && command -v grok >/dev/null 2>&1; then
             echo -e "  ${RED}Pass 4 (Cross-vendor): REJECT${NC}"
         fi
     else
-        echo -e "  ${YELLOW}Cross-vendor pass failed (exit $GROK_EXIT) — continuing without it${NC}"
+        # Grok CLI error: skip Pass 4 (do not invent APPROVE); continue with passes 1–3
+        echo -e "  ${YELLOW}Pass 4 (Cross-vendor): skipped after exit $GROK_EXIT (not treated as APPROVE)${NC}"
+        echo -e "  ${CYAN}Optional re-run with grok healthy: $RERUN_HINT${NC}"
     fi
     echo ""
 else
-    echo -e "  ${CYAN}Pass 4 (Cross-vendor/Grok): skipped — grok CLI not installed${NC}"
+    echo -e "  ${CYAN}Pass 4 (Cross-vendor/Grok): skipped — grok CLI not installed (not a fail)${NC}"
     echo ""
 fi
 
@@ -188,7 +239,8 @@ done
 echo ""
 
 if [ "$HAS_REJECT" = true ]; then
-    echo -e "${RED}Plan REJECTED by one or more reviewers.${NC}"
+    echo -e "${RED}Plan REJECTED (fail-closed). Dispatch will not proceed.${NC}"
+    echo -e "${CYAN}Fix the plan, then re-run: $RERUN_HINT${NC}"
     echo ""
     for i in "${!VERDICTS[@]}"; do
         if [ "${VERDICTS[$i]}" = "REJECT" ]; then
@@ -199,7 +251,9 @@ if [ "$HAS_REJECT" = true ]; then
     done
     exit 1
 elif [ "$HAS_REVISE" = true ]; then
-    echo -e "${YELLOW}Plan has revision suggestions:${NC}"
+    echo -e "${YELLOW}Plan has REVISE suggestions (fail-closed by default).${NC}"
+    echo -e "${CYAN}Edit the plan, then re-run: $RERUN_HINT${NC}"
+    echo -e "${CYAN}Or re-run with --allow-revise to continue after reading suggestions.${NC}"
     echo ""
     for i in "${!VERDICTS[@]}"; do
         if [ "${VERDICTS[$i]}" = "REVISE" ]; then
@@ -208,13 +262,18 @@ elif [ "$HAS_REVISE" = true ]; then
             echo ""
         fi
     done
-    echo -n "Continue anyway? [y/N] "
-    read -r answer
-    if [[ ! "$answer" =~ ^[Yy] ]]; then
-        echo -e "${RED}Aborted.${NC}"
+    if [ "$ALLOW_REVISE" = true ]; then
+        echo -n "Continue despite REVISE? [y/N] "
+        read -r answer
+        if [[ ! "$answer" =~ ^[Yy] ]]; then
+            echo -e "${RED}Aborted. Re-run when ready: $RERUN_HINT${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}Continuing despite revision suggestions (--allow-revise).${NC}"
+    else
+        echo -e "${RED}Aborted (no silent continue). Re-run: $RERUN_HINT${NC}"
         exit 1
     fi
-    echo -e "${GREEN}Continuing despite revision suggestions.${NC}"
 else
     echo -e "${GREEN}Plan approved by all ${#VERDICTS[@]} reviewers. Ready to dispatch.${NC}"
 fi

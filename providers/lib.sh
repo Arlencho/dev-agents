@@ -14,6 +14,40 @@ strip_frontmatter() {
     awk 'BEGIN{fm=0} /^---$/{fm++; next} fm!=1' "$1"
 }
 
+# Resolve what model the launcher will actually use (Ground Truth provenance).
+# Usage: effective_model <vendor> <requested>
+# - Claude: requested tier/id is passed through; empty → "default"
+# - Kimi/Grok: Claude tier aliases (opus|sonnet|haiku) are ignored → vendor-default
+#   (Kimi CLI default = K3; Grok CLI default = current Build model)
+# - Non-empty non-alias requested → passed through as vendor-native id
+effective_model() {
+    local vendor="${1:-}"
+    local requested="${2:-}"
+    case "$vendor" in
+        kimi|grok)
+            case "$requested" in
+                ""|opus|sonnet|haiku)
+                    if [ "$vendor" = "kimi" ]; then
+                        echo "vendor-default-k3"
+                    else
+                        echo "vendor-default"
+                    fi
+                    ;;
+                *)
+                    echo "$requested"
+                    ;;
+            esac
+            ;;
+        claude|*)
+            if [ -n "$requested" ]; then
+                echo "$requested"
+            else
+                echo "default"
+            fi
+            ;;
+    esac
+}
+
 # Run a vendor CLI, classify the outcome against the rate-cap pattern table.
 # Usage: run_and_classify <vendor> <cmd...>
 # Only the LAST 25 lines of output are matched — cap/auth messages appear at

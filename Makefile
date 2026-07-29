@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard
+.PHONY: help sync status dispatch bootstrap setup lint test learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -46,6 +46,21 @@ lint: ## Check sync + validate YAML
 	@echo ""
 	@echo "Validating workers.yaml structure..."
 	@grep -q "machines:" config/workers.yaml && echo "  workers.yaml: OK" || (echo "  workers.yaml: MISSING machines: key" && exit 1)
+
+test: ## Ground Truth unit tests (launchers, failover, routing, autoplan fail-closed)
+	@echo "== launcher contract =="
+	@./tests/run-launcher-tests.sh
+	@echo ""
+	@echo "== failover =="
+	@./tests/run-failover-tests.sh
+	@echo ""
+	@echo "== routing + effective_model =="
+	@./tests/run-routing-tests.sh
+	@echo ""
+	@echo "== autoplan fail-closed =="
+	@./tests/run-autoplan-failclosed-tests.sh
+	@echo ""
+	@echo "All test suites passed."
 
 paperclip-up: ## Start local Paperclip (idempotent — installs first run, starts subsequently)
 	@./scripts/paperclip-up.sh
