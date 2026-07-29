@@ -104,6 +104,32 @@ Passes 1–3 run sequentially with accumulated feedback. Pass 4 is best-effort. 
 
 ---
 
+## Session modes (Conductor / Wave / Auto)
+
+**Phase 0 co-pilot contracts** — behavior only; no new daemon. Full text: [`session-modes.md`](session-modes.md). Freeze: [`proposals/session-modes-SYNTHESIS.md`](proposals/session-modes-SYNTHESIS.md).
+
+| Mode | When | Human gate |
+|------|------|------------|
+| **Conductor** | One surface, one primary role | Packet + one-line plan under `wave-plans/conductor/` → human **go** → `dispatch.sh`. Chat **does not** implement in-scope product code. |
+| **Wave** | Multi-role / multi-PR / milestone | Plan file → *planning* then *armed* → human **trigger**. |
+| **Auto** | Default when skill is loaded | Decision table selects Conductor / Wave / stay-in-chat; announce; lock per pin. **Not** `dispatch.sh --auto`. |
+
+Escape hatches (one turn): `fix here`, `don't dispatch`, `switch to …`.
+
+**Skill inject:** `session-modes` is mapped on `orchestrator` in `config/role-skills.yaml`. Packet template: [`templates/task-packet.md`](../templates/task-packet.md).
+
+Example Conductor plan line:
+
+```
+1 | web-frontend | Fix missing space after bold legal entity (ABarranges class) | feat/fix-abarranges-space
+```
+
+```bash
+./scripts/dispatch.sh git@github.com:<org>/<repo>.git wave-plans/conductor/<name>.plan
+```
+
+---
+
 ## Ground Truth (fleet measurement)
 
 Shipped so localhost and remote fleets leave **auditable evidence**:

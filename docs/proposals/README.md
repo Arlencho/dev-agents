@@ -14,6 +14,7 @@ Design proposals and freezes for the dev-agents toolkit. **Not operator runbooks
 | File | Status | Notes |
 |------|--------|--------|
 | `skills-evolution-SYNTHESIS.md` | **Freeze** | Skills Phase 0 inject shipped; promote via PR |
+| `session-modes-SYNTHESIS.md` | **Freeze** | Session modes Phase 0: docs + skill + packet; no daemon |
 | `multi-vendor-context-transparency-SYNTHESIS.md` | **Freeze** | Handoff / brain Phase 0–1 direction |
 
 ## Briefs (owner asks)
@@ -24,15 +25,15 @@ Design proposals and freezes for the dev-agents toolkit. **Not operator runbooks
 | `session-modes-BRIEF.md` | Brief for session modes (Conductor / Wave / Auto) |
 | `phase-1-handoff-ledger.md` | Phase 1 handoff ledger notes |
 
-## Competing session-modes drafts (not shipped)
+## Session-modes seat drafts (superseded by SYNTHESIS)
 
 | File | Seat |
 |------|------|
-| `session-modes-proposal-claude.md` | Claude |
-| `session-modes-proposal-grok.md` | Grok |
-| `session-modes-proposal-kimi.md` | Kimi |
+| `session-modes-proposal-claude.md` | A |
+| `session-modes-proposal-grok.md` | B |
+| `session-modes-proposal-kimi.md` | C |
 
-Do **not** copy these into `docs/operator-guide.md` as product law until owner synthesis.
+Prefer `session-modes-SYNTHESIS.md` + living contract [`../session-modes.md`](../session-modes.md).
 
 ## Competing skills-evolution drafts
 

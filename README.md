@@ -92,9 +92,11 @@ Agents load **charter (L1) + skill packs (L2) + case file (L3 preamble) + task**
 
 **Runtime (fleet dispatch):** `scripts/run-remote.sh` runs `scripts/skill-inject.sh` and places L2 text **before** the L3 preamble (not inside `preamble.sh`). Missing packs warn and continue — never block dispatch. Workers also receive a copy under `~/dev/agent-runtime/skills/`.
 
-**Starter packs (shared, not 50 novels):** `evidence-first`, `untrusted-prior`, `handoff-intent`, `git-ship`, `docs-no-hallucinate`. Lint with `./scripts/skills-lint.sh`.
+**Starter packs (shared, not 50 novels):** `evidence-first`, `untrusted-prior`, `handoff-intent`, `git-ship`, `docs-no-hallucinate`, `session-modes` (orchestrator). Lint with `./scripts/skills-lint.sh`.
 
 **Evolution:** experience stays in learnings/handoffs/retros; **promotion is a PR** (project → critic or human; **global → human always**). No producer auto-merge of skills. No AI branding on commits/PRs (`git-ship` + commit-msg guardrail). Full freeze: [`docs/proposals/skills-evolution-SYNTHESIS.md`](docs/proposals/skills-evolution-SYNTHESIS.md). Phases 1–3 (manual promote practice → candidate automation → metrics) are planned there; only **Phase 0 inject** is shipped.
+
+**Session modes (Phase 0):** co-pilot contracts **Conductor / Wave / Auto** — classify → task packet → human go → `dispatch.sh`. Chat does not silently ship product fixes. Contract: [`docs/session-modes.md`](docs/session-modes.md). Freeze: [`docs/proposals/session-modes-SYNTHESIS.md`](docs/proposals/session-modes-SYNTHESIS.md).
 
 ## Operator Quickstart
 
@@ -109,7 +111,7 @@ claude --agent go-backend "fix auth bug #123"
 claude --agent web-frontend "build login page"
 claude --agent security-reviewer "review PR #301"
 ```
-Use this for focused, interactive work — one agent, immediate feedback, no wave coordination.
+Use this for focused, interactive work — one agent, immediate feedback, no wave coordination. For product pins, prefer **session modes** ([`docs/session-modes.md`](docs/session-modes.md)): Conductor routes to a seat instead of self-fixing in chat.
 
 **Mode 2: Fleet dispatch (multi-agent, parallel waves, from shell)**
 ```bash
@@ -264,19 +266,20 @@ dev-agents/
 ├── skills/                   # L2 global skill packs (SKILL.md per pack)
 │   ├── README.md             # Layout, promotion rules, delivery-face law
 │   ├── evidence-first/  untrusted-prior/  handoff-intent/
-│   ├── git-ship/  docs-no-hallucinate/
+│   ├── git-ship/  docs-no-hallucinate/  session-modes/
 │   └── _candidates/          # Drafts only — never injected at runtime
 ├── docs/
 │   ├── architecture.md
 │   ├── org-chart.md          # Producer-critic reporting + pairing visualization
 │   ├── operator-guide.md     # Fleet ops: dispatch, logs, handoffs, failures
 │   ├── plan-file-format.md   # Detailed WAVE format spec
+│   ├── session-modes.md      # Conductor / Wave / Auto co-pilot contracts
 │   ├── paperclip-architecture.md
 │   ├── issue-lifecycle.md
 │   ├── scenarios.md
 │   └── proposals/            # Design freezes (skills evolution, multi-vendor, …)
-├── templates/                # Project CLAUDE.md scaffolds
-│   ├── go-nextjs.md  python-fastapi.md
+├── templates/                # Project CLAUDE.md scaffolds + Conductor packet
+│   ├── go-nextjs.md  python-fastapi.md  task-packet.md
 ├── config/
 │   ├── workers.yaml          # Worker machine registry + provider_preferences
 │   ├── routing.yaml          # model_routing + provider_failover
@@ -519,6 +522,7 @@ Specialty / niche roles live in [`roles/_archived/`](roles/_archived/README.md) 
 |---|---|
 | [`docs/operator-guide.md`](docs/operator-guide.md) | **Start here for ops** — dispatch, handoffs, skills inject, failures, cookbook |
 | [`docs/plan-file-format.md`](docs/plan-file-format.md) | Canonical WAVE plan grammar (matches `dispatch.sh`) |
+| [`docs/session-modes.md`](docs/session-modes.md) | Co-pilot session modes: Conductor / Wave / Auto (Phase 0) |
 | [`docs/architecture.md`](docs/architecture.md) | Fleet topology: launchers, failover, L1/L2/L3, Paperclip coexistence |
 | [`docs/org-chart.md`](docs/org-chart.md) | Pairing + reporting (vendor-aware) |
 | [`docs/paperclip-architecture.md`](docs/paperclip-architecture.md) | Paperclip companies / agents / issues |
@@ -528,6 +532,7 @@ Specialty / niche roles live in [`roles/_archived/`](roles/_archived/README.md) 
 | [`docs/proposals/README.md`](docs/proposals/README.md) | **Proposals index** — freezes vs drafts |
 | [`skills/README.md`](skills/README.md) | L2 skill packs |
 | [`docs/proposals/skills-evolution-SYNTHESIS.md`](docs/proposals/skills-evolution-SYNTHESIS.md) | Skills freeze |
+| [`docs/proposals/session-modes-SYNTHESIS.md`](docs/proposals/session-modes-SYNTHESIS.md) | Session modes freeze (Phase 0) |
 | [`config/role-skills.yaml`](config/role-skills.yaml) | Role → skill map |
 | [`providers/kimi/README.md`](providers/kimi/README.md) | Kimi launcher |
 | [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic Pass 4 |
