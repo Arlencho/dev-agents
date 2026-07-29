@@ -89,6 +89,7 @@ wins — the file is append-only) plus the sibling `*.md`.
 | `handoff_summary` | First bullet of `## Built`, ≤ 200 chars |
 | `handoff_sections` | `built`, `decisions`, `do_not_repeat`, `evidence`, `open_questions`, `next_hint` → `{text, lines, truncated}`; redacted, ≤ 4000 chars each |
 | `handoff_markdown` | Whole handoff, redacted, ≤ 12000 chars |
+| `handoff_truncated` | `true` when `handoff_markdown` hit the 12000-char cap |
 | `source` | `{jsonl, md, log_name}` — `log_name` is a **filename only**; transcripts are never read |
 | `is_critic` | Role name contains `critic` |
 | `reviewed_by` | Task ids of critic trails on the **same branch** (empty = not reviewed) |
@@ -145,7 +146,8 @@ One entry per branch that carries **both** a producer trail and a critic trail:
 
 ## `role_stats`
 
-Per role: `n`, `n_done`, `n_fail`, `n_unknown`, `n_known`, `success_rate`,
+Per role: `role` (the role name, repeated inside the object so a role entry
+survives being read out of the map), `n`, `n_done`, `n_fail`, `n_unknown`, `n_known`, `success_rate`,
 `vendor_mix`, `packs`, `specialized_packs`, `skill_coverage`, `is_critic`,
 `n_reviewed`, `review_rate`, `n_reviews_given`, `paired_branches`, `task_ids`,
 and `pmi`.

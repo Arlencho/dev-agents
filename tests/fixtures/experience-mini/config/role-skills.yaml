@@ -5,7 +5,14 @@ roles:
   default: evidence-first untrusted-prior git-ship
   fixture-builder: evidence-first untrusted-prior git-ship fixture-pack
   fixture-critic: evidence-first untrusted-prior git-ship
-  fixture-runner: evidence-first untrusted-prior git-ship
+  # proven-loop evidence (fixture-pack promotes lesson-one) but n_done=4, below
+  # the P2 outcome bar → must stay P1. Pins "P3 needs the P2 bar too".
+  fixture-runner: evidence-first untrusted-prior git-ship fixture-pack
   fixture-flaky: evidence-first untrusted-prior git-ship
-  # clears the P2 outcome bar with defaults only → must stay P2 (no proven loop)
+  # clears the P2 outcome bar with defaults only → must stay P2 (no proven loop).
+  # evidence-first is a qualifying default pack on purpose: pins "shared default
+  # packs are excluded".
   fixture-veteran: evidence-first untrusted-prior git-ship
+  # clears the P2 outcome bar with a specialized pack born at v2 that was never
+  # revised and promotes nothing → must stay P2. Pins the revisions ≥ 2 clause.
+  fixture-solo: evidence-first untrusted-prior git-ship fixture-solo-pack

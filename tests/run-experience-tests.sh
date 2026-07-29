@@ -26,7 +26,7 @@ fail=0
 ok()  { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
 
-# assert_json <name> <json file> <python expression over d/T/R/C/W>
+# assert_json <name> <json file> <python expression over d/T/R/C/W/S/L>
 assert_json() {
   local name="$1" file="$2" expr="$3"
   if python3 - "$file" "$expr" <<'PY'
@@ -36,6 +36,8 @@ T = {t["task_id"]: t for t in d["trails"]}
 R = d["role_stats"]
 C = {c["id"]: c for c in d["companies"]}
 W = {(str(w["wave"]) if w["wave"] is not None else "none"): w for w in d["waves"]}
+S = {s["id"]: s for s in d["skills"]}
+L = {l["slug"]: l for l in d["learnings"]}
 sys.exit(0 if eval(sys.argv[2]) else 1)
 PY
   then ok "$name"; else bad "$name"; fi
@@ -107,7 +109,7 @@ exists "fixture data/index.json" "$FJ"
 assert_json "schema_version is pinned"            "$FJ" 'd["schema_version"] == 2'
 assert_json "phase recorded as 1"                 "$FJ" 'd["phase"] == 1'
 assert_json "generated_at + law recorded"         "$FJ" 'd["generated_at"] and d["law"].endswith("experience-console-SYNTHESIS.md")'
-assert_json "27 trails projected"                 "$FJ" 'len(d["trails"]) == 27 == d["counts"]["trails"]'
+assert_json "32 trails projected"                 "$FJ" 'len(d["trails"]) == 32 == d["counts"]["trails"]'
 
 # ── joins ────────────────────────────────────────────────────────────
 assert_json "join: config_map (experience-joins.yaml)" "$FJ" \
@@ -157,6 +159,46 @@ assert_json "PMI: P3 needs proven-loop evidence"       "$FJ" \
   'all(s["pmi"]["band"] != "P3" or s["pmi"]["inputs"]["proven_loop_evidence"] for s in R.values())'
 assert_json "PMI: P2 without proven loop stays P2"     "$FJ" \
   'R["fixture-veteran"]["pmi"]["inputs"]["proven_loop"] is False and "no P3 yet" in R["fixture-veteran"]["pmi"]["reason"]'
+
+# The three clauses of the P3 gate, each pinned by a fixture that would flip
+# band if the clause were dropped. Without these the gate is only asserted by
+# roles that pass or fail it for other reasons (vacuous coverage).
+#
+# (a) shared default packs are excluded — `specialized`, not `packs`.
+#     evidence-first is a DEFAULT pack shaped to qualify twice over (v2, and it
+#     promotes lesson-default), held by fixture-veteran, who clears P2 on
+#     outcomes. Counting default packs as evidence sends every role to P3.
+assert_json "PMI: qualifying default pack is real (fixture not vacuous)" "$FJ" \
+  '(S["evidence-first"]["version"] >= 2 and S["evidence-first"]["promotes"] == ["lesson-default"]
+    and "evidence-first" in R["fixture-veteran"]["pmi"]["inputs"]["packs"]
+    and R["fixture-veteran"]["pmi"]["inputs"]["specialized_packs"] == [])'
+assert_json "PMI: shared default pack never grants P3"  "$FJ" \
+  '(R["fixture-veteran"]["pmi"]["band"] == "P2"
+    and R["fixture-veteran"]["pmi"]["inputs"]["proven_loop_evidence"] == []
+    and R["fixture-veteran"]["n_done"] >= 5 and R["fixture-veteran"]["success_rate"] >= 0.7)'
+assert_json "PMI: no role cites a default pack as evidence" "$FJ" \
+  'all(not e.startswith(("evidence-first", "untrusted-prior", "git-ship"))
+       for s in R.values() for e in s["pmi"]["inputs"]["proven_loop_evidence"])'
+
+# (b) P3 additionally requires the P2 OUTCOME bar. fixture-runner holds the
+#     evidence-bearing pack but has n_done=4, so only the outcome clause keeps
+#     it down; dropping `p2_ok` from the P3 branch sends it straight to P3.
+assert_json "PMI: evidence without the P2 outcome bar stays below P3" "$FJ" \
+  '(R["fixture-runner"]["pmi"]["inputs"]["proven_loop_evidence"]
+    and R["fixture-runner"]["n_done"] == 4 < 5 and R["fixture-runner"]["success_rate"] >= 0.7
+    and R["fixture-runner"]["pmi"]["band"] == "P1")'
+
+# (c) the version path requires revisions ≥ 2, not merely version ≥ 2.
+#     fixture-solo-pack is born at v2, promotes nothing, and is never revised;
+#     fixture-solo clears P2 on outcomes, so only that clause holds the band.
+#     `revisions < 2` is asserted so fixture rot fails loudly instead of silently.
+assert_json "PMI: pack born at v2 but never revised is not a proven loop" "$FJ" \
+  '(S["fixture-solo-pack"]["version"] == 2 and S["fixture-solo-pack"]["revisions"] < 2
+    and S["fixture-solo-pack"]["promotes"] == []
+    and R["fixture-solo"]["pmi"]["inputs"]["specialized_packs"] == ["fixture-solo-pack"]
+    and R["fixture-solo"]["n_done"] >= 5 and R["fixture-solo"]["success_rate"] >= 0.7
+    and R["fixture-solo"]["pmi"]["band"] == "P2"
+    and R["fixture-solo"]["pmi"]["inputs"]["proven_loop_evidence"] == [])'
 assert_json "PMI: P3 via learning→skill promotion"     "$FJ" \
   '(R["fixture-builder"]["pmi"]["band"] == "P3"
     and any("promotes" in e for e in R["fixture-builder"]["pmi"]["inputs"]["proven_loop_evidence"]))'
@@ -328,6 +370,12 @@ assert_json "no git: warning explains the gap"              "$NJ" 'any("skill ve
 assert_json "no git: cap reason says only promotion was evaluable" "$NJ" \
   '"git history unavailable" in d["pmi_policy"]["cap_reason"] and d["pmi_policy"]["history_available"] is False'
 assert_json "no git: P3 still reachable through promotion"  "$NJ" 'R["fixture-builder"]["pmi"]["band"] == "P3"'
+# …but the promotion path must still exclude default packs, with git out of the
+# picture entirely (promotion reads files, so this is the git-free half of B1).
+assert_json "no git: default pack promotion still grants no P3" "$NJ" \
+  '(S["evidence-first"]["promotes"] == ["lesson-default"]
+    and R["fixture-veteran"]["pmi"]["band"] == "P2"
+    and R["fixture-veteran"]["pmi"]["inputs"]["proven_loop_evidence"] == [])'
 
 # A2.2 — real commits: the version-history path to P3 is proven with actual
 # `git log` output, never a hand-written fixture of fake commits.
@@ -343,9 +391,34 @@ cp -R "$FIX" "$GITREPO"
   printf '\n- [ ] Second revision of the fixture pack.\n' >>skills/fixture-pack/SKILL.md
   git add skills/fixture-pack/SKILL.md
   git commit -qm "skills: revise fixture pack to v2"
+  # A shared DEFAULT pack that also clears the version path (v2 + 2 commits).
+  # Deliberately over-qualified: it must still grant nobody P3.
+  printf '\n- [ ] Second revision of the default pack.\n' >>skills/evidence-first/SKILL.md
+  git add skills/evidence-first/SKILL.md
+  git commit -qm "skills: revise default pack"
+  # A pack with MORE commits than the published depth, so the cap is measurable
+  # rather than merely declared. Assigned to no role, so it cannot move a band.
+  mkdir -p skills/fixture-deep-pack
+  printf -- '---\nid: fixture-deep-pack\nversion: 2\nscope: project\nsummary: Depth-cap fixture.\n---\n\n# Fixture deep pack\n' \
+    >skills/fixture-deep-pack/SKILL.md
+  git add skills/fixture-deep-pack/SKILL.md
+  git commit -qm "skills: add deep pack"
+  i=2
+  while [ "$i" -le 23 ]; do
+    printf -- '- [ ] revision %s\n' "$i" >>skills/fixture-deep-pack/SKILL.md
+    git add skills/fixture-deep-pack/SKILL.md
+    git commit -qm "skills: deep pack revision $i"
+    i=$((i+1))
+  done
 ) >"$TMP/gitrepo-init.log" 2>&1 \
-  && ok "throwaway git repo seeded with 2 commits on a SKILL.md" \
-  || bad "throwaway git repo seeded with 2 commits on a SKILL.md"
+  && ok "throwaway git repo seeded with real commits on SKILL.md files" \
+  || bad "throwaway git repo seeded with real commits on SKILL.md files"
+DEEP_COMMITS=$(git -C "$GITREPO" log --oneline -- skills/fixture-deep-pack/SKILL.md | wc -l | tr -d ' ')
+if [ "$DEEP_COMMITS" -gt 20 ]; then
+  ok "deep pack really has more commits than the depth cap ($DEEP_COMMITS > 20)"
+else
+  bad "deep pack really has more commits than the depth cap (got $DEEP_COMMITS)"
+fi
 python3 "$REPO_DIR/scripts/experience_data.py" --repo "$GITREPO" --out "$TMP/gitrepo-site" --no-gh >"$TMP/gitrepo.log" 2>&1 \
   && ok "build succeeds with git history" || bad "build succeeds with git history"
 GJ="$TMP/gitrepo-site/data/index.json"
@@ -358,8 +431,31 @@ assert_json "git: first/last commit dates published"    "$GJ" \
   '[s for s in d["skills"] if s["id"] == "fixture-pack"][0]["last_commit"] >= [s for s in d["skills"] if s["id"] == "fixture-pack"][0]["first_commit"] != ""'
 assert_json "git: P3 evidence cites the revision count"  "$GJ" \
   'any("recorded revisions" in e for e in R["fixture-builder"]["pmi"]["inputs"]["proven_loop_evidence"])'
-assert_json "git: a single-commit pack is not a proven loop" "$GJ" \
-  'all("evidence-first" not in e for s in R.values() for e in s["pmi"]["inputs"]["proven_loop_evidence"])'
+# B1, version path with real commits: the default pack now clears BOTH proofs
+# (v2 with 2 recorded revisions, and a promotion) and must still grant no P3.
+assert_json "git: over-qualified default pack still grants no P3" "$GJ" \
+  '(S["evidence-first"]["version"] >= 2 and S["evidence-first"]["revisions"] == 2
+    and S["evidence-first"]["promotes"] == ["lesson-default"]
+    and R["fixture-veteran"]["pmi"]["band"] == "P2"
+    and R["fixture-veteran"]["pmi"]["inputs"]["proven_loop_evidence"] == []
+    and all("evidence-first" not in e for s in R.values() for e in s["pmi"]["inputs"]["proven_loop_evidence"]))'
+# B3 with a deterministic revision count: exactly 1 commit, so "born at v2" is
+# isolated from "actually revised" without depending on this repo's own history.
+assert_json "git: v2 pack with exactly 1 commit is not a proven loop" "$GJ" \
+  '(S["fixture-solo-pack"]["version"] == 2 and S["fixture-solo-pack"]["revisions"] == 1
+    and S["fixture-solo-pack"]["promotes"] == []
+    and R["fixture-solo"]["pmi"]["band"] == "P2"
+    and R["fixture-solo"]["pmi"]["inputs"]["proven_loop_evidence"] == [])'
+# B4: the cap is enforced, not just declared. 23 commits exist (asserted above
+# from git itself); the projection must publish exactly `history_depth` of them.
+assert_json "git: history is truncated AT the published depth" "$GJ" \
+  '(S["fixture-deep-pack"]["history_depth"] == 20
+    and len(S["fixture-deep-pack"]["git_history"]) == 20
+    and S["fixture-deep-pack"]["revisions"] == 20
+    and S["fixture-deep-pack"]["history_truncated"] is True)'
+assert_json "git: an untruncated pack is not falsely flagged" "$GJ" \
+  '(S["fixture-pack"]["history_truncated"] is False
+    and len(S["fixture-pack"]["git_history"]) < S["fixture-pack"]["history_depth"])'
 assert_absent "no secret shapes in git-repo projection"  "$TMP/gitrepo-site" "$SECRET_SHAPES"
 
 # A2.3 — env kill switch must work the same as the flag
@@ -418,7 +514,7 @@ if python3 - "$SNAP/summary.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 sys.exit(0 if (
-    d["counts"]["trails"] == 27
+    d["counts"]["trails"] == 32
     and d["schema_version"] == 2
     and d["roles"]["fixture-builder"]["pmi_band"] == "P3"
     and len(d["critic_pairs"]) == 1
