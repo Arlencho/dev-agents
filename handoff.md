@@ -1,154 +1,216 @@
-# Handoff — Fleet Desk Phase 1 DATA CONTRACT (`feat/fleet-desk-phase1-data`)
+# Critic verdict — PR #48 Fleet Desk Phase 1 data contract (schema v2)
 
-Seat: devops. Data layer only — **no visual redesign**. Renderer touched in three
-caption lines that read values out of the JSON (the Phase 0 "capped at P2" text
-would otherwise lie now that P3 is real) plus one `.band-p3` CSS rule.
+**VERDICT: REVISE** (narrow — test coverage only; **no production bug found**)
+
+Branch `feat/fleet-desk-phase1-data` @ `7cb1bd6`. Verify-only pass: no production
+file modified, working tree clean.
+
+Every claim in the PR body verifies, and all seven requested checks pass
+functionally. The revise is for four **surviving mutants** on the headline P3
+gate: the code is correct today, but the contract's central promise is not pinned
+by any test, and one mutant silently inflates the **real fleet's** published PMI
+bands while all 178 tests stay green.
+
+---
 
 ## Built
 
-| File | Change |
-|------|--------|
-| `scripts/experience_data.py` | `SCHEMA_VERSION 1 → 2`, `phase 0 → 1`; skill git history; critic pairing by branch; optional `gh` enrichment; optional snapshot; `--no-gh` / `--snapshot` / `--snapshot-dir` flags |
-| `scripts/experience_build.py` | Reads `pmi_policy.display_cap` (was `phase0_cap`), `fleet.critic_rate_label`, `phase` — caption text only, no layout change |
-| `templates/experience/site.css` | One rule: `.pmi.band-p3` (P2 tokens + inset outline) |
-| `scripts/experience-build.sh` | Forwards extra args to the data step (`--no-gh`, `--snapshot`) |
-| `Makefile` | New `experience-snapshot` target (with `## comment`) |
-| `docs/experience-data.md` | Phase 1 fields, exact P3 gate, pairing + fallback, gh rules, snapshot, **v1 → v2 migration table** |
-| `docs/experience.md` | Phase 1 enrichment table, snapshot command, 3 new troubleshooting rows |
-| `tests/run-experience-tests.sh` | +61 assertions (117 → 178), new Part A2 |
-| `tests/fixtures/experience-mini/` | critic-1 now shares the widget-x branch; new `fixture-veteran` role (wave 7, 5 done) that must stay P2 |
-
-**(1) Skill git history** — `git log --follow -n20 --date=short` per
-`skills/*/SKILL.md` **and** `skills/_candidates/*/SKILL.md`. Per skill:
-`git_history[{sha,date,ts,subject}]`, `revisions`, `first_commit`, `last_commit`,
-`history_available`, `history_truncated`, `history_depth`, `promotes`.
-Top level: `skill_history {available, depth, source, reason, skills_with_history}`.
-
-**P3 gate (exact, documented in `docs/experience-data.md`):** P2 outcome bar
-(`n_done ≥ 5` AND `success_rate ≥ 0.70`) **AND** at least one *specialized* pack
-(beyond the three shared defaults) that either has `version ≥ 2` **and**
-`revisions ≥ 2`, **or** cites a learning file (`promotes` non-empty). Evidence
-strings land in `pmi.inputs.proven_loop_evidence`. `pmi_policy.display_cap` is now
-`P3`; when git cannot be read, `cap_reason` says only the promotion path was
-evaluable and `history_available: false`. Phase 0 caption ("P3 needs
-version/promotion history (Phase 1)" / "Phase 0 caps display at P2") is gone, and
-a test fails if that wording returns.
-
-**(2) Critic pairing** — `pair_critics()` groups trails by branch; a branch with
-≥1 non-critic and ≥1 critic trail is a pair. New: `critic_pairs[]`,
-`counts.critic_pairs`, per-trail `is_critic` / `reviewed_by` / `reviews`,
-role_stats `n_reviewed` / `review_rate` / `n_reviews_given` / `paired_branches`.
-`fleet.critic_rate = paired_producer_trails / producer_trails` with
-`critic_rate_method: branch_pairing`. **Fallback:** zero pairs → Phase 0
-name-based rate with `critic_rate_method: role_name_fallback`;
-`critic_rate_basis` always publishes the raw counts.
-
-**(3) gh enrichment** — at most 4 calls (`auth status`, `repo view`, `pr list`,
-`issue list`, `--limit 200`, per-call timeouts 6/15s), only when `gh` is authed
-**and** the projected repo is the git work-tree root. Adds `pr_url`, `pr_state`,
-`pr_number`, `issue_links_resolved` (titles only, redacted, ≤120 chars — never
-bodies/comments). Fields always exist, empty when it did not run.
-`gh_enrichment.status ∈ {ok, skipped, disabled, unavailable, unauthenticated,
-error}` + `reason`; non-ok also appends a `warnings[]` line. Off switch:
-`--no-gh` / `FLEET_DESK_NO_GH=1`.
-
-**(4) Snapshot** — `make experience-snapshot` → `docs/experience/snapshot/`
-(`summary.json` + `README.md`). Rollup only: counts, fleet, PMI bands + reasons,
-critic pairs, waves, skill versions/revisions, learning statuses, one-line trail
-rows. Every free-text body dropped (`handoff_markdown`, `handoff_sections`,
-skill/learning `body`, `git_history`). **Measured 24.9 KiB** on this repo, 20 KiB
-on the fixture. Not committed here — committing it is an owner call (SYNTHESIS §10).
-
-**(5) schema_version 2** with a migration table in `docs/experience-data.md`
-(4 breaking rows: `phase0_cap`→`display_cap`, band range now includes P3,
-`critic_rate` meaning, `phase`). Everything else is additive.
-
-## Decisions
-
-- **`phase0_cap` renamed, not aliased.** Keeping a key named "phase0" holding
-  "P3" would be a lie on the surface that most needs honesty. That rename is the
-  reason for the version bump.
-- **P3 needs BOTH bars.** Outcomes alone never reach P3, evidence alone never
-  reaches P2. Shared default packs are excluded from evidence: everyone gets
-  them, so they prove nothing about a role.
-- **Two P3 paths.** Version history depends on git; promotion depends only on
-  files. So a git-less projection can still reach P3 honestly, and the
-  `cap_reason` says which path was evaluable.
-- **gh auto-detects rather than opt-in.** Opt-in would mean nobody ever sees PR
-  links. Safety comes from the work-tree-root gate (fixtures never call gh),
-  short timeouts, and status/warnings instead of exceptions.
-- **Bare `#123` only resolves when the trail's branch matched a PR in this repo.**
-  Otherwise a black-aces trail's `#12` would link to an unrelated dev-agents
-  issue. Full URLs resolve only on slug match.
-- **Fixture role `fixture-veteran`** (defaults only, 5 done) exists to prove P2
-  does **not** drift to P3 — `fixture-builder` alone could not prove that.
-- **Git facts are never faked in fixtures.** The revision path to P3 is tested by
-  `git init`-ing a throwaway copy and making real commits; the degradation path by
-  building a copy outside any work tree.
-- **Renderer left alone otherwise.** Trails carry `pr_url`, `reviewed_by`, skill
-  `git_history` etc. in the JSON with no page rendering them yet — that is the
-  next wave's job, per the task.
-
-## Do not repeat
-
-- Do **not** assert PMI bands against `fixture-builder` as the "P2 example" — it
-  is P3 now (promotion path). Use `fixture-veteran`.
-- Do **not** point `assert_json` at `snapshot/summary.json`: that helper requires
-  `role_stats`/`companies`/`trails` top-level keys and the snapshot uses `roles`.
-  Use a bespoke `python3 - <<PY` block.
-- Do **not** let fixture builds hit `gh` (flaky/slow in CI). Part A passes
-  `--no-gh`; the work-tree-root gate also skips fixtures automatically.
-- `make lint` fails on this branch **and on clean `main`** (11 provider-role files
-  out of sync, `./scripts/sync-providers.sh`). Pre-existing, unrelated — verified
-  by stashing all changes and re-running.
-- `redact()` emits `[redacted-token]`, not `[redacted]`, for token shapes.
+Adversarial verification only. Mutation harness in a throwaway clone (`/tmp/mut`);
+scratch git fixtures in `/tmp/{deep,honest,nopair}`. Nothing added to the repo
+except this handoff.
 
 ## Evidence
 
+### Baseline green (item 7)
+
 ```
 $ make test
-… == 178 passed, 0 failed ==
-All test suites passed.                      # was 117 passed before this branch
+== 178 passed, 0 failed ==     |  All test suites passed.
 
-$ python3 scripts/experience_data.py --repo tests/fixtures/experience-mini --out /tmp/fd --no-gh
-Fleet Desk data → /tmp/fd/data/index.json (27 trails, 2 companies, 19 unlinked, 1 critic pairs)
-  gh enrichment: disabled — disabled (--no-gh or FLEET_DESK_NO_GH=1)
-  skill history: available (3/3 packs with commits, depth 20)
+$ make experience / experience-data / desk / experience-snapshot
+all resolve and run — 19 trails, 5 companies, 9 critic pairs
 
-$ make experience-snapshot                   # real repo
-Fleet Desk data → …/site/experience/data/index.json (19 trails, 5 companies, 19 unlinked, 9 critic pairs)
-  gh enrichment: ok
-  skill history: available (6/6 packs with commits, depth 20)
-  snapshot → …/docs/experience/snapshot/summary.json (24.9 KiB, bodies dropped)
-
-$ grep -cE 'gh[pousr]_[A-Za-z0-9]{16,}|/Users/|BEGIN [A-Z ]*PRIVATE KEY' docs/experience/snapshot/summary.json
-0
-
-# real repo fleet block (pairing is live, not a fixture artifact)
-"critic_rate": 1.0, "critic_rate_method": "branch_pairing",
-"critic_rate_basis": {"pairs": 9, "producer_trails": 9, "paired_producer_trails": 9,
-                      "critic_trails": 10, "unpaired_critic_trails": 1, ...}
-
-$ git stash push && make lint   # → same 11-file drift failure without my changes
+$ python3 scripts/experience_build.py …    # after hand-editing schema_version -> 99
+schema mismatch: … is v99, renderer expects v2 — re-run scripts/experience_data.py
+exit code = 1
 ```
 
-New test groups: `A2.1` no-git degradation, `A2.2` real `git init` + 2 commits →
-revision path to P3, `A2.3` env kill switch, `A2.3b` offline unit test of the gh
-mapping (foreign-repo refs must not resolve), `A2.4` snapshot (bodies dropped,
-no secrets, size bound).
+PR claim "`make lint` drift is pre-existing" — **verified honest**: identical
+`FAIL: 11 file(s) out of sync` on this branch *and* on clean `main`.
 
-## Open questions
+### (1) Schema v2 ↔ docs ↔ shipped JSON — PASS
 
-- `trails_with_pr` is 0 on this repo today: every trail's branch belongs to a
-  product repo (black-aces), so nothing matches dev-agents PR head refs. Correct
-  behavior, but PR enrichment stays unproven against live data until a
-  dev-agents-branch trail lands. The mapping itself is unit-tested offline.
-- Snapshot is generated but **not** committed. If the owner wants it checked in,
-  add a wave that commits `docs/experience/snapshot/` and decides refresh cadence.
+Field-level diff of `docs/experience-data.md` against the built JSON:
+
+```
+doc-only top: []            undocumented top: []
+doc-only trail: []          undocumented trail: ['handoff_truncated']
+doc-only skill/learning: [] undocumented skill: []   undocumented learning: []
+doc-only pair: []           undocumented pair: []
+undocumented role_stats: ['role']
+phase0_cap present anywhere: False
+```
+
+The two undocumented fields **pre-date this PR** (both present and equally
+undocumented on `main`, via `git show main:scripts/experience_data.py`). Not a
+regression; nit only. `phase0_cap` is genuinely removed, not aliased.
+
+### (2) Skill git history honest — PASS
+
+Proved the two states are never conflated, using real git:
+
+| Case | `skill_history.available` | per-skill | meaning |
+|------|---------------------------|-----------|---------|
+| no git work tree | `False` | `revisions=0`, `history_available=False` | git unreadable |
+| git repo, file uncommitted | `True` | `revisions=0`, `history_available=True` | no commits yet |
+
+Depth cap genuinely applied: a pack with 26 commits yields exactly 20 entries and
+`history_truncated=True`.
+
+### (3) PMI P3 gate — behavior PASS, coverage FAIL (see Blocking)
+
+P2 outcome bar preserved (`compute_pmi` requires `p2_ok` for both P2 and P3);
+`display_cap` is `P3`; `fixture-veteran` (defaults only, 5/5 done) correctly stays
+P2; the Phase 0 "capped at P2" caption is gone everywhere except the migration
+table, where it belongs.
+
+### (4) Critic pairing by branch — PASS
+
+`critic_pairs[]`, `reviewed_by`/`reviews`, and `critic_rate_method: branch_pairing`
+all correct. Forced the documented fallback (re-branched fixture critics onto
+their own branches):
+
+```
+critic_pairs = 0    method = role_name_fallback
+rate = 0.0741  == critic_trails/trails  -> match: True
+```
+
+### (5) `gh` never fatal + redaction + offline fixtures — PASS
+
+```
+gh removed from PATH  -> exit=0  status=unavailable      warnings=[…build continued…]
+gh present, exits 1   -> exit=0  status=unauthenticated  warnings=[…build continued…]
+```
+
+`pr_url` / `pr_state` / `pr_number` / `issue_links_resolved` exist on every trail
+in both cases. Disabling `redact()` is caught by 5 tests. `trails_with_pr: 0` on
+the real repo is **correct, not a bug** — all 19 trails are product-repo
+`feat/ab-T*` branches, which is the foreign-repo guard working as designed.
+
+### (6) Snapshot — PASS
+
+24.9 KiB (matches claim). `0` secret-shape matches, `0` home-path matches, and no
+key containing `body` anywhere in the payload; `git_history` blobs dropped.
+
+---
+
+## Blocking — 4 surviving mutants (all fixable with fixtures, no production change)
+
+Each mutation was run through the full suite in a clean clone. "SURVIVED" = the
+mutation changed real output while `== 178 passed, 0 failed ==` still printed.
+
+**B1 — `specialized` → `packs` survives, and inflates the real fleet. (highest)**
+
+`docs/experience-data.md` promises "Shared default packs are excluded on purpose".
+Nothing tests it, because no fixture default pack qualifies as evidence. On the
+**real repo**, `git-ship` is a shared default at `v2` / `revisions=2`, so it does:
+
+```
+mutant: evidence = proven_loop_evidence(packs, skill_index)
+REAL REPO -> frontend-critic band=P3  ev=['git-ship v2 with 2 recorded revisions']
+             web-frontend    band=P3  ev=['git-ship v2 with 2 recorded revisions']
+suite: 178 passed, 0 failed
+```
+
+Fix: a fixture role clearing P2 with **defaults only**, where a *default* pack has
+`version≥2` + `revisions≥2`, asserted to stay P2. (`fixture-veteran` is the right
+role; the fixture just needs a qualifying default pack.)
+
+**B2 — dropping the P2 outcome bar from the P3 gate survives.**
+
+`if p2_ok and evidence:` → `if evidence:`. The existing assertion "P3 needs the P2
+outcome bar too" is **vacuous**: the only evidence-bearing fixture role
+(`fixture-builder`, 6/6) also clears P2 comfortably. Demonstrated by giving
+`fixture-runner` (n=5, n_done=4 → below the bar) the evidence-bearing pack:
+
+```
+correct: band=P1  ev=['fixture-pack promotes lesson-one']
+mutant : band=P3  ev=['fixture-pack promotes lesson-one']
+```
+
+Fix: keep a fixture role with proven-loop evidence but sub-P2 outcomes, asserted
+non-P3.
+
+**B3 — dropping `revisions >= 2` from the version path survives.**
+
+The docstring explicitly guards "actually revised, not merely born at v2", but
+`fixture-pack` is `v2` with `revisions=1`, so the version path never fires in Part
+A — only the promotion path is exercised:
+
+```
+fixture-pack v2 rev=1 promotes=[]
+correct: fixture-veteran band=P2  ev=[]
+mutant : fixture-veteran band=P3  ev=['fixture-pack v2 with 1 recorded revisions']
+```
+
+Fix: assert that a `v2` / `revisions=1` specialized pack with no promotion yields
+no evidence.
+
+**B4 — removing `-n{depth}` from `git_file_history` survives.**
+
+The only depth assertion is `d["skill_history"]["depth"] == 20`, which merely
+echoes the constant. With 26 commits on one SKILL.md:
+
+```
+correct: git_history entries=20  history_truncated=True   (declared depth=20)
+mutant : git_history entries=26  history_truncated=True   (declared depth=20)
+```
+
+The mutant publishes a self-contradicting contract and nothing notices. Fix:
+assert `len(git_history) <= history_depth` for every skill — cheap, and catches it
+without needing a 20-commit fixture.
+
+## Non-blocking nits
+
+- `handoff_truncated` (trails) and `role` (role_stats) undocumented — pre-existing
+  on `main`, worth one doc line while the schema table is open.
+- `gh` **missing** and **erroring** paths are never exercised by the suite (no
+  `PATH=` manipulation). Verified correct by hand; a `PATH=/usr/bin:/bin` build
+  would pin it in one line.
+- `role_name_fallback` is never exercised by a fixture. Verified correct by hand.
+- PR body says "117 before this branch"; `main` actually reports
+  `== 124 passed, 0 failed ==`. Cosmetic.
+- `make experience-snapshot` writes `docs/experience/snapshot/`, which is **not**
+  gitignored (unlike `site/experience/`), so the target leaves untracked files that
+  can be committed by accident. Deliberate per SYNTHESIS §10 ("owner call"),
+  flagged so it stays a decision rather than a surprise. I removed the copy my run
+  generated.
+
+## Decisions
+
+- **REVISE, not APPROVE**, despite zero production defects and a fully green
+  suite: three of the four surviving mutants sit on the P3 gate, which is this
+  PR's headline and the number the console publishes about the fleet. B1 in
+  particular means a single identifier (`specialized`) is the only thing standing
+  between the real roster and across-the-board P3 inflation, with no test to catch
+  its removal. Coverage alone is not sign-off on a risky path.
+- Every finding is a **fixture/assertion addition**. No production change is
+  requested and no UI/visual change is implied.
+- Did not re-implement, redesign, or touch production code.
+
+## Do not repeat
+
+- Don't "fix" B1–B4 by editing `scripts/experience_data.py` — the production logic
+  is already correct. Only the fixtures/assertions are missing.
+- Don't assert `skill_history.depth == 20`; it is a constant echo and proves
+  nothing. Assert the length of the emitted history instead.
+- Don't treat `trails_with_pr: 0` on the real repo as a gh bug — it is the
+  foreign-repo guard behaving correctly for `feat/ab-T*` product trails.
+- Don't build the P2-bar assertion off `fixture-builder`; it clears P2 anyway,
+  which is exactly what made the existing assertion vacuous.
 
 ## Next hint
 
-Renderer wave: surface `reviewed_by` / `critic_pairs` on trail + work rows,
-`git_history` on skill pages, `pr_url` / `pr_state` on trail detail, and the P3
-evidence list on role pages. All fields already exist in `data/index.json`; no
-data work needed.
+B1 and B4 together are ~6 lines of fixture/assert and cover the two highest-value
+gaps. B2 and B3 each need one small fixture role. Afterwards, re-run the four
+mutations above and confirm each is caught.
