@@ -1,61 +1,44 @@
-# Handoff — Fleet Desk polish N5 (chipmark a11y word boundary)
+# Handoff — Fleet Desk v2 design, Proposal A (seat A)
 
-Branch `feat/fleet-desk-polish-n5` → PR #51 (draft). Task was a11y-only; no restyle.
+Branch `feat/proposal-fleet-desk-v2-A`. Design proposal only — no product UI code, no `experience_data.py` changes, per brief.
 
 ## Built
 
-- `scripts/experience_build.py:121` — dim-chip chipmark now renders
-  `<span class="chipmark"> {status}</span>` (leading space inside the span).
-  Before, `…{esc(id)}{mark}` produced `<a …>ghostco<span class="chipmark">placeholder</span></a>`,
-  so the accessible name was the glued "ghostcoplaceholder"; now it is
-  "ghostco placeholder" with a word boundary.
-- `tests/run-experience-tests.sh` — dim-chip assertion now requires
-  `chipmark"> placeholder` (with space), plus a new regression check
-  "chipmark accessible name keeps a word boundary (no glued names)" that
-  goes RED if `<span class="chipmark">placeholder` (glued form) returns.
+- `docs/proposals/fleet-desk-v2-proposal-A.md` — full v2 design covering all 10 required brief sections:
+  - Name: keep **Fleet Desk**; two rooms — **Almanac** (static record, Phase 0/1 pages restyled) + **The Floor** (`/live/`, new live ops surface).
+  - Visual system: token sheet (one cyan accent, status hues always paired with words), system sans + dominant mono on the Floor, three-job motion budget with `prefers-reduced-motion` parity.
+  - Wireframes: Home, Floor (wave fan-out lanes vs conductor serial chain — distinct silhouettes for P5), Work with wave summary chips + Replay, Trail with timeline strip, plus Roles/Skills/Learn/Conductor/Company/About deltas.
+  - Live design: new append-only `logs/fleet-events/<dispatch_id>.jsonl` emitted by `dispatch.sh` (closed v1 event set incl. `task_ratecap`, `dispatch_heartbeat`), on-demand `scripts/desk-live.sh` stdlib server, 2 s polling, staleness/offline/replay honesty rules; handoff JSONL stays authoritative over events.
+  - CLI bridge: `make desk-live` once; Floor auto-follows new dispatches via `latest` pointer; chat/CLI stays the only control plane.
+  - Phased ship: A restyle (static only) → B live tail → C replay + additive `timeline[]` (no schema bump); rough seat-day estimates + kill criteria.
 
-## Decisions (+why)
+## Decisions
 
-- Whitespace went **inside the span text**, not between `</a>` text nodes and
-  not via CSS. Text inside the element survives HTML whitespace collapsing and
-  is picked up by accessible-name computation; a space between the id text and
-  the span would also work, but keeping it inside the span makes the invariant
-  greppable as one literal string (`chipmark"> placeholder`), which is what the
-  test pins.
-- Did not use `&nbsp;` — a regular space is what screen readers treat as a word
-  break and it keeps the markup plain.
-- Visuals untouched on purpose: `.chip .chipmark` already has
-  `margin-left: 5px` (`templates/experience/site.css:110-113`), so the extra
-  collapsible space adds no meaningful layout shift. No CSS changes, no redesign.
+- Kept product name; renamed nothing user-facing. Live surface is a room inside Fleet Desk, not a second product.
+- Events stream over `fleet-status.json` snapshot: client reduces events; a derived snapshot file is a second thing to go stale.
+- Polling over SSE for Phase B (debuggable with `curl`); SSE deferred to C only if laggy.
+- Activity = agent-log byte growth, explicitly labeled `proxy`, never a progress percent; remote lanes default to no bar (owner Q5).
+- Hard non-goal restated: no dispatch/promote buttons in any browser surface; Floor is read-only glass.
 
 ## Do not repeat
 
-- Don't try to fix this with `title=` or `aria-label` on the chip — the visible
-  text already carries the status (that was the earlier a11y fix); the only
-  defect was the missing word boundary in the computed name.
-- Don't assert on rendered `site/experience/` output in tests; the suite
-  renders the fixture (`$FIXOUT`) fresh each run. Real-site output is a build
-  artifact.
+- Do not read/copy `fleet-desk-v2-proposal-B.md` / `-C.md` (independence rule) — not read here.
+- Do not propose a schema v2 bump for live: Phase C additions are additive per `docs/experience-data.md` change rules.
+- Do not source liveness from plan parsing alone — lanes exist only from events; planned tasks render `queued`.
 
 ## Evidence
 
-- `make test` → `== 222 passed, 0 failed ==` then "All test suites passed."
-- New check runs and passes: `ok chipmark accessible name keeps a word boundary (no glued names)`
-- Rendered fixture HTML contains `chipmark"> placeholder` (verified in
-  `site/experience/index.html`, ×3, after the suite's `make experience` run).
-- Commit `53ab84f` on `feat/fleet-desk-polish-n5`, pushed with upstream.
+- Grounding checks run before writing (all in this session):
+  - `ls scripts/ config/` → `dispatch.sh`, `fleet-status.sh`, `provider-scorecard.sh`, `run-remote.sh` etc. exist.
+  - `grep -n "provider-state" scripts/dispatch.sh` → cooldown file written at `dispatch.sh:272` (`logs/provider-state/<vendor>.cooldown`).
+  - `grep -n "wave\|wait" scripts/dispatch.sh` → wave grouping ~L437–494, per-wave PID wait/retry loop ~L756–857, exit codes 75/69/77 handled.
+  - `ls logs/provider-state/` → directory exists; `ls ~/dev/agent-logs | tail` → per-task log files exist.
+- Read fully: brief, `experience-console-SYNTHESIS.md`, `docs/experience.md`, `docs/experience-data.md`, `docs/session-modes.md`.
 
 ## Open questions
 
-- None blocking. If a critic wants byte-identical pre-fix visuals, note the
-  added space is collapsible and sits next to a 5px CSS margin — effectively
-  invisible; deliberate trade for a greppable a11y invariant.
+- Owner questions §10 of the proposal (events retention, auto-open, idle Floor, chime, remote proxy, Almanac theme default).
 
-## Next hint (critic)
+## Next hint
 
-- Mutation-check the new test: revert the space in
-  `scripts/experience_build.py` (`chipmark"> {status}` → `chipmark">{status}`)
-  and confirm both dim-chip assertions go RED and nothing else does.
-- Confirm no other renderer path emits `.chip` + `.chipmark` (only
-  `experience_build.py` builds chips; grep `chipmark` returns the renderer,
-  the test, and the CSS).
+- After seats B/C land: owner SYNTHESIS, then Phase A (pure restyle of `templates/experience/site.css` + build templates) is safely implementable independent of the live-events decision.
