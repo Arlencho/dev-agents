@@ -23,7 +23,18 @@ Design proposals and freezes for the dev-agents toolkit. **Not operator runbooks
 |------|--------|
 | `skills-evolution-BRIEF.md` | Brief for skills round |
 | `session-modes-BRIEF.md` | Brief for session modes (Conductor / Wave / Auto) |
+| `experience-console-BRIEF.md` | Brief for Experience Console (operator UI: work, skills, learnings) |
 | `phase-1-handoff-ledger.md` | Phase 1 handoff ledger notes |
+
+## Competing experience-console drafts (not shipped)
+
+| File | Seat |
+|------|------|
+| `experience-console-proposal-claude.md` | A |
+| `experience-console-proposal-grok.md` | B |
+| `experience-console-proposal-kimi.md` | C |
+
+Do **not** treat as product law until owner SYNTHESIS.
 
 ## Session-modes seat drafts (superseded by SYNTHESIS)
 
