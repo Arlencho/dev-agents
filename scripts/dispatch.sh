@@ -534,16 +534,17 @@ if [ "$SKIP_AUTH_PREFLIGHT" = false ]; then
             [ -n "$whost" ] && NEED_HOSTS["$whost"]=1
         done <<< "$WORKERS"
 
-        echo -e "${BOLD}Vendor auth preflight${NC} (vendors: ${VENDOR_LIST:-none})"
+        # --deep: real headless one-shot per vendor (status/files alone can lie)
+        echo -e "${BOLD}Vendor auth preflight (deep headless)${NC} (vendors: ${VENDOR_LIST:-none})"
         AUTH_FAIL=0
         for whost in "${!NEED_HOSTS[@]}"; do
             if [ "$whost" = "localhost" ] || [ "$whost" = "127.0.0.1" ]; then
-                if ! "$AUTH_CHECK" --vendors "$VENDOR_LIST"; then
+                if ! "$AUTH_CHECK" --deep --vendors "$VENDOR_LIST"; then
                     AUTH_FAIL=1
                 fi
             else
                 echo -e "  remote host ${CYAN}$whost${NC}:"
-                if ! "$AUTH_CHECK" --host "$whost" --vendors "$VENDOR_LIST"; then
+                if ! "$AUTH_CHECK" --deep --host "$whost" --vendors "$VENDOR_LIST"; then
                     AUTH_FAIL=1
                 fi
             fi

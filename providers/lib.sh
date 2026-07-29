@@ -26,7 +26,7 @@ effective_model() {
     case "$vendor" in
         kimi|grok)
             case "$requested" in
-                ""|opus|sonnet|haiku)
+                ""|opus|sonnet|haiku|claude-fable-5|claude-*|fable-*)
                     if [ "$vendor" = "kimi" ]; then
                         echo "vendor-default-k3"
                     else

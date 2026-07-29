@@ -10,13 +10,14 @@
 #   ./scripts/vendor-auth-check.sh --json
 #   ./scripts/vendor-auth-check.sh --host user@box --vendors claude
 #   ./scripts/vendor-auth-check.sh --with-gh         # also check gh auth status
+#   ./scripts/vendor-auth-check.sh --deep            # real headless one-shot (required before waves)
 #
 # Exit: 0 all required vendors OK · 1 one or more failed
 #
 # Env overrides (tests / unusual installs):
 #   KIMI_CODE_HOME   default $HOME/.kimi-code
 #   GROK_HOME        default $HOME/.grok
-#   VENDOR_AUTH_TIMEOUT_SEC  default 12 (claude auth status only)
+#   VENDOR_AUTH_TIMEOUT_SEC  default 12 shallow / 90 deep
 
 set -euo pipefail
 
@@ -30,6 +31,7 @@ VENDORS=()
 PLAN_FILE=""
 JSON_OUT=false
 WITH_GH=false
+DEEP=false
 REMOTE_HOST=""
 TIMEOUT_SEC="${VENDOR_AUTH_TIMEOUT_SEC:-12}"
 
@@ -62,6 +64,11 @@ while [ $# -gt 0 ]; do
             WITH_GH=true
             shift
             ;;
+        --deep)
+            DEEP=true
+            TIMEOUT_SEC="${VENDOR_AUTH_TIMEOUT_SEC:-90}"
+            shift
+            ;;
         --host)
             REMOTE_HOST="${2:?--host requires ssh target}"
             shift 2
@@ -85,6 +92,7 @@ if [ -n "$REMOTE_HOST" ]; then
     fi
     [ "$JSON_OUT" = true ] && args+=(--json)
     [ "$WITH_GH" = true ] && args+=(--with-gh)
+    [ "$DEEP" = true ] && args+=(--deep)
     # shellcheck disable=SC2029
     ssh -o BatchMode=yes -o ConnectTimeout=8 "$REMOTE_HOST" \
         "bash -s -- ${args[*]+"${args[*]}"}" < "$0"
@@ -225,22 +233,37 @@ check_claude() {
         PROBE_DETAIL=$(echo "$out" | head -2 | tr '\n' ' ')
         return 1
     fi
-    if echo "$out" | grep -qE '"loggedIn"[[:space:]]*:[[:space:]]*true'; then
-        PROBE_STATUS="ok"
-        local email
-        email=$(echo "$out" | sed -n 's/.*"email"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-        PROBE_DETAIL="${email:-loggedIn=true}"
-        return 0
-    fi
-    if echo "$out" | grep -qE '"loggedIn"[[:space:]]*:[[:space:]]*false'; then
-        PROBE_STATUS="expired"
-        PROBE_DETAIL="loggedIn=false"
+    if ! echo "$out" | grep -qE '"loggedIn"[[:space:]]*:[[:space:]]*true'; then
+        if echo "$out" | grep -qE '"loggedIn"[[:space:]]*:[[:space:]]*false'; then
+            PROBE_STATUS="expired"
+            PROBE_DETAIL="loggedIn=false"
+            return 1
+        fi
+        PROBE_STATUS="unknown"
+        PROBE_DETAIL="unexpected auth status output"
         return 1
     fi
-    # Unknown shape — treat as fail-closed (better than silent ship)
-    PROBE_STATUS="unknown"
-    PROBE_DETAIL="unexpected auth status output"
-    return 1
+    local email
+    email=$(echo "$out" | sed -n 's/.*"email"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    # Deep: headless one-shot (status alone can lie while -p OAuth fails)
+    if [ "$DEEP" = true ]; then
+        local hout
+        set +e
+        hout=$(run_with_timeout "$TIMEOUT_SEC" claude -p --dangerously-skip-permissions "Reply with exactly: AUTH_OK" 2>&1)
+        local hec=$?
+        set -e
+        if [ $hec -ne 0 ] || ! echo "$hout" | grep -q 'AUTH_OK'; then
+            PROBE_STATUS="expired"
+            PROBE_DETAIL="status loggedIn but headless failed: $(echo "$hout" | tr '\n' ' ' | head -c 200)"
+            return 1
+        fi
+        PROBE_STATUS="ok"
+        PROBE_DETAIL="${email:-loggedIn=true} + headless AUTH_OK"
+        return 0
+    fi
+    PROBE_STATUS="ok"
+    PROBE_DETAIL="${email:-loggedIn=true}"
+    return 0
 }
 
 check_kimi() {
@@ -258,7 +281,6 @@ check_kimi() {
         PROBE_DETAIL="no credentials under $home (run kimi login)"
         return 1
     fi
-    # Non-empty credential or oauth material
     local has=0
     if [ -d "$cred" ] && find "$cred" -type f ! -size 0 2>/dev/null | grep -q .; then
         has=1
@@ -271,7 +293,6 @@ check_kimi() {
         PROBE_DETAIL="credentials/oauth empty under $home"
         return 1
     fi
-    # Config validity (cheap; not a substitute for live token but catches broken install)
     set +e
     local dout
     dout=$(run_with_timeout "$TIMEOUT_SEC" kimi doctor 2>&1)
@@ -281,6 +302,22 @@ check_kimi() {
         PROBE_STATUS="fail"
         PROBE_DETAIL="kimi doctor failed: $(echo "$dout" | head -2 | tr '\n' ' ')"
         return 1
+    fi
+    if [ "$DEEP" = true ]; then
+        # Match launcher: -p + --output-format text (NOT --auto with -p)
+        local hout
+        set +e
+        hout=$(run_with_timeout "$TIMEOUT_SEC" kimi -p "Reply with exactly: AUTH_OK" --output-format text 2>&1)
+        local hec=$?
+        set -e
+        if [ $hec -ne 0 ] || ! echo "$hout" | grep -q 'AUTH_OK'; then
+            PROBE_STATUS="expired"
+            PROBE_DETAIL="creds present but headless failed: $(echo "$hout" | tr '\n' ' ' | head -c 200)"
+            return 1
+        fi
+        PROBE_STATUS="ok"
+        PROBE_DETAIL="credentials + doctor + headless AUTH_OK"
+        return 0
     fi
     PROBE_STATUS="ok"
     PROBE_DETAIL="credentials present + doctor ok"
@@ -306,7 +343,6 @@ check_grok() {
         PROBE_DETAIL="empty auth.json"
         return 1
     fi
-    # Valid non-empty JSON object with at least one key (do not print secrets)
     if ! python3 - "$auth" <<'PY' 2>/dev/null
 import json, sys
 p = sys.argv[1]
@@ -320,6 +356,21 @@ PY
         PROBE_STATUS="fail"
         PROBE_DETAIL="auth.json not a non-empty JSON object"
         return 1
+    fi
+    if [ "$DEEP" = true ]; then
+        local hout
+        set +e
+        hout=$(run_with_timeout "$TIMEOUT_SEC" grok -p "Reply with exactly: AUTH_OK" 2>&1)
+        local hec=$?
+        set -e
+        if [ $hec -ne 0 ] || ! echo "$hout" | grep -q 'AUTH_OK'; then
+            PROBE_STATUS="expired"
+            PROBE_DETAIL="auth.json present but headless failed: $(echo "$hout" | tr '\n' ' ' | head -c 200)"
+            return 1
+        fi
+        PROBE_STATUS="ok"
+        PROBE_DETAIL="auth.json + headless AUTH_OK"
+        return 0
     fi
     PROBE_STATUS="ok"
     PROBE_DETAIL="auth.json present"
