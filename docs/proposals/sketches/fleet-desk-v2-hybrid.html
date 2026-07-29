@@ -1,0 +1,1230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fleet Desk v2 — sketch (Global → Company → Repo → Mission → Waves)</title>
+<style>
+  :root {
+    --bg: #0a0c11;
+    --bg2: #12151c;
+    --bg3: #1a1e28;
+    --bg4: #222833;
+    --line: #2a3140;
+    --ink: #e8ecf4;
+    --muted: #8b93a7;
+    --faint: #5c6578;
+    --accent: #4cc2ff;
+    --accent-dim: rgba(76, 194, 255, 0.14);
+    --ok: #3dd68c;
+    --ok-dim: rgba(61, 214, 140, 0.12);
+    --warn: #f5a524;
+    --warn-dim: rgba(245, 165, 36, 0.14);
+    --bad: #f31260;
+    --bad-dim: rgba(243, 18, 96, 0.12);
+    --violet: #a78bfa;
+    --violet-dim: rgba(167, 139, 250, 0.12);
+    --todo: #7dd3fc;
+    --todo-dim: rgba(125, 211, 252, 0.12);
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "Inter", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.45;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sketch-banner {
+    position: sticky; top: 0; z-index: 100;
+    background: linear-gradient(90deg, #1a1030, #0d1f2e 50%, #102018);
+    border-bottom: 1px solid var(--line);
+    padding: 8px 16px;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-size: 12px; color: var(--muted);
+  }
+  .sketch-banner strong { color: var(--warn); font-weight: 600; }
+  .sketch-banner .dot { opacity: 0.35; }
+  .view-tabs { display: flex; gap: 5px; margin-left: auto; flex-wrap: wrap; }
+  .view-tabs button {
+    font: inherit; font-size: 11px; font-weight: 600;
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 5px 11px; cursor: pointer;
+  }
+  .view-tabs button:hover { color: var(--ink); border-color: var(--faint); }
+  .view-tabs button.active {
+    color: #061018; background: var(--accent); border-color: var(--accent);
+  }
+
+  .app { max-width: 1200px; margin: 0 auto; padding: 18px 22px 72px; }
+  .app.wide { max-width: 1280px; }
+  .view { display: none; }
+  .view.on { display: block; }
+
+  header.top {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    margin-bottom: 12px; padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .brand {
+    font-weight: 650; font-size: 15px; letter-spacing: -0.02em;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .brand .mark {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 12px var(--accent);
+  }
+  .brand .mark.live { animation: pulse 2.2s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.5; box-shadow: 0 0 6px var(--accent); }
+    50% { opacity: 1; box-shadow: 0 0 16px var(--accent); }
+  }
+  .nav { display: flex; gap: 2px; flex-wrap: wrap; }
+  .nav a {
+    color: var(--muted); text-decoration: none; padding: 5px 9px;
+    border-radius: 6px; font-size: 12.5px; font-weight: 500;
+  }
+  .nav a:hover { color: var(--ink); background: var(--bg3); }
+  .nav a.on { color: var(--accent); background: var(--accent-dim); }
+  .mode-toggle {
+    display: flex; background: var(--bg2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 2px; gap: 2px; margin-left: auto;
+  }
+  .mode-toggle button {
+    font: inherit; font-size: 11px; font-weight: 600;
+    border: 0; background: transparent; color: var(--muted);
+    padding: 5px 11px; border-radius: 999px; cursor: pointer;
+  }
+  .mode-toggle button.on { background: var(--bg3); color: var(--ink); }
+
+  /* hierarchy strip */
+  .hier {
+    display: flex; align-items: center; gap: 0; flex-wrap: wrap;
+    padding: 10px 12px; margin-bottom: 14px;
+    background: var(--bg2); border: 1px solid var(--line);
+    border-radius: var(--radius); font-size: 12px;
+  }
+  .hier .lvl {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px; border-radius: 8px;
+    color: var(--muted); border: 1px solid transparent;
+  }
+  .hier .lvl b {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--faint); font-weight: 700;
+  }
+  .hier .lvl em { font-style: normal; color: var(--ink); font-weight: 600; }
+  .hier .lvl a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .hier .lvl a:hover { text-decoration: underline; }
+  .hier .lvl.on {
+    background: var(--accent-dim); border-color: rgba(76,194,255,.3); color: var(--accent);
+  }
+  .hier .lvl.on em { color: var(--accent); }
+  .hier .sep {
+    color: var(--faint); margin: 0 2px; opacity: 0.55; font-size: 14px;
+  }
+  .hier .hint {
+    margin-left: auto; font-size: 11px; color: var(--faint);
+    font-family: var(--mono);
+  }
+
+  .ambient {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px; margin-bottom: 14px;
+    background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius);
+  }
+  .led { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .led.live { background: var(--ok); box-shadow: 0 0 10px var(--ok); animation: pulse 2s infinite; }
+  .led.off { background: var(--faint); }
+  .ambient .msg { font-size: 13px; }
+  .ambient .msg b { font-weight: 600; }
+  .ambient .meta { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+
+  h1 { font-size: 22px; font-weight: 650; letter-spacing: -0.03em; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; max-width: 78ch; }
+  .sub a { color: var(--accent); text-decoration: none; }
+  .sub a:hover { text-decoration: underline; }
+
+  .btn {
+    font: inherit; font-size: 12px; font-weight: 600;
+    background: var(--accent); color: #061018; border: 0; border-radius: 8px;
+    padding: 8px 14px; cursor: pointer; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .btn.ghost {
+    background: transparent; color: var(--accent);
+    border: 1px solid rgba(76,194,255,.35);
+  }
+  .btn.sm { padding: 5px 10px; font-size: 11px; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; }
+  .pill.todo { background: var(--todo-dim); color: var(--todo); }
+  .pill.todo::before { background: var(--todo); }
+  .pill.wip { background: var(--accent-dim); color: var(--accent); }
+  .pill.wip::before { background: var(--accent); animation: pulse 1.6s infinite; }
+  .pill.done { background: var(--ok-dim); color: var(--ok); }
+  .pill.done::before { background: var(--ok); }
+  .pill.warn { background: var(--warn-dim); color: var(--warn); }
+  .pill.warn::before { background: var(--warn); }
+  .pill.fail { background: var(--bad-dim); color: var(--bad); }
+  .pill.fail::before { background: var(--bad); }
+  .pill.wait { background: var(--violet-dim); color: var(--violet); }
+  .pill.wait::before { background: var(--violet); }
+  .pill.blocked { background: var(--bad-dim); color: var(--bad); }
+  .pill.blocked::before { background: var(--bad); }
+  .pill.armed { background: var(--violet-dim); color: var(--violet); }
+  .pill.armed::before { background: var(--violet); }
+
+  .mono { font-family: var(--mono); font-size: 12px; }
+  a.link { color: var(--accent); text-decoration: none; }
+  a.link:hover { text-decoration: underline; }
+  .muted { color: var(--muted); }
+  .faint { color: var(--faint); }
+
+  .pipeline {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+    margin-bottom: 18px;
+  }
+  @media (max-width: 900px) { .pipeline { grid-template-columns: 1fr 1fr; } }
+  .pipe {
+    background: var(--bg2); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 12px 14px;
+  }
+  .pipe.active { border-color: rgba(76,194,255,.4); }
+  .pipe .ph {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--faint); font-weight: 700; margin-bottom: 6px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .pipe .ph .n {
+    margin-left: auto; font-family: var(--mono); font-size: 14px;
+    color: var(--ink); letter-spacing: 0; text-transform: none; font-weight: 650;
+  }
+  .pipe .desc { font-size: 12px; color: var(--muted); line-height: 1.35; }
+  .pipe.todo .ph { color: var(--todo); }
+  .pipe.wip .ph { color: var(--accent); }
+  .pipe.blocked .ph { color: var(--warn); }
+  .pipe.done .ph { color: var(--ok); }
+
+  .issue-hero {
+    background: linear-gradient(145deg, rgba(76,194,255,.07), rgba(167,139,250,.05));
+    border: 1px solid rgba(76,194,255,.22);
+    border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px;
+  }
+  .issue-hero .row1 {
+    display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .issue-hero .gh {
+    font-family: var(--mono); font-size: 12px; color: var(--accent);
+    background: var(--accent-dim); border-radius: 6px; padding: 3px 8px;
+    text-decoration: none;
+  }
+  .issue-hero h1 { margin: 0; flex: 1 1 240px; font-size: 20px; }
+  .issue-hero .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .issue-meta {
+    display: flex; flex-wrap: wrap; gap: 8px 14px;
+    font-size: 12px; color: var(--muted); margin-bottom: 12px;
+  }
+  .issue-meta b { color: var(--ink); font-weight: 600; }
+  .issue-body {
+    font-size: 13px; color: var(--muted); max-width: 80ch;
+    border-left: 2px solid var(--line); padding-left: 12px; margin-bottom: 12px;
+  }
+  .flow-steps {
+    display: flex; align-items: center; gap: 0; flex-wrap: wrap;
+    font-size: 11px; color: var(--faint);
+  }
+  .flow-steps .s {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px; background: var(--bg2);
+    border: 1px solid var(--line); color: var(--muted); font-weight: 500;
+  }
+  .flow-steps .s.on { border-color: rgba(76,194,255,.4); color: var(--accent); background: var(--accent-dim); }
+  .flow-steps .s.done { border-color: rgba(61,214,140,.35); color: var(--ok); }
+  .flow-steps .arr { margin: 0 4px; opacity: 0.4; }
+
+  .wave-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+  .wave-card {
+    background: var(--bg2); border: 1px solid var(--line);
+    border-radius: var(--radius); overflow: hidden;
+  }
+  .wave-card.live { border-color: rgba(76,194,255,.4); box-shadow: 0 0 24px rgba(76,194,255,.06); }
+  .wave-card.done { opacity: 0.88; }
+  .wave-card.todo { border-style: dashed; }
+  .wh {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 14px; cursor: pointer; user-select: none;
+  }
+  .wh:hover { background: var(--bg3); }
+  .wh h2 { font-size: 14px; font-weight: 650; letter-spacing: -0.02em; }
+  .wh .counts { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .wh .chev { margin-left: auto; color: var(--faint); font-size: 12px; transition: transform .15s; }
+  .wave-card.open .wh .chev { transform: rotate(90deg); }
+  .wb { display: none; padding: 0 14px 14px; border-top: 1px solid var(--line); }
+  .wave-card.open .wb { display: block; padding-top: 12px; }
+
+  .task-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .task-table th {
+    text-align: left; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--faint); font-weight: 600;
+    padding: 0 8px 8px 0; border-bottom: 1px solid var(--line);
+  }
+  .task-table td {
+    padding: 8px 8px 8px 0; border-bottom: 1px solid rgba(42,49,64,.5);
+    vertical-align: middle;
+  }
+  .task-table tr:last-child td { border-bottom: 0; }
+  .task-table tr.dim td { opacity: 0.55; }
+
+  .progress {
+    height: 4px; background: var(--bg4); border-radius: 99px; overflow: hidden;
+    margin-top: 8px; display: flex;
+  }
+  .progress i { display: block; height: 100%; }
+  .progress .t { background: var(--todo); opacity: 0.5; }
+  .progress .w { background: var(--accent); }
+  .progress .d { background: var(--ok); }
+  .progress .b { background: var(--warn); }
+
+  .mission-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 800px) { .mission-grid { grid-template-columns: 1fr; } }
+  .mission {
+    background: var(--bg2); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 14px; cursor: pointer;
+    transition: border-color .15s, transform .15s;
+  }
+  .mission:hover { border-color: rgba(76,194,255,.35); transform: translateY(-1px); }
+  .mission.hot { border-color: rgba(76,194,255,.45); }
+  .mission .path {
+    font-family: var(--mono); font-size: 10px; color: var(--faint);
+    margin-bottom: 6px; letter-spacing: 0.01em;
+  }
+  .mission .path span { color: var(--muted); }
+  .mission .t { font-weight: 650; font-size: 14px; margin: 6px 0 4px; letter-spacing: -0.02em; }
+  .mission .d { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .mission .bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .mission .bar .mono { font-size: 11px; color: var(--faint); margin-left: auto; }
+
+  .card {
+    background: var(--bg2); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 14px 16px; margin-bottom: 14px;
+  }
+  .card h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--faint); font-weight: 600; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card h2 .right { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 500; }
+
+  .stats {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
+    margin-bottom: 16px;
+  }
+  @media (max-width: 800px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat {
+    background: var(--bg2); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 12px;
+  }
+  .stat .n { font-size: 20px; font-weight: 650; letter-spacing: -0.03em; }
+  .stat .l { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint); margin-top: 3px; }
+
+  .co-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .co-card {
+    background: var(--bg2); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 14px; cursor: pointer;
+    transition: border-color .15s;
+  }
+  .co-card:hover { border-color: rgba(76,194,255,.4); }
+  .co-card .id { font-weight: 650; font-size: 15px; letter-spacing: -0.02em; }
+  .co-card .meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .co-card .repos { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 8px; }
+
+  .repo-row {
+    display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px;
+  }
+  .repo-chip {
+    flex: 1 1 200px;
+    background: var(--bg3); border: 1px solid var(--line);
+    border-radius: var(--radius-sm); padding: 12px 14px;
+  }
+  .repo-chip.on { border-color: rgba(76,194,255,.4); background: var(--accent-dim); }
+  .repo-chip .name { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--accent); }
+  .repo-chip .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+  .lanes {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 10px;
+  }
+  .lane {
+    position: relative; background: var(--bg3); border: 1px solid var(--line);
+    border-radius: var(--radius-sm); padding: 12px;
+    animation: slideIn .4s ease both;
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-10px); }
+    to { opacity: 1; transform: none; }
+  }
+  .lane.run { border-color: rgba(76,194,255,.45); }
+  .lane.run::after {
+    content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    background-size: 200% 100%; animation: shimmer 2s linear infinite;
+  }
+  @keyframes shimmer {
+    0% { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
+  }
+  .lane.todo { border-style: dashed; opacity: 0.75; }
+  .lane.done { border-color: rgba(61,214,140,.35); }
+  .lane.warn { border-color: rgba(245,165,36,.5); }
+  .lane-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .lane-top .role { font-weight: 650; font-size: 13px; }
+  .lane-top .timer { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .lane .branch { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 8px; word-break: break-all; }
+  .vendor {
+    font-family: var(--mono); font-size: 10px; color: var(--faint);
+    border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px;
+  }
+  .failover-ribbon {
+    margin-top: 8px; font-size: 11px; font-family: var(--mono);
+    color: var(--warn); background: var(--warn-dim);
+    border-radius: 6px; padding: 5px 8px;
+  }
+
+  .spine {
+    display: flex; align-items: center; gap: 0; padding: 20px 8px 28px; overflow-x: auto;
+  }
+  .spine-node { flex: 0 0 auto; width: 120px; text-align: center; }
+  .spine-node .orb {
+    width: 44px; height: 44px; border-radius: 50%; margin: 0 auto 8px;
+    border: 2px solid var(--line); background: var(--bg3);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: var(--faint);
+  }
+  .spine-node.done .orb { border-color: var(--ok); color: var(--ok); background: var(--ok-dim); }
+  .spine-node.hot .orb {
+    border-color: var(--accent); color: var(--accent); background: var(--accent-dim);
+    box-shadow: 0 0 24px rgba(76,194,255,.35); animation: pulse 1.8s infinite;
+  }
+  .spine-node.todo .orb { border-style: dashed; }
+  .spine-node .nm { font-size: 12px; font-weight: 600; }
+  .spine-node .meta { font-family: var(--mono); font-size: 10px; color: var(--faint); margin-top: 2px; }
+  .spine-link { flex: 1 1 28px; height: 2px; min-width: 20px; background: var(--line); position: relative; top: -16px; }
+  .spine-link.on { background: linear-gradient(90deg, var(--ok), var(--accent)); }
+
+  .waiting {
+    display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
+    padding: 10px 12px; margin-bottom: 14px;
+    background: var(--violet-dim); border: 1px solid rgba(167,139,250,.3);
+    border-radius: var(--radius);
+  }
+  .waiting .label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--violet); font-weight: 700; padding-top: 3px;
+  }
+  .waiting ul { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+  .waiting li {
+    font-family: var(--mono); font-size: 11px;
+    background: var(--bg2); border: 1px solid var(--line);
+    border-radius: 6px; padding: 3px 8px;
+  }
+
+  .split { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 14px; }
+  @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+
+  .context-box {
+    font-size: 12px; color: var(--muted);
+    background: var(--bg3); border-radius: var(--radius-sm);
+    padding: 10px 12px; border: 1px solid var(--line);
+  }
+  .context-box dt {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--faint); margin-top: 8px;
+  }
+  .context-box dt:first-child { margin-top: 0; }
+  .context-box dd { margin-top: 2px; color: var(--ink); }
+
+  footer.note {
+    margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line);
+    font-size: 11px; color: var(--faint); line-height: 1.55;
+  }
+  footer.note code { color: var(--muted); font-family: var(--mono); font-size: 10px; }
+
+  .crumb { font-size: 12px; color: var(--faint); margin-bottom: 10px; }
+  .crumb a { color: var(--muted); text-decoration: none; }
+  .crumb a:hover { color: var(--accent); }
+  .crumb .sep { margin: 0 6px; opacity: 0.5; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px;
+    font-size: 11px; color: var(--faint);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+
+  .map-box {
+    background: var(--bg2); border: 1px dashed var(--line);
+    border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px;
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+    line-height: 1.65; overflow-x: auto;
+  }
+  .map-box .hi { color: var(--accent); font-weight: 600; }
+  .map-box .dim { color: var(--faint); }
+</style>
+</head>
+<body>
+  <div class="sketch-banner">
+    <strong>SKETCH ONLY</strong>
+    <span class="dot">·</span>
+    <span>Hierarchy: Global → Company → Repo → Mission → Waves → Tasks</span>
+    <span class="dot">·</span>
+    <span>Same UI you liked + explicit hierarchy chrome</span>
+    <div class="view-tabs">
+      <button type="button" class="active" data-view="global">1 · Global</button>
+      <button type="button" data-view="company">2 · Company</button>
+      <button type="button" data-view="missions">3 · Missions</button>
+      <button type="button" data-view="issue">4 · Issue run</button>
+      <button type="button" data-view="wave">5 · Floor · Wave</button>
+      <button type="button" data-view="conductor">6 · Floor · Conductor</button>
+      <button type="button" data-view="simple">7 · Simple 1:1</button>
+    </div>
+  </div>
+
+  <!-- ========== 1 GLOBAL ========== -->
+  <div class="app view on" id="view-global">
+    <header class="top">
+      <div class="brand"><span class="mark"></span> Fleet Desk</div>
+      <nav class="nav">
+        <a class="on" href="#">Home</a>
+        <a href="#" data-go="missions">Missions</a>
+        <a href="#" data-go="company">Companies</a>
+        <a href="#" data-go="wave">Floor</a>
+        <a href="#">Work</a>
+        <a href="#">Roles</a>
+        <a href="#">About</a>
+      </nav>
+      <div class="mode-toggle">
+        <button type="button" class="on">Almanac</button>
+        <button type="button" data-go="wave">Floor</button>
+      </div>
+    </header>
+
+    <div class="hier" title="Where you are in the hierarchy">
+      <span class="lvl on"><b>Global</b> <em>Fleet Desk</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Company</b> <em class="faint">…</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Repo</b> <em class="faint">…</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Mission</b> <em class="faint">…</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Wave / Task</b> <em class="faint">…</em></span>
+      <span class="hint">you are here · top</span>
+    </div>
+
+    <h1>Global</h1>
+    <p class="sub">
+      Fleet-wide rollup. Drill: <b>Company</b> → <b>Repo(s)</b> → <b>Mission</b> (GitHub issue) →
+      <b>Waves</b> → <b>Tasks</b>. Live motion sits on the <a href="#" data-go="wave">Ops Floor</a>.
+    </p>
+
+    <div class="map-box">
+      <span class="hi">Global</span><br>
+      &nbsp;&nbsp;├── <span class="hi">Companies</span> <span class="dim">// product units</span><br>
+      &nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;&nbsp;├── <span class="hi">Repos</span> <span class="dim">// 1..N per company</span><br>
+      &nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;&nbsp;├── <span class="hi">Missions</span> <span class="dim">// GitHub issues / campaigns</span><br>
+      &nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;&nbsp;├── Waves → Tasks/Seats → Trails<br>
+      &nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;&nbsp;└── simple: 1 mission → 1 task<br>
+      &nbsp;&nbsp;├── Roles · Skills · Learnings <span class="dim">// fleet-global</span><br>
+      &nbsp;&nbsp;└── Ops Floor <span class="dim">// live dispatch radar (cross-cuts)</span>
+    </div>
+
+    <div class="pipeline">
+      <div class="pipe todo"><div class="ph">Queued <span class="n">7</span></div><div class="desc">Planned seats not dispatched</div></div>
+      <div class="pipe wip active"><div class="ph">In flight <span class="n">4</span></div><div class="desc">Running · critic · human go</div></div>
+      <div class="pipe blocked"><div class="ph">Blocked <span class="n">2</span></div><div class="desc">Rate-cap · wait human</div></div>
+      <div class="pipe done"><div class="ph">Settled <span class="n">31</span></div><div class="desc">Trails with handoffs</div></div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="n">6</div><div class="l">Companies</div></div>
+      <div class="stat"><div class="n">7</div><div class="l">Repos</div></div>
+      <div class="stat"><div class="n">12</div><div class="l">Missions open</div></div>
+      <div class="stat"><div class="n">38</div><div class="l">Trails</div></div>
+      <div class="stat"><div class="n">15</div><div class="l">Waves</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Companies <span class="right"><a class="link" href="#" data-go="company">Browse →</a></span></h2>
+      <div class="co-grid">
+        <div class="co-card" data-go="company">
+          <div class="id">olympus</div>
+          <div class="meta">active · 2 open missions</div>
+          <div class="repos">repos: olympus-platform</div>
+        </div>
+        <div class="co-card" data-go="company">
+          <div class="id">dev-agents</div>
+          <div class="meta">active · n=17 trails</div>
+          <div class="repos">repos: Arlencho/dev-agents</div>
+        </div>
+        <div class="co-card" data-go="company">
+          <div class="id">safeplace</div>
+          <div class="meta">active · n=0</div>
+          <div class="repos">repos: arlenrios/safeplace</div>
+        </div>
+        <div class="co-card" data-go="missions">
+          <div class="id">+ missions</div>
+          <div class="meta">all companies</div>
+          <div class="repos">issue-centric portfolio →</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="background:linear-gradient(135deg,rgba(76,194,255,.08),rgba(61,214,140,.05));border-color:rgba(76,194,255,.25)">
+      <h2 style="color:var(--accent)">Live teaser</h2>
+      <p style="font-size:13px;margin-bottom:10px">
+        ● <b>live</b> · mission <a class="link" href="#" data-go="issue">olympus#2059</a> · wave 2 · 3 seats · waiting critic
+      </p>
+      <button class="btn sm" type="button" data-go="wave">Open Ops Floor →</button>
+    </div>
+
+    <footer class="note">
+      Global = rollup. Company owns repos. Mission attaches GitHub intent. Waves group seats. Seats become trails when settled.
+    </footer>
+  </div>
+
+  <!-- ========== 2 COMPANY ========== -->
+  <div class="app view" id="view-company">
+    <header class="top">
+      <div class="brand"><span class="mark"></span> Fleet Desk</div>
+      <nav class="nav">
+        <a href="#" data-go="global">Home</a>
+        <a href="#" data-go="missions">Missions</a>
+        <a class="on" href="#">Companies</a>
+        <a href="#" data-go="wave">Floor</a>
+      </nav>
+    </header>
+
+    <div class="hier">
+      <span class="lvl"><b>Global</b> <a href="#" data-go="global">Fleet Desk</a></span>
+      <span class="sep">›</span>
+      <span class="lvl on"><b>Company</b> <em>olympus</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Repo</b> <em class="faint">pick below</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Mission</b> <em class="faint">…</em></span>
+      <span class="hint">company scope</span>
+    </div>
+
+    <h1>olympus</h1>
+    <p class="sub">
+      Active product · AI travel booking · legal Pelops AI AB.
+      <b>1 company can own multiple repos</b> — missions pin a primary repo.
+    </p>
+
+    <div class="repo-row">
+      <div class="repo-chip on">
+        <div class="name">Arlencho/olympus-platform</div>
+        <div class="meta">primary · default branch main · 2 open missions · 1 live</div>
+      </div>
+      <div class="repo-chip">
+        <div class="name">docs / satellite (example)</div>
+        <div class="meta">optional 2nd repo · 0 missions · design for 1..N</div>
+      </div>
+    </div>
+
+    <div class="pipeline">
+      <div class="pipe todo"><div class="ph">Queued <span class="n">3</span></div><div class="desc">In this company</div></div>
+      <div class="pipe wip active"><div class="ph">In flight <span class="n">2</span></div><div class="desc">#2059 W2</div></div>
+      <div class="pipe blocked"><div class="ph">Blocked <span class="n">1</span></div><div class="desc">soft-live wait</div></div>
+      <div class="pipe done"><div class="ph">Settled <span class="n">9</span></div><div class="desc">Company trails</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Missions on olympus-platform <span class="right"><a class="link" href="#" data-go="missions">All missions →</a></span></h2>
+      <div class="mission-grid">
+        <div class="mission hot" data-go="issue">
+          <div class="path"><span>olympus</span> / <span>olympus-platform</span> / <span>#2059</span></div>
+          <span class="pill wip">in flight</span>
+          <div class="t">ABarranges RSC learn path</div>
+          <div class="d">Complex: 3 waves · Conductor + parallel polish</div>
+          <div class="bar">
+            <span class="pill done">W1</span>
+            <span class="pill wip">W2</span>
+            <span class="pill todo">W3</span>
+            <span class="mono">6/11</span>
+          </div>
+        </div>
+        <div class="mission" data-go="missions">
+          <div class="path"><span>olympus</span> / <span>olympus-platform</span> / <span>#2102</span></div>
+          <span class="pill blocked">blocked</span>
+          <div class="t">Duffel soft-live feedback</div>
+          <div class="d">Human-gated · 3 waves planned · not armed</div>
+          <div class="bar"><span class="pill todo">3 waves</span><span class="mono">0/14</span></div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="note">
+      Company page = product home. Repos listed first (1..N). Missions filtered to this company.
+      Skills/learnings for the product can sit here later without changing the tree.
+    </footer>
+  </div>
+
+  <!-- ========== 3 MISSIONS ========== -->
+  <div class="app view" id="view-missions">
+    <header class="top">
+      <div class="brand"><span class="mark"></span> Fleet Desk</div>
+      <nav class="nav">
+        <a href="#" data-go="global">Home</a>
+        <a class="on" href="#">Missions</a>
+        <a href="#" data-go="company">Companies</a>
+        <a href="#" data-go="wave">Floor</a>
+      </nav>
+    </header>
+
+    <div class="hier">
+      <span class="lvl"><b>Global</b> <a href="#" data-go="global">Fleet Desk</a></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Company</b> <em class="faint">any</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Repo</b> <em class="faint">any</em></span>
+      <span class="sep">›</span>
+      <span class="lvl on"><b>Mission</b> <em>portfolio</em></span>
+      <span class="hint">issue-centric list</span>
+    </div>
+
+    <h1>Missions</h1>
+    <p class="sub">
+      A <b>mission</b> is usually a GitHub issue. Path on every card:
+      <span class="mono">company / repo / #issue</span> → waves → tasks.
+    </p>
+
+    <div class="pipeline">
+      <div class="pipe todo"><div class="ph">Queued <span class="n">7</span></div><div class="desc">Planned seats</div></div>
+      <div class="pipe wip active"><div class="ph">In flight <span class="n">4</span></div><div class="desc">Floor owns this</div></div>
+      <div class="pipe blocked"><div class="ph">Blocked <span class="n">2</span></div><div class="desc">Human / rate-cap</div></div>
+      <div class="pipe done"><div class="ph">Settled <span class="n">31</span></div><div class="desc">Almanac trails</div></div>
+    </div>
+
+    <div class="legend">
+      <span><span class="pill todo">queued</span></span>
+      <span><span class="pill wip">running</span></span>
+      <span><span class="pill wait">waiting</span></span>
+      <span><span class="pill done">done</span></span>
+      <span class="faint">Click a mission → full issue run</span>
+    </div>
+
+    <div class="mission-grid">
+      <div class="mission hot" data-go="issue">
+        <div class="path"><span>olympus</span> / <span>olympus-platform</span> / <span>#2059</span></div>
+        <span class="pill wip">in flight</span>
+        <div class="t">ABarranges RSC learn path</div>
+        <div class="d">1 issue → 3 waves · serial Conductor + parallel polish · partner learn surface</div>
+        <div class="bar">
+          <span class="pill done">W1 done</span>
+          <span class="pill wip">W2 live</span>
+          <span class="pill todo">W3 queued</span>
+          <span class="mono">6/11 seats</span>
+        </div>
+        <div class="progress" style="margin-top:10px">
+          <i class="d" style="width:45%"></i><i class="w" style="width:20%"></i><i class="t" style="width:35%"></i>
+        </div>
+      </div>
+
+      <div class="mission" data-go="simple">
+        <div class="path"><span>dev-agents</span> / <span>dev-agents</span> / <span>#61</span></div>
+        <span class="pill todo">queued</span>
+        <div class="t">Mute rate-cap toast in unit tests</div>
+        <div class="d"><b>Simple 1:1</b> — issue → 1 task → 1 seat. Armed, wait human go.</div>
+        <div class="bar">
+          <span class="pill armed">armed</span>
+          <span class="pill todo">1 task</span>
+          <span class="mono">0/1</span>
+        </div>
+        <div class="progress" style="margin-top:10px"><i class="t" style="width:100%"></i></div>
+      </div>
+
+      <div class="mission" data-go="issue">
+        <div class="path"><span>dev-agents</span> / <span>dev-agents</span> / <span>#48</span></div>
+        <span class="pill done">settled</span>
+        <div class="t">Fleet Desk Phase 1 data contract</div>
+        <div class="d">1 issue → 2 waves · critic loops · merged</div>
+        <div class="bar">
+          <span class="pill done">2 waves</span>
+          <span class="pill done">APPROVE</span>
+          <span class="mono">merged</span>
+        </div>
+        <div class="progress" style="margin-top:10px"><i class="d" style="width:100%"></i></div>
+      </div>
+
+      <div class="mission">
+        <div class="path"><span>olympus</span> / <span>olympus-platform</span> / <span>#2102</span></div>
+        <span class="pill blocked">blocked</span>
+        <div class="t">Duffel soft-live feedback pass</div>
+        <div class="d">External partner · plan drafted · not armed</div>
+        <div class="bar">
+          <span class="pill blocked">wait human</span>
+          <span class="pill todo">3 waves</span>
+          <span class="mono">0/14</span>
+        </div>
+        <div class="progress" style="margin-top:10px"><i class="t" style="width:100%;opacity:.35"></i></div>
+      </div>
+    </div>
+
+    <footer class="note">
+      Mission cards always show hierarchy path so you never lose company/repo context.
+    </footer>
+  </div>
+
+  <!-- ========== 4 ISSUE RUN ========== -->
+  <div class="app wide view" id="view-issue">
+    <header class="top">
+      <div class="brand"><span class="mark live"></span> Fleet Desk</div>
+      <nav class="nav">
+        <a href="#" data-go="global">Home</a>
+        <a href="#" data-go="missions">Missions</a>
+        <a class="on" href="#">Issue run</a>
+        <a href="#" data-go="wave">Floor</a>
+      </nav>
+    </header>
+
+    <div class="hier">
+      <span class="lvl"><b>Global</b> <a href="#" data-go="global">Fleet Desk</a></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Company</b> <a href="#" data-go="company">olympus</a></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Repo</b> <em>olympus-platform</em></span>
+      <span class="sep">›</span>
+      <span class="lvl on"><b>Mission</b> <em>#2059</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Waves</b> <em>1–3</em></span>
+      <span class="hint">full campaign</span>
+    </div>
+
+    <div class="issue-hero">
+      <div class="row1">
+        <a class="gh" href="https://github.com/Arlencho/olympus-platform/issues/2059" target="_blank" rel="noopener">olympus-platform#2059 ↗</a>
+        <span class="pill wip">in flight</span>
+        <span class="pill">complex · 3 waves</span>
+        <h1 style="flex-basis:100%">ABarranges RSC learn path</h1>
+        <div class="actions">
+          <button class="btn sm" type="button" data-go="wave">Watch live Floor →</button>
+          <button class="btn ghost sm" type="button">Open plan file</button>
+          <button class="btn ghost sm" type="button">Copy dispatch line</button>
+        </div>
+      </div>
+      <div class="issue-meta">
+        <span>Company <b>olympus</b></span>
+        <span>Repo <b class="mono">Arlencho/olympus-platform</b></span>
+        <span>Mode <b>Conductor → Wave polish</b></span>
+        <span>Plan <b class="mono">wave-plans/conductor/…abarranges…</b></span>
+      </div>
+      <div class="issue-body">
+        Partner-facing learn surface. Fleet executes via Conductor (serial) then parallel polish waves.
+        This view is the <b>planning spine</b>: context, wave breakdown, TODO→WIP→DONE per seat, links to Floor + Almanac.
+      </div>
+      <div class="flow-steps">
+        <span class="s done">1 Issue</span><span class="arr">→</span>
+        <span class="s done">2 Plan / packet</span><span class="arr">→</span>
+        <span class="s on">3 Waves &amp; seats</span><span class="arr">→</span>
+        <span class="s on">4 Live Floor</span><span class="arr">→</span>
+        <span class="s">5 Trails</span><span class="arr">→</span>
+        <span class="s">6 Merge / close</span>
+      </div>
+    </div>
+
+    <div class="pipeline">
+      <div class="pipe todo"><div class="ph">Queued <span class="n">3</span></div><div class="desc">W3 seats</div></div>
+      <div class="pipe wip active"><div class="ph">In flight <span class="n">2</span></div><div class="desc">W2 live</div></div>
+      <div class="pipe blocked"><div class="ph">Blocked <span class="n">1</span></div><div class="desc">kimi cooldown</div></div>
+      <div class="pipe done"><div class="ph">Settled <span class="n">5</span></div><div class="desc">W1 chain</div></div>
+    </div>
+
+    <div class="split">
+      <div>
+        <div class="card" style="margin-bottom:12px">
+          <h2>Waves under this mission <span class="right"><a class="link" href="#" data-go="wave">Floor</a></span></h2>
+          <div class="wave-list">
+            <div class="wave-card done open" data-wave>
+              <div class="wh">
+                <h2>Wave 1 · Conductor serial</h2>
+                <span class="pill done">settled</span>
+                <span class="counts">5/5 · APPROVE</span>
+                <span class="chev">▸</span>
+              </div>
+              <div class="wb">
+                <table class="task-table">
+                  <thead><tr><th>Status</th><th>Seat</th><th>Task</th><th>Branch</th></tr></thead>
+                  <tbody>
+                    <tr><td><span class="pill done">done</span></td><td>web-frontend</td><td class="mono">producer</td><td class="mono">feat/learn-abarranges-rsc</td></tr>
+                    <tr><td><span class="pill done">done</span></td><td>frontend-critic</td><td class="mono">REVISE</td><td class="mono">same</td></tr>
+                    <tr><td><span class="pill done">done</span></td><td>web-frontend</td><td class="mono">revise</td><td class="mono">same</td></tr>
+                    <tr><td><span class="pill done">done</span></td><td>frontend-critic</td><td class="mono">APPROVE</td><td class="mono">same</td></tr>
+                    <tr><td><span class="pill done">done</span></td><td>human</td><td class="mono">merge</td><td class="mono">main</td></tr>
+                  </tbody>
+                </table>
+                <div class="progress"><i class="d" style="width:100%"></i></div>
+              </div>
+            </div>
+
+            <div class="wave-card live open" data-wave>
+              <div class="wh">
+                <h2>Wave 2 · Parallel polish</h2>
+                <span class="pill wip">live</span>
+                <span class="counts">2 run · 1 blocked · 1 queued</span>
+                <span class="chev">▸</span>
+              </div>
+              <div class="wb">
+                <table class="task-table">
+                  <thead><tr><th>Status</th><th>Seat</th><th>Task</th><th></th></tr></thead>
+                  <tbody>
+                    <tr><td><span class="pill done">done</span></td><td>docs-writer</td><td class="mono">operator note</td><td></td></tr>
+                    <tr><td><span class="pill wip">running</span></td><td>web-frontend</td><td class="mono">UI polish</td><td><a class="link" href="#" data-go="wave">Floor</a></td></tr>
+                    <tr><td><span class="pill warn">cooldown</span></td><td>test-engineer</td><td class="mono">smoke</td><td>kimi</td></tr>
+                    <tr class="dim"><td><span class="pill todo">queued</span></td><td>frontend-critic</td><td class="mono">review</td><td>waits producer</td></tr>
+                  </tbody>
+                </table>
+                <div class="progress">
+                  <i class="d" style="width:25%"></i><i class="w" style="width:25%"></i>
+                  <i class="b" style="width:25%"></i><i class="t" style="width:25%"></i>
+                </div>
+              </div>
+            </div>
+
+            <div class="wave-card todo open" data-wave>
+              <div class="wh">
+                <h2>Wave 3 · Deploy / evidence</h2>
+                <span class="pill todo">queued</span>
+                <span class="counts">0/3 · not armed</span>
+                <span class="chev">▸</span>
+              </div>
+              <div class="wb">
+                <table class="task-table">
+                  <thead><tr><th>Status</th><th>Seat</th><th>Task</th><th>Depends</th></tr></thead>
+                  <tbody>
+                    <tr class="dim"><td><span class="pill todo">queued</span></td><td>devops</td><td class="mono">preview deploy</td><td class="faint">W2 APPROVE</td></tr>
+                    <tr class="dim"><td><span class="pill todo">queued</span></td><td>test-engineer</td><td class="mono">e2e</td><td class="faint">deploy URL</td></tr>
+                    <tr class="dim"><td><span class="pill todo">queued</span></td><td>docs-writer</td><td class="mono">closeout on issue</td><td class="faint">e2e</td></tr>
+                  </tbody>
+                </table>
+                <div class="progress"><i class="t" style="width:100%;opacity:.4"></i></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <h2>Around this mission</h2>
+          <dl class="context-box">
+            <dt>Hierarchy</dt>
+            <dd class="mono" style="font-size:11px">olympus → olympus-platform → #2059</dd>
+            <dt>Why</dt>
+            <dd>Partner learn path · RSC acceptance</dd>
+            <dt>Success criteria</dt>
+            <dd>Learn RSC · critic green · demo documented</dd>
+            <dt>Skills</dt>
+            <dd>evidence-first · git-ship · session-modes</dd>
+            <dt>Blockers</dt>
+            <dd>kimi rate-cap · human merge after W2</dd>
+            <dt>Next human action</dt>
+            <dd>None while Floor live — or arm W3 after APPROVE</dd>
+          </dl>
+        </div>
+        <div class="card">
+          <h2>Patterns</h2>
+          <p style="font-size:12px;color:var(--muted);margin-bottom:8px">Same hierarchy, different depth:</p>
+          <p style="font-size:12px;margin-bottom:6px"><span class="pill">complex</span> <span class="muted">1 mission → N waves</span></p>
+          <p style="font-size:12px"><span class="pill">simple</span> <span class="muted">1 mission → 1 task</span> · <a class="link" href="#" data-go="simple">sample →</a></p>
+        </div>
+      </div>
+    </div>
+
+    <footer class="note">
+      Issue run = mission detail. Hierarchy chrome always shows Global › Company › Repo › Mission › Waves.
+    </footer>
+  </div>
+
+  <!-- ========== 5 WAVE FLOOR ========== -->
+  <div class="app wide view" id="view-wave">
+    <header class="top">
+      <div class="brand"><span class="mark live"></span> Fleet Desk · Ops Floor</div>
+      <nav class="nav">
+        <a href="#" data-go="global">Home</a>
+        <a href="#" data-go="issue">Issue run</a>
+        <a class="on" href="#">Floor</a>
+      </nav>
+      <div class="mode-toggle">
+        <button type="button" data-go="global">Almanac</button>
+        <button type="button" class="on">Floor</button>
+      </div>
+    </header>
+
+    <div class="hier">
+      <span class="lvl"><b>Global</b> <a href="#" data-go="global">Fleet Desk</a></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Company</b> <a href="#" data-go="company">olympus</a></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Repo</b> <em>olympus-platform</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Mission</b> <a href="#" data-go="issue">#2059</a></span>
+      <span class="sep">›</span>
+      <span class="lvl on"><b>Wave</b> <em>2 · live</em></span>
+      <span class="hint">Ops Floor radar</span>
+    </div>
+
+    <div class="ambient">
+      <span class="led live"></span>
+      <span class="msg"><b>live · wave</b> — parallel seats · not “1 command still running”</span>
+      <span class="meta">age 0.7s · fleet-events · live/1</span>
+    </div>
+
+    <div class="waiting">
+      <div class="label">Waiting on</div>
+      <ul>
+        <li>web-frontend · exit</li>
+        <li>frontend-critic · after producer</li>
+        <li>kimi cooldown · 00:42</li>
+      </ul>
+      <button class="btn ghost sm" type="button" data-go="issue">Full mission plan →</button>
+    </div>
+
+    <div class="pipeline" style="margin-bottom:14px">
+      <div class="pipe todo"><div class="ph">Queued <span class="n">1</span></div><div class="desc">critic</div></div>
+      <div class="pipe wip active"><div class="ph">Running <span class="n">1</span></div><div class="desc">web-frontend</div></div>
+      <div class="pipe blocked"><div class="ph">Blocked <span class="n">1</span></div><div class="desc">cooldown</div></div>
+      <div class="pipe done"><div class="ph">Done <span class="n">1</span></div><div class="desc">docs-writer</div></div>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="padding:12px 14px;border-bottom:1px solid var(--line);display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <strong style="font-size:14px">Wave 2 · parallel lanes</strong>
+        <span class="pill wip">live</span>
+        <span class="mono faint">ghost lanes = TODO from plan</span>
+      </div>
+      <div class="lanes" style="padding:14px">
+        <div class="lane done">
+          <div class="lane-top"><span class="role">docs-writer</span><span class="pill done">done</span><span class="timer">03:01</span></div>
+          <div class="branch">feat/ab-docs</div>
+          <span class="vendor">claude</span>
+        </div>
+        <div class="lane run">
+          <div class="lane-top"><span class="role">web-frontend</span><span class="pill wip">running</span><span class="timer">02:18</span></div>
+          <div class="branch">feat/ab-ui</div>
+          <span class="vendor">claude · was kimi</span>
+          <div class="failover-ribbon">ratecap kimi → failover claude</div>
+        </div>
+        <div class="lane warn">
+          <div class="lane-top"><span class="role">test-engineer</span><span class="pill warn">cooldown</span><span class="timer">00:42</span></div>
+          <div class="branch">feat/ab-smoke</div>
+          <span class="vendor">kimi</span>
+        </div>
+        <div class="lane todo">
+          <div class="lane-top"><span class="role">frontend-critic</span><span class="pill todo">queued</span><span class="timer">—</span></div>
+          <div class="branch">feat/ab-ui</div>
+          <p class="faint" style="font-size:11px;margin-top:8px">From plan · starts when producer exits</p>
+        </div>
+      </div>
+    </div>
+
+    <footer class="note" style="margin-top:16px">
+      Floor keeps hierarchy context so live motion never feels orphaned from the GitHub mission.
+    </footer>
+  </div>
+
+  <!-- ========== 6 CONDUCTOR ========== -->
+  <div class="app wide view" id="view-conductor">
+    <header class="top">
+      <div class="brand"><span class="mark live"></span> Fleet Desk · Ops Floor</div>
+      <nav class="nav">
+        <a href="#" data-go="global">Home</a>
+        <a href="#" data-go="issue">Issue run</a>
+        <a class="on" href="#">Floor</a>
+      </nav>
+    </header>
+
+    <div class="hier">
+      <span class="lvl"><b>Global</b> <a href="#" data-go="global">Fleet Desk</a></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Company</b> <a href="#" data-go="company">olympus</a></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Repo</b> <em>olympus-platform</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Mission</b> <a href="#" data-go="issue">#2059</a></span>
+      <span class="sep">›</span>
+      <span class="lvl on"><b>Wave</b> <em>1 · conductor spine</em></span>
+    </div>
+
+    <div class="ambient">
+      <span class="led live"></span>
+      <span class="msg"><b>live · conductor</b> — serial chain · spine not lanes</span>
+      <span class="meta">mode=conductor · age 1.0s</span>
+    </div>
+
+    <div class="waiting">
+      <div class="label">Waiting on</div>
+      <ul>
+        <li>revise seat · handoff</li>
+        <li>human · merge gate (later)</li>
+      </ul>
+    </div>
+
+    <div class="pipeline" style="margin-bottom:14px">
+      <div class="pipe done"><div class="ph">Done <span class="n">3</span></div><div class="desc">packet · producer · critic</div></div>
+      <div class="pipe wip active"><div class="ph">WIP <span class="n">1</span></div><div class="desc">revise hot</div></div>
+      <div class="pipe todo"><div class="ph">Queued <span class="n">2</span></div><div class="desc">re-critic · merge</div></div>
+      <div class="pipe blocked"><div class="ph">Blocked <span class="n">0</span></div><div class="desc">—</div></div>
+    </div>
+
+    <div class="card">
+      <p class="muted" style="font-size:12px;margin-bottom:8px">
+        Serial path for the same mission — TODO nodes dashed ahead of the pin.
+      </p>
+      <div class="spine">
+        <div class="spine-node done"><div class="orb">✓</div><div class="nm">issue</div><div class="meta">#2059</div></div>
+        <div class="spine-link on"></div>
+        <div class="spine-node done"><div class="orb">✓</div><div class="nm">packet</div><div class="meta">go</div></div>
+        <div class="spine-link on"></div>
+        <div class="spine-node done"><div class="orb">✓</div><div class="nm">producer</div><div class="meta">exit 0</div></div>
+        <div class="spine-link on"></div>
+        <div class="spine-node done"><div class="orb">✓</div><div class="nm">critic</div><div class="meta">REVISE</div></div>
+        <div class="spine-link on"></div>
+        <div class="spine-node hot"><div class="orb">●</div><div class="nm">revise</div><div class="meta">02:18</div></div>
+        <div class="spine-link"></div>
+        <div class="spine-node todo"><div class="orb">2</div><div class="nm">re-critic</div><div class="meta">queued</div></div>
+        <div class="spine-link"></div>
+        <div class="spine-node todo"><div class="orb">3</div><div class="nm">merge</div><div class="meta">human</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 7 SIMPLE ========== -->
+  <div class="app view" id="view-simple">
+    <header class="top">
+      <div class="brand"><span class="mark"></span> Fleet Desk</div>
+      <nav class="nav">
+        <a href="#" data-go="missions">Missions</a>
+        <a class="on" href="#">Issue run</a>
+      </nav>
+    </header>
+
+    <div class="hier">
+      <span class="lvl"><b>Global</b> <a href="#" data-go="global">Fleet Desk</a></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Company</b> <em>dev-agents</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Repo</b> <em>dev-agents</em></span>
+      <span class="sep">›</span>
+      <span class="lvl on"><b>Mission</b> <em>#61</em></span>
+      <span class="sep">›</span>
+      <span class="lvl"><b>Task</b> <em>1 seat</em></span>
+      <span class="hint">simple 1:1</span>
+    </div>
+
+    <div class="issue-hero">
+      <div class="row1">
+        <a class="gh" href="#">dev-agents#61 ↗</a>
+        <span class="pill todo">queued</span>
+        <span class="pill armed">armed</span>
+        <h1 style="flex-basis:100%">Mute rate-cap toast in unit tests</h1>
+        <div class="actions">
+          <button class="btn sm" type="button">Copy: dispatch go</button>
+        </div>
+      </div>
+      <div class="issue-meta">
+        <span>Pattern <b>simple 1 : 1</b></span>
+        <span>Company <b>dev-agents</b></span>
+        <span>Repo <b class="mono">Arlencho/dev-agents</b></span>
+        <span>Seat <b>devops</b></span>
+      </div>
+      <div class="issue-body">
+        Smallest mapping: GitHub issue → one plan line → one task → one seat.
+        Hierarchy still present; multi-wave chrome stays hidden.
+      </div>
+      <div class="flow-steps">
+        <span class="s done">1 Issue</span><span class="arr">→</span>
+        <span class="s on">2 One task armed</span><span class="arr">→</span>
+        <span class="s">3 Dispatch</span><span class="arr">→</span>
+        <span class="s">4 Floor (1 lane)</span><span class="arr">→</span>
+        <span class="s">5 Trail + close</span>
+      </div>
+    </div>
+
+    <div class="pipeline">
+      <div class="pipe todo active"><div class="ph">Queued <span class="n">1</span></div><div class="desc">devops</div></div>
+      <div class="pipe wip"><div class="ph">In flight <span class="n">0</span></div><div class="desc">wait go</div></div>
+      <div class="pipe blocked"><div class="ph">Blocked <span class="n">0</span></div><div class="desc">—</div></div>
+      <div class="pipe done"><div class="ph">Settled <span class="n">0</span></div><div class="desc">—</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Single task</h2>
+      <table class="task-table">
+        <thead><tr><th>Status</th><th>Seat</th><th>Task</th><th>Branch</th><th>Issue</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="pill todo">queued</span></td>
+            <td>devops</td>
+            <td>FLEET_NOTIFY_SILENT in tests</td>
+            <td class="mono">feat/mute-ratecap-notify</td>
+            <td class="mono"><a class="link" href="#">#61</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+  const views = ['global','company','missions','issue','wave','conductor','simple'];
+  const els = Object.fromEntries(views.map(v => [v, document.getElementById('view-' + v)]));
+  const tabs = document.querySelectorAll('.view-tabs button');
+
+  function show(name) {
+    views.forEach(v => els[v].classList.toggle('on', v === name));
+    tabs.forEach(b => b.classList.toggle('active', b.dataset.view === name));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  tabs.forEach(b => b.addEventListener('click', () => show(b.dataset.view)));
+  document.querySelectorAll('[data-go]').forEach(el => {
+    el.addEventListener('click', e => {
+      e.preventDefault();
+      show(el.getAttribute('data-go'));
+    });
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        show(el.getAttribute('data-go'));
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-wave] .wh').forEach(wh => {
+    wh.addEventListener('click', () => wh.parentElement.classList.toggle('open'));
+  });
+
+  setInterval(() => {
+    document.querySelectorAll('.lane.run .timer').forEach(t => {
+      const m = t.textContent.match(/(\d+):(\d+)/);
+      if (!m) return;
+      let s = (+m[1]) * 60 + (+m[2]) + 1;
+      t.textContent = String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
+    });
+  }, 1000);
+</script>
+</body>
+</html>
