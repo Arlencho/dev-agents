@@ -208,6 +208,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .pmi.band-p0 { color: var(--muted); background: var(--chip); }
 .pmi.band-p1 { color: var(--accent); background: var(--accent-soft); }
 .pmi.band-p2 { color: var(--ok); background: var(--ok-soft); }
+/* P3 (Phase 1, evidence-gated) reuses the P2 tokens plus an outline — the band
+   is still text-first, so it never reads as a trophy. */
+.pmi.band-p3 { color: var(--ok); background: var(--ok-soft); box-shadow: inset 0 0 0 1px currentColor; }
 
 /* ── wave sections ──────────────────────────────────────────────────── */
 .wave { margin-bottom: 18px; }

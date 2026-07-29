@@ -7,3 +7,5 @@ roles:
   fixture-critic: evidence-first untrusted-prior git-ship
   fixture-runner: evidence-first untrusted-prior git-ship
   fixture-flaky: evidence-first untrusted-prior git-ship
+  # clears the P2 outcome bar with defaults only → must stay P2 (no proven loop)
+  fixture-veteran: evidence-first untrusted-prior git-ship

@@ -2,12 +2,18 @@
 # Fleet Desk tests — data contract (JSON) first, HTML projection second.
 #
 #   Part A: deterministic fixture repo (tests/fixtures/experience-mini)
-#           joins · wave field · PMI bands + Phase 0 cap · redaction
+#           joins · wave field · PMI bands + cap · redaction
+#   Part A2: Phase 1 enrichment — skill git history, critic pairing, gh
+#           degradation, snapshot (uses throwaway repos so git facts are real)
 #   Part B: smoke build of this real repo through scripts/experience-build.sh
 #
 # Law: docs/proposals/experience-console-SYNTHESIS.md
 # Schema: docs/experience-data.md
 set -euo pipefail
+
+# Phase 1 `gh` enrichment is optional and network-touching. Fixture builds pass
+# --no-gh so Part A stays offline-deterministic; Part B exercises the real
+# auto-detect path (and must pass with or without gh).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -91,16 +97,17 @@ HOME_PATHS='/Users/[A-Za-z0-9._-]+/|/home/[A-Za-z0-9._-]+/'
 
 echo "== A. fixture repo (deterministic) =="
 FIXOUT="$TMP/fixture-site"
-python3 "$REPO_DIR/scripts/experience_data.py" --repo "$FIX" --out "$FIXOUT" >"$TMP/data.log" 2>&1 \
+python3 "$REPO_DIR/scripts/experience_data.py" --repo "$FIX" --out "$FIXOUT" --no-gh >"$TMP/data.log" 2>&1 \
   && ok "experience_data.py builds fixture" || bad "experience_data.py builds fixture"
 python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >"$TMP/html.log" 2>&1 \
   && ok "experience_build.py renders fixture" || bad "experience_build.py renders fixture"
 
 FJ="$FIXOUT/data/index.json"
 exists "fixture data/index.json" "$FJ"
-assert_json "schema_version is pinned"            "$FJ" 'd["schema_version"] == 1'
+assert_json "schema_version is pinned"            "$FJ" 'd["schema_version"] == 2'
+assert_json "phase recorded as 1"                 "$FJ" 'd["phase"] == 1'
 assert_json "generated_at + law recorded"         "$FJ" 'd["generated_at"] and d["law"].endswith("experience-console-SYNTHESIS.md")'
-assert_json "22 trails projected"                 "$FJ" 'len(d["trails"]) == 22 == d["counts"]["trails"]'
+assert_json "27 trails projected"                 "$FJ" 'len(d["trails"]) == 27 == d["counts"]["trails"]'
 
 # ── joins ────────────────────────────────────────────────────────────
 assert_json "join: config_map (experience-joins.yaml)" "$FJ" \
@@ -132,23 +139,83 @@ assert_json "wave: null when unknown (conductor)"      "$FJ" 'T["conductor-fixtu
 assert_json "wave: grouping matches trails"            "$FJ" 'sum(w["n"] for w in d["waves"]) == len(d["trails"]) and W["5"]["n"] == 8'
 
 # ── PMI ──────────────────────────────────────────────────────────────
-assert_json "PMI: P2 when n_done>=5 and success>=70%"  "$FJ" 'R["fixture-builder"]["pmi"]["band"] == "P2"'
+assert_json "PMI: P2 when n_done>=5 and success>=70%"  "$FJ" 'R["fixture-veteran"]["pmi"]["band"] == "P2" and R["fixture-veteran"]["n_done"] == 5'
 assert_json "PMI: n_done<5 stays P1 even at 80%"       "$FJ" 'R["fixture-runner"]["pmi"]["band"] == "P1" and R["fixture-runner"]["n_done"] == 4'
 assert_json "PMI: success<70% stays P1 with n_done>=5" "$FJ" 'R["fixture-flaky"]["pmi"]["band"] == "P1" and R["fixture-flaky"]["n_done"] == 5 and R["fixture-flaky"]["success_rate"] < 0.7'
 assert_json "PMI: n<3 is P0"                           "$FJ" 'R["fixture-critic"]["pmi"]["band"] == "P0"'
 assert_json "PMI: specialized pack alone never grants P2" "$FJ" \
-  'all(s["pmi"]["band"] != "P2" or (s["n_done"] >= 5 and s["success_rate"] >= 0.7) for s in R.values())'
-assert_json "PMI: Phase 0 cap is P2, no band above"    "$FJ" \
-  'all(s["pmi"]["band"] in ("P0","P1","P2") and s["pmi"]["cap"] == "P2" for s in R.values())'
+  'all(s["pmi"]["band"] not in ("P2","P3") or (s["n_done"] >= 5 and s["success_rate"] >= 0.7) for s in R.values())'
 assert_json "PMI: inputs disclosed per role"           "$FJ" \
-  'all({"n","n_done","n_fail","n_known","success_rate","packs","specialized_packs"} <= set(s["pmi"]["inputs"]) for s in R.values())'
+  'all({"n","n_done","n_fail","n_known","success_rate","packs","specialized_packs","proven_loop","proven_loop_evidence"} <= set(s["pmi"]["inputs"]) for s in R.values())'
 assert_json "PMI: policy gates published"              "$FJ" \
-  'd["pmi_policy"]["p2_min_done"] == 5 and d["pmi_policy"]["p2_min_success"] == 0.7 and d["pmi_policy"]["phase0_cap"] == "P2"'
-if grep -R 'class="pmi">P3' "$FIXOUT" >/dev/null 2>&1; then
-  bad "PMI: no P3 band rendered in HTML"
+  'd["pmi_policy"]["p2_min_done"] == 5 and d["pmi_policy"]["p2_min_success"] == 0.7 and d["pmi_policy"]["display_cap"] == "P3"'
+
+# P3 (Phase 1) — outcomes PLUS proven-loop evidence, never one or the other.
+assert_json "PMI: P3 needs the P2 outcome bar too"     "$FJ" \
+  'all(s["pmi"]["band"] != "P3" or (s["n_done"] >= 5 and s["success_rate"] >= 0.7) for s in R.values())'
+assert_json "PMI: P3 needs proven-loop evidence"       "$FJ" \
+  'all(s["pmi"]["band"] != "P3" or s["pmi"]["inputs"]["proven_loop_evidence"] for s in R.values())'
+assert_json "PMI: P2 without proven loop stays P2"     "$FJ" \
+  'R["fixture-veteran"]["pmi"]["inputs"]["proven_loop"] is False and "no P3 yet" in R["fixture-veteran"]["pmi"]["reason"]'
+assert_json "PMI: P3 via learning→skill promotion"     "$FJ" \
+  '(R["fixture-builder"]["pmi"]["band"] == "P3"
+    and any("promotes" in e for e in R["fixture-builder"]["pmi"]["inputs"]["proven_loop_evidence"]))'
+assert_json "PMI: no band above P3"                    "$FJ" \
+  'all(s["pmi"]["band"] in ("P0","P1","P2","P3") and s["pmi"]["cap"] == "P3" for s in R.values())'
+assert_json "PMI: cap reason states the P3 gate"       "$FJ" \
+  '"proven-loop" in d["pmi_policy"]["cap_reason"] and "P3" in d["pmi_policy"]["cap_reason"]'
+grep -q 'class="pmi band-p3">P3' "$FIXOUT/role/fixture-builder/index.html" \
+  && ok "PMI: P3 band rendered with its own badge class" || bad "PMI: P3 band rendered with its own badge class"
+grep -q 'band-p3' "$FIXOUT/assets/site.css" && ok "PMI: P3 badge is styled" || bad "PMI: P3 badge is styled"
+if grep -R 'P3 Phase 1 only\|Phase 0 caps display' "$FIXOUT" >/dev/null 2>&1; then
+  bad "PMI: Phase 0 caption retired now that P3 is real"
 else
-  ok "PMI: no P3 band rendered in HTML"
+  ok "PMI: Phase 0 caption retired now that P3 is real"
 fi
+
+# ── Phase 1: skill git history ───────────────────────────────────────
+assert_json "history: every skill carries the history fields" "$FJ" \
+  'all({"git_history","revisions","history_available","history_depth","first_commit","last_commit","promotes"} <= set(s) for s in d["skills"])'
+assert_json "history: projection publishes availability + depth" "$FJ" \
+  'd["skill_history"]["depth"] == 20 and isinstance(d["skill_history"]["available"], bool)'
+assert_json "history: commits carry sha + date + subject" "$FJ" \
+  '(not d["skill_history"]["available"]
+    or all({"sha","date","ts","subject"} <= set(c) and len(c["sha"]) <= 12 for s in d["skills"] for c in s["git_history"]))'
+assert_json "history: depth is capped"                   "$FJ" \
+  'all(len(s["git_history"]) <= s["history_depth"] for s in d["skills"])'
+assert_json "history: promotion link is two-way"         "$FJ" \
+  '("lesson-one" in [p for s in d["skills"] if s["id"] == "fixture-pack" for p in s["promotes"]]
+    and "fixture-pack" in [x for l in d["learnings"] if l["slug"] == "lesson-one" for x in l["promoted_by"]])'
+
+# ── Phase 1: critic pairing by branch ────────────────────────────────
+assert_json "critic: pairs producer and critic on one branch" "$FJ" \
+  '(d["counts"]["critic_pairs"] == 1
+    and d["critic_pairs"][0]["branch"] == "feat/widget-x-alpha"
+    and d["critic_pairs"][0]["producers"] == ["1-fixture-builder-widget-x"]
+    and d["critic_pairs"][0]["critics"] == ["6-fixture-critic-1"])'
+assert_json "critic: pairing recorded on both trails"    "$FJ" \
+  '(T["1-fixture-builder-widget-x"]["reviewed_by"] == ["6-fixture-critic-1"]
+    and T["6-fixture-critic-1"]["reviews"] == ["1-fixture-builder-widget-x"])'
+assert_json "critic: unpaired critic stays unpaired"     "$FJ" \
+  'T["6-fixture-critic-2"]["reviews"] == [] and T["6-fixture-critic-2"]["is_critic"] is True'
+assert_json "critic: every trail carries pairing fields" "$FJ" \
+  'all({"is_critic","reviewed_by","reviews"} <= set(t) for t in d["trails"])'
+assert_json "critic: rate is branch pairing, not name-contains" "$FJ" \
+  '(d["fleet"]["critic_rate_method"] == "branch_pairing"
+    and d["fleet"]["critic_rate"] == round(1 / d["fleet"]["critic_rate_basis"]["producer_trails"], 4))'
+assert_json "critic: rate basis published with its n"    "$FJ" \
+  '{"pairs","producer_trails","paired_producer_trails","critic_trails","unpaired_critic_trails"} <= set(d["fleet"]["critic_rate_basis"])'
+assert_json "critic: role_stats expose review counts"    "$FJ" \
+  '(R["fixture-builder"]["n_reviewed"] == 1 and R["fixture-critic"]["n_reviews_given"] == 1
+    and R["fixture-veteran"]["n_reviewed"] == 0)'
+
+# ── Phase 1: gh enrichment (optional, never fatal) ───────────────────
+assert_json "gh: fields exist on every trail even when off" "$FJ" \
+  'all({"pr_url","pr_state","pr_number","issue_links_resolved"} <= set(t) for t in d["trails"])'
+assert_json "gh: --no-gh is reported honestly"           "$FJ" \
+  'd["gh_enrichment"]["status"] == "disabled" and d["gh_enrichment"]["trails_with_pr"] == 0'
+assert_json "gh: no PR/issue values invented when off"   "$FJ" \
+  'all(t["pr_url"] == "" and t["pr_state"] == "" and t["pr_number"] is None and t["issue_links_resolved"] == [] for t in d["trails"])'
 
 # ── redaction / no secrets ───────────────────────────────────────────
 assert_json "redaction: token-shaped strings replaced" "$FJ" \
@@ -219,7 +286,7 @@ grep -q 'Base → head' "$FIXOUT/trail/1-fixture-builder-widget-x/index.html" &&
 grep -q 'Raw handoff record (audit, redacted)' "$FIXOUT/trail/1-fixture-builder-widget-x/index.html" \
   && ok "trail has raw-record disclosure" || bad "trail has raw-record disclosure"
 grep -q 'make experience' "$FIXOUT/company/ghostco/index.html" && ok "empty company teaches make experience" || bad "empty company teaches make experience"
-grep -q 'class="pmi band-p2">P2' "$FIXOUT/role/fixture-builder/index.html" && ok "PMI band rendered as badge" || bad "PMI band rendered as badge"
+grep -q 'class="pmi band-p2">P2' "$FIXOUT/role/fixture-veteran/index.html" && ok "PMI band rendered as badge" || bad "PMI band rendered as badge"
 grep -q 'PMI inputs' "$FIXOUT/role/fixture-builder/index.html" && ok "PMI disclosure present" || bad "PMI disclosure present"
 grep -q 'class="chip dim"' "$FIXOUT/index.html" \
   && grep -q 'chipmark">placeholder' "$FIXOUT/index.html" \
@@ -238,6 +305,138 @@ if python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$TMP/bad
 else
   ok "renderer rejects unknown schema_version"
 fi
+
+echo ""
+echo "== A2. Phase 1 enrichment against real git (throwaway repos) =="
+
+# A2.1 — projection of a tree with NO git: history must degrade honestly, and
+# the promotion path to P3 must still work (it reads files, not git).
+NOGIT="$TMP/nogit-repo"
+cp -R "$FIX" "$NOGIT"
+if git -C "$NOGIT" rev-parse --show-toplevel >/dev/null 2>&1; then
+  bad "no-git case is genuinely outside a work tree (not vacuous)"
+else
+  ok "no-git case is genuinely outside a work tree (not vacuous)"
+fi
+python3 "$REPO_DIR/scripts/experience_data.py" --repo "$NOGIT" --out "$TMP/nogit-site" --no-gh >"$TMP/nogit.log" 2>&1 \
+  && ok "build succeeds without git" || bad "build succeeds without git"
+NJ="$TMP/nogit-site/data/index.json"
+assert_json "no git: history marked unavailable, not faked" "$NJ" \
+  '(d["skill_history"]["available"] is False
+    and all(s["git_history"] == [] and s["revisions"] == 0 and s["history_available"] is False for s in d["skills"]))'
+assert_json "no git: warning explains the gap"              "$NJ" 'any("skill version history" in w for w in d["warnings"])'
+assert_json "no git: cap reason says only promotion was evaluable" "$NJ" \
+  '"git history unavailable" in d["pmi_policy"]["cap_reason"] and d["pmi_policy"]["history_available"] is False'
+assert_json "no git: P3 still reachable through promotion"  "$NJ" 'R["fixture-builder"]["pmi"]["band"] == "P3"'
+
+# A2.2 — real commits: the version-history path to P3 is proven with actual
+# `git log` output, never a hand-written fixture of fake commits.
+GITREPO="$TMP/git-repo"
+cp -R "$FIX" "$GITREPO"
+(
+  cd "$GITREPO"
+  git init -q .
+  git config user.email fixture@example.invalid
+  git config user.name "Fixture Operator"
+  git add -A
+  git commit -qm "seed fixture repo"
+  printf '\n- [ ] Second revision of the fixture pack.\n' >>skills/fixture-pack/SKILL.md
+  git add skills/fixture-pack/SKILL.md
+  git commit -qm "skills: revise fixture pack to v2"
+) >"$TMP/gitrepo-init.log" 2>&1 \
+  && ok "throwaway git repo seeded with 2 commits on a SKILL.md" \
+  || bad "throwaway git repo seeded with 2 commits on a SKILL.md"
+python3 "$REPO_DIR/scripts/experience_data.py" --repo "$GITREPO" --out "$TMP/gitrepo-site" --no-gh >"$TMP/gitrepo.log" 2>&1 \
+  && ok "build succeeds with git history" || bad "build succeeds with git history"
+GJ="$TMP/gitrepo-site/data/index.json"
+assert_json "git: history available and counted"        "$GJ" \
+  '(d["skill_history"]["available"] is True
+    and [s for s in d["skills"] if s["id"] == "fixture-pack"][0]["revisions"] == 2)'
+assert_json "git: newest commit first, subject recorded" "$GJ" \
+  '[s for s in d["skills"] if s["id"] == "fixture-pack"][0]["git_history"][0]["subject"] == "skills: revise fixture pack to v2"'
+assert_json "git: first/last commit dates published"    "$GJ" \
+  '[s for s in d["skills"] if s["id"] == "fixture-pack"][0]["last_commit"] >= [s for s in d["skills"] if s["id"] == "fixture-pack"][0]["first_commit"] != ""'
+assert_json "git: P3 evidence cites the revision count"  "$GJ" \
+  'any("recorded revisions" in e for e in R["fixture-builder"]["pmi"]["inputs"]["proven_loop_evidence"])'
+assert_json "git: a single-commit pack is not a proven loop" "$GJ" \
+  'all("evidence-first" not in e for s in R.values() for e in s["pmi"]["inputs"]["proven_loop_evidence"])'
+assert_absent "no secret shapes in git-repo projection"  "$TMP/gitrepo-site" "$SECRET_SHAPES"
+
+# A2.3 — env kill switch must work the same as the flag
+FLEET_DESK_NO_GH=1 python3 "$REPO_DIR/scripts/experience_data.py" --repo "$FIX" --out "$TMP/envoff" >"$TMP/envoff.log" 2>&1 \
+  && ok "FLEET_DESK_NO_GH=1 build succeeds" || bad "FLEET_DESK_NO_GH=1 build succeeds"
+assert_json "gh: env kill switch reported"  "$TMP/envoff/data/index.json" 'd["gh_enrichment"]["status"] == "disabled"'
+
+# A2.3b — gh mapping is unit-tested offline: no network, no invented links.
+if python3 - "$REPO_DIR" <<'PY'
+import sys
+from pathlib import Path
+repo = Path(sys.argv[1])
+sys.path.insert(0, str(repo / "scripts"))
+import experience_data as ed
+
+index = {
+    "repo": "acme/widget",
+    "pr_by_branch": {
+        "feat/x": {
+            "number": 7, "url": "https://github.com/acme/widget/pull/7",
+            "state": "MERGED", "title": "a title", "updated_at": "2026-01-01T00:00:00Z",
+        }
+    },
+    "issue_by_number": {
+        "12": {"number": 12, "url": "https://github.com/acme/widget/issues/12",
+               "state": "OPEN", "title": "an issue", "kind": "issue"},
+    },
+}
+trails = [
+    {"branch": "feat/x", "issue_links": ["#12", "https://github.com/other/repo/issues/12"]},
+    {"branch": "feat/elsewhere", "issue_links": ["#12"]},
+]
+ed.apply_gh(trails, index)
+assert trails[0]["pr_number"] == 7 and trails[0]["pr_state"] == "MERGED"
+assert trails[0]["pr_url"].endswith("/pull/7")
+assert [x["number"] for x in trails[0]["issue_links_resolved"]] == [12], "foreign-repo URL must not resolve"
+# a trail that is not this repo's work keeps its bare #ref unresolved
+assert trails[1]["pr_url"] == "" and trails[1]["pr_number"] is None
+assert trails[1]["issue_links_resolved"] == []
+# non-root projection never calls gh at all
+out = ed.gh_index(repo / "tests" / "fixtures" / "experience-mini", repo, True)
+assert out["status"] == "skipped" and "work-tree root" in out["reason"], out
+# PR/issue titles go through the same redactor before they enter the JSON
+red = ed.redact("ghp_" + "A" * 24)
+assert "ghp_" not in red and "redacted" in red, red
+PY
+then ok "gh: mapping resolves only this repo's PR/issues (offline unit)"; else bad "gh: mapping resolves only this repo's PR/issues (offline unit)"; fi
+
+# A2.4 — optional snapshot: redacted rollup, no bodies, small enough to commit
+SNAP="$TMP/snapshot"
+python3 "$REPO_DIR/scripts/experience_data.py" --repo "$FIX" --out "$TMP/snapsite" --no-gh --snapshot-dir "$SNAP" \
+  >"$TMP/snap.log" 2>&1 && ok "snapshot build succeeds" || bad "snapshot build succeeds"
+exists "snapshot summary.json"  "$SNAP/summary.json"
+exists "snapshot README.md"     "$SNAP/README.md"
+if python3 - "$SNAP/summary.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if (
+    d["counts"]["trails"] == 27
+    and d["schema_version"] == 2
+    and d["roles"]["fixture-builder"]["pmi_band"] == "P3"
+    and len(d["critic_pairs"]) == 1
+    and all({"task_id", "status", "handoff_summary"} <= set(t) for t in d["trails"])
+) else 1)
+PY
+then ok "snapshot: keeps the rollup numbers"; else bad "snapshot: keeps the rollup numbers"; fi
+if python3 - "$SNAP/summary.json" <<'PY'
+import json, sys
+raw = open(sys.argv[1]).read()
+banned = ("handoff_markdown", "handoff_sections", '"body"', "body_truncated", "git_history")
+sys.exit(1 if any(b in raw for b in banned) else 0)
+PY
+then ok "snapshot: drops every free-text body"; else bad "snapshot: drops every free-text body"; fi
+assert_absent "no secret shapes in snapshot"      "$SNAP" "$SECRET_SHAPES"
+assert_absent "no operator home paths in snapshot" "$SNAP" "$HOME_PATHS"
+SNAP_KB=$(( $(wc -c <"$SNAP/summary.json") / 1024 ))
+if [ "$SNAP_KB" -lt 512 ]; then ok "snapshot stays small (${SNAP_KB} KiB < 512 KiB)"; else bad "snapshot stays small (${SNAP_KB} KiB)"; fi
 
 echo ""
 echo "== B. real repo smoke =="
@@ -265,11 +464,25 @@ grep -q 'class="seg"' "$SITE/work/index.html" && ok "site work has group toggle"
 assert_absent_html "no inline styles in site HTML" "$SITE" '[[:space:]]style=|<style'
 assert_links_resolve "site: every relative href resolves (BROKEN: 0)" "$SITE"
 
-assert_json "real data parses with pinned schema" "$RJ" 'd["schema_version"] == 1 and isinstance(d["trails"], list)'
+assert_json "real data parses with pinned schema" "$RJ" 'd["schema_version"] == 2 and isinstance(d["trails"], list)'
 assert_json "real trails carry contract fields"   "$RJ" \
-  'all({"task_id","agent","wave","status","branch","provenance","join_method","project_label","conductor","ts","base_sha","head_sha","handoff_sections"} <= set(t) for t in d["trails"])'
+  'all({"task_id","agent","wave","status","branch","provenance","join_method","project_label","conductor","ts","base_sha","head_sha","handoff_sections","is_critic","reviewed_by","reviews","pr_url","pr_state","issue_links_resolved"} <= set(t) for t in d["trails"])'
 assert_json "real joins never invent companies"   "$RJ" 'all(t["company_id"] is None or t["company_id"] in C for t in d["trails"])'
-assert_json "real PMI capped at P2"               "$RJ" 'all(s["pmi"]["band"] in ("P0","P1","P2") for s in R.values())'
+assert_json "real PMI capped at P3"               "$RJ" 'all(s["pmi"]["band"] in ("P0","P1","P2","P3") for s in R.values())'
+assert_json "real skill history collected"        "$RJ" \
+  '(d["skill_history"]["available"] is True and d["skill_history"]["skills_with_history"] >= 1
+    and all(len(s["git_history"]) <= 20 for s in d["skills"]))'
+assert_json "real critic rate declares its method" "$RJ" \
+  'd["fleet"]["critic_rate_method"] in ("branch_pairing", "role_name_fallback") and "critic_rate_basis" in d["fleet"]'
+# gh may be missing, logged out or offline on any machine — the only contract is
+# that the build survived and said what happened.
+assert_json "real gh enrichment never fails the build" "$RJ" \
+  '(d["gh_enrichment"]["status"] in ("ok","skipped","disabled","unavailable","unauthenticated","error")
+    and (d["gh_enrichment"]["status"] == "ok" or d["gh_enrichment"]["reason"]))'
+assert_json "real gh PR fields stay consistent"   "$RJ" \
+  'all((t["pr_url"] and t["pr_state"]) or (not t["pr_url"] and t["pr_number"] is None) for t in d["trails"])'
+assert_json "real gh never stores issue bodies"   "$RJ" \
+  'all(set(x) <= {"ref","number","url","state","title","kind","updated_at"} for t in d["trails"] for x in t["issue_links_resolved"])'
 assert_absent "no secret-shaped tokens in site"   "$SITE" "$SECRET_SHAPES"
 assert_absent "no operator home paths in site"    "$SITE" "$HOME_PATHS"
 
@@ -279,7 +492,7 @@ else
   ok "trail pages (none — empty fleet ok)"
 fi
 
-for target in experience experience-open desk; do
+for target in experience experience-open desk experience-snapshot; do
   make -n "$target" >/dev/null 2>&1 && ok "make $target resolves" || bad "make $target resolves"
 done
 
@@ -300,7 +513,7 @@ exists "work/index.html survives experience-data" "$SITE/work/index.html"
 exists "about/index.html survives experience-data" "$SITE/about/index.html"
 exists "data/index.json still present"            "$RJ"
 assert_json "data/index.json refreshed (stale stamp gone)" "$RJ" \
-  'd["generated_at"] != "STALE-STAMP" and d["schema_version"] == 1'
+  'd["generated_at"] != "STALE-STAMP" and d["schema_version"] == 2'
 if compgen -G "$SITE/*/index.html" >/dev/null; then
   ok "sub-page tree survives experience-data"
 else

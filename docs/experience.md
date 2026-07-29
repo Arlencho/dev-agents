@@ -22,6 +22,9 @@ make desk
 
 # Data only (JSON contract, no HTML)
 make experience-data
+
+# Redacted, shareable rollup → docs/experience/snapshot/ (optional)
+make experience-snapshot
 ```
 
 `make experience` is two steps in a fixed order:
@@ -125,13 +128,36 @@ make vendor-auth   # CLI session preflight
 
 ---
 
-## Data sources (Phase 0)
+## Phase 1 enrichment (what got richer, and when it is silent)
+
+All four are **optional inputs**: if the tool or the data is missing, the build
+still succeeds and the JSON says so instead of guessing.
+
+| Enrichment | What you get | When it is missing |
+|------------|--------------|--------------------|
+| **Skill git history** | `git log` per `SKILL.md` (≤ 20 commits: sha, date, subject), version + revision counts | No git → `skill_history.available: false` + a build warning; nothing is invented |
+| **PMI P3** | A role can now reach **P3 (proven loop)**: P2 outcomes **plus** a specialized pack with `version ≥ 2` and ≥ 2 revisions, **or** a pack citing a promoted learning | Stays at P2 with a reason that names what is missing |
+| **Critic pairing** | `critic_rate` is now producer↔critic pairing on the **same branch**, with `critic_pairs[]` and per-trail `reviewed_by` / `reviews` | No pairs → falls back to the Phase 0 name-based rate and labels itself `role_name_fallback` |
+| **`gh` PR/issue links** | `pr_url`, `pr_state`, resolved issue **titles** on trails | `gh` missing, logged out, offline or slow → empty fields + `gh_enrichment.status`; **the build never fails**. Disable with `--no-gh` / `FLEET_DESK_NO_GH=1` |
+
+`make experience-snapshot` writes `docs/experience/snapshot/summary.json` (~25 KiB today):
+counts, PMI bands + reasons, critic pairs, skill versions, one-line trail rows.
+Free-text bodies are dropped, so it is safe to share; committing it is your call.
+
+Exact gates, field lists and the v1 → v2 migration:
+[`docs/experience-data.md`](experience-data.md).
+
+---
+
+## Data sources
 
 - `companies/*.md`  
 - `wave-plans/**/handoffs/*.{jsonl,md}`  
 - `wave-plans/conductor/`  
 - `skills/*/SKILL.md`, `config/role-skills.yaml`  
 - `learnings/*` (+ product `docs/qa/learning-*.md` if that repo is on disk)
+- `git log -- skills/*/SKILL.md` (version history, depth 20)
+- `gh pr list` / `gh issue list` — **only** when `gh` is authed; titles only, never bodies
 
 Optional joins: `config/experience-joins.yaml` (`pattern: company_id`).
 Join order: explicit map → `github_repo` → repo slug → company name token → **unlinked**
@@ -166,6 +192,9 @@ Schema and stability rules: [`docs/experience-data.md`](experience-data.md).
 | Page missing a field | Check `site/experience/data/index.json` — HTML can only show what the contract carries |
 | `schema mismatch` error | Data JSON is from an older build: re-run `make experience` |
 | Browser blocked file:// | Use `python3 -m http.server` under `site/experience` |
+| No PR links on trails | Check `gh_enrichment.status` in the JSON (`unavailable` / `unauthenticated` / `error`), then `gh auth login`. Trails dispatched into a product repo never match this repo's PRs — that is correct |
+| Role stuck at P2 | Read `pmi.reason`: P3 needs a specialized pack with `version ≥ 2` and ≥ 2 commits, or one citing a promoted learning |
+| `critic share` looks odd | Read `fleet.critic_rate_method`: `branch_pairing` (reviewed producers) or `role_name_fallback` (no branch pair found) |
 
 ---
 

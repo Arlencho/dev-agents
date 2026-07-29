@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fleet Desk — data layer (Wave 1 data contract).
+Fleet Desk — data layer (Phase 1 data contract).
 
 Reads git artifacts (companies, handoffs, skills, learnings, role packs) and
 emits ONE stable machine-readable projection:
@@ -10,6 +10,12 @@ emits ONE stable machine-readable projection:
 Schema: docs/experience-data.md   (bump `schema_version` on breaking changes)
 Law:    docs/proposals/experience-console-SYNTHESIS.md
 
+Phase 1 adds, without ever making the build depend on them:
+  · skill git history (`git log` per SKILL.md) → PMI P3 becomes reachable
+  · critic pairing by branch → `critic_pairs`, honest fallback when unpaired
+  · optional `gh` PR/issue enrichment → never fails the build
+  · optional redacted snapshot under docs/experience/snapshot/
+
 This module never renders HTML. scripts/experience_build.py renders HTML by
 reading the JSON this module writes — JSON first, HTML second.
 """
@@ -17,27 +23,49 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
+import subprocess
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+PHASE = 1
 LAW = "docs/proposals/experience-console-SYNTHESIS.md"
 DEFAULT_PACKS = {"evidence-first", "untrusted-prior", "git-ship"}
 
-# PMI gates — frozen in SYNTHESIS §5.2
+# PMI gates — SYNTHESIS §5.2. P0–P2 are frozen; P3 is the Phase 1 addition and
+# is evidence-gated, never granted by a pack or by seniority-by-vibes.
 PMI_GATES = {
     "p1_min_n": 3,
     "p2_min_done": 5,
     "p2_min_success": 0.70,
-    "phase0_cap": "P2",
-    "cap_reason": "P3 needs version/promotion history (Phase 1)",
+    # P3 = "proven loop": P2 outcomes PLUS a specialized pack that either was
+    # actually revised (version ≥ 2 and ≥ 2 commits touching its SKILL.md) or
+    # carries a learning→skill promotion ([ev:] cite of a learnings file).
+    "p3_min_pack_version": 2,
+    "p3_min_pack_revisions": 2,
+    "display_cap": "P3",
+    "cap_reason": (
+        "P3 needs proven-loop evidence: a specialized pack with version ≥ 2 and ≥ 2 recorded "
+        "revisions, or a specialized pack citing a promoted learning"
+    ),
 }
 
 JOIN_METHODS = ("config_map", "github_repo", "repo_path", "name_token", "unlinked")
+
+# Skill version history: how far back `git log` is read per SKILL.md.
+GIT_LOG_DEPTH = 20
+GIT_TIMEOUT = 20
+
+# `gh` enrichment budgets. Every call is optional and failure-tolerant.
+GH_AUTH_TIMEOUT = 6
+GH_LIST_TIMEOUT = 15
+GH_LIST_LIMIT = 200
+GH_TITLE_CAP = 120
 
 # Section caps keep the JSON reviewable and keep transcripts out of the site.
 SECTION_CAP = 4000
@@ -89,6 +117,75 @@ def cap(text: str, limit: int) -> Tuple[str, bool]:
     if len(text) <= limit:
         return text, False
     return text[:limit], True
+
+
+# ── subprocess helpers (git / gh) ─────────────────────────────────────
+# Rule for this whole section: an external tool may only ADD fields. Missing,
+# unauthenticated, slow or broken tools degrade to empty data + a warning.
+
+def run_cmd(args: List[str], cwd: Optional[Path], timeout: int) -> Tuple[int, str, str]:
+    """Run a command, never raise. Returns (rc, stdout, stderr); rc 127 = missing,
+    rc 124 = timed out (the shell conventions, so callers can log a reason)."""
+    try:
+        p = subprocess.run(
+            args,
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+        )
+        return p.returncode, p.stdout, p.stderr
+    except FileNotFoundError:
+        return 127, "", "command not found"
+    except subprocess.TimeoutExpired:
+        return 124, "", f"timed out after {timeout}s"
+    except OSError as exc:  # pragma: no cover - defensive
+        return 1, "", str(exc)
+
+
+def git_toplevel(repo: Path) -> Optional[Path]:
+    """Work-tree root of the projected repo, or None when git is unusable."""
+    if shutil.which("git") is None or not repo.is_dir():
+        return None
+    rc, out, _ = run_cmd(["git", "-C", str(repo), "rev-parse", "--show-toplevel"], None, GIT_TIMEOUT)
+    if rc != 0 or not out.strip():
+        return None
+    return Path(out.strip())
+
+
+def git_file_history(repo: Path, rel_path: str, depth: int = GIT_LOG_DEPTH) -> List[Dict[str, str]]:
+    """`git log` for one file, newest first, capped at `depth`.
+
+    Empty list means "no recorded commits" (new/untracked file) — the caller
+    distinguishes that from "git unavailable" via the projection-level flag.
+    """
+    rc, out, _ = run_cmd(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "log",
+            f"-n{int(depth)}",
+            "--follow",
+            "--date=short",
+            "--format=%h%x1f%ad%x1f%aI%x1f%s",
+            "--",
+            rel_path,
+        ],
+        None,
+        GIT_TIMEOUT,
+    )
+    if rc != 0:
+        return []
+    history: List[Dict[str, str]] = []
+    for line in out.splitlines():
+        parts = line.split("\x1f")
+        if len(parts) < 4:
+            continue
+        subject, _ = cap(redact(parts[3].strip()), 160)
+        history.append({"sha": parts[0][:12], "date": parts[1], "ts": parts[2], "subject": subject})
+    return history
 
 
 # ── parsing helpers ───────────────────────────────────────────────────
@@ -420,7 +517,13 @@ def load_trails(repo: Path, companies: List[Dict[str, Any]], joins: Dict[str, st
     return trails
 
 
-def load_skills(repo: Path) -> List[Dict[str, Any]]:
+def load_skills(repo: Path, history: bool = True) -> List[Dict[str, Any]]:
+    """Skill packs + (Phase 1) their git version history.
+
+    `history=False` (git unavailable) still emits the fields, empty — a reader
+    can always tell "no commits" from "history not collected" via
+    `history_available` on each skill and `skill_history.available` at the top.
+    """
     skills: List[Dict[str, Any]] = []
     root = repo / "skills"
 
@@ -429,16 +532,28 @@ def load_skills(repo: Path) -> List[Dict[str, Any]]:
         raw_ver = str(meta.get("version", "1" if status == "active" else "0"))
         version = int(raw_ver) if raw_ver.isdigit() else 0
         body_text, truncated = cap(redact(body), BODY_CAP)
+        rel = friendly_path(skill_md, repo)
+        git_history = git_file_history(repo, rel) if history else []
         return {
             "id": meta.get("id") or skill_md.parent.name,
             "version": version,
             "scope": meta.get("scope", "global"),
             "summary": meta.get("summary", ""),
             "status": status,
-            "path": friendly_path(skill_md, repo),
+            "path": rel,
             "body": body_text,
             "body_truncated": truncated,
             "roles": [],
+            # Phase 1 — version history (SYNTHESIS §7 "git log skill versions")
+            "history_available": bool(history),
+            "git_history": git_history,
+            "revisions": len(git_history),
+            "history_depth": GIT_LOG_DEPTH,
+            "history_truncated": len(git_history) >= GIT_LOG_DEPTH,
+            "first_commit": git_history[-1]["date"] if git_history else "",
+            "last_commit": git_history[0]["date"] if git_history else "",
+            # filled by link_promotions() once learnings are loaded
+            "promotes": [],
         }
 
     for skill_md in sorted(root.glob("*/SKILL.md")):
@@ -508,6 +623,268 @@ def load_learnings(repo: Path, skills: List[Dict[str, Any]], companies: List[Dic
     return learnings
 
 
+def link_promotions(skills: List[Dict[str, Any]], learnings: List[Dict[str, Any]]) -> None:
+    """learning → skill promotion links, both directions.
+
+    Same rule the learning `status` already uses: a skill body citing the
+    learning's filename (`[ev: learnings/foo.md]`). Reported, never written —
+    promotion stays PR-only (SYNTHESIS §3.6).
+    """
+    for lrn in learnings:
+        lrn["promoted_by"] = []
+    for s in skills:
+        promotes: List[str] = []
+        for lrn in learnings:
+            fname = Path(lrn["path"]).name
+            if fname and fname in s["body"]:
+                promotes.append(lrn["slug"])
+                lrn["promoted_by"].append(s["id"])
+        s["promotes"] = sorted(set(promotes))
+    for lrn in learnings:
+        lrn["promoted_by"] = sorted(set(lrn["promoted_by"]))
+
+
+# ── critic pairing (SYNTHESIS §5.1 — Phase 1: "pair by branch") ───────
+
+def is_critic_role(role: str) -> bool:
+    return "critic" in (role or "").lower()
+
+
+def pair_critics(trails: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Producer ↔ critic pairing on the same branch.
+
+    A pair exists when one branch carries at least one non-critic trail AND at
+    least one critic trail. Every trail gets `reviewed_by` / `reviews` (empty
+    lists when unpaired) so the absence of review is visible, not implied.
+
+    Fallback (documented, honest): when no branch pairs at all — no critic seat
+    ran, or critics ran on their own branches — `critic_rate` falls back to the
+    Phase 0 definition (share of trails whose role name contains "critic") and
+    says so in `critic_rate_method`.
+    """
+    for t in trails:
+        t["is_critic"] = is_critic_role(t["role"])
+        t["reviewed_by"] = []
+        t["reviews"] = []
+
+    by_branch: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for t in trails:
+        branch = (t.get("branch") or "").strip()
+        if branch:
+            by_branch[branch].append(t)
+
+    pairs: List[Dict[str, Any]] = []
+    for branch, group in sorted(by_branch.items()):
+        producers = [t for t in group if not t["is_critic"]]
+        critics = [t for t in group if t["is_critic"]]
+        if not producers or not critics:
+            continue
+        for p in producers:
+            p["reviewed_by"] = [c["task_id"] for c in critics]
+        for c in critics:
+            c["reviews"] = [p["task_id"] for p in producers]
+        waves = [t["wave"] for t in group if t["wave"] is not None]
+        pairs.append(
+            {
+                "branch": branch,
+                "wave": min(waves) if waves else None,
+                "company_id": next((t["company_id"] for t in group if t["company_id"]), None),
+                "producers": [p["task_id"] for p in producers],
+                "critics": [c["task_id"] for c in critics],
+                "producer_roles": sorted({p["role"] for p in producers}),
+                "critic_roles": sorted({c["role"] for c in critics}),
+                "critic_verdicts": sorted({c["status"] for c in critics}),
+            }
+        )
+
+    n_trails = len(trails)
+    producers = [t for t in trails if not t["is_critic"]]
+    critic_trails = [t for t in trails if t["is_critic"]]
+    paired_producers = [t for t in producers if t["reviewed_by"]]
+    paired_critics = [t for t in critic_trails if t["reviews"]]
+    basis = {
+        "pairs": len(pairs),
+        "producer_trails": len(producers),
+        "paired_producer_trails": len(paired_producers),
+        "critic_trails": len(critic_trails),
+        "paired_critic_trails": len(paired_critics),
+        "unpaired_critic_trails": len(critic_trails) - len(paired_critics),
+        "trails_without_branch": sum(1 for t in trails if not (t.get("branch") or "").strip()),
+    }
+    if pairs:
+        rate = round(len(paired_producers) / len(producers), 4) if producers else 0.0
+        summary = {
+            "critic_rate": rate,
+            "critic_rate_method": "branch_pairing",
+            "critic_rate_label": "of producer trails reviewed on the same branch",
+            "critic_rate_basis": basis,
+        }
+    else:
+        rate = round(len(critic_trails) / n_trails, 4) if n_trails else 0.0
+        summary = {
+            "critic_rate": rate,
+            "critic_rate_method": "role_name_fallback",
+            "critic_rate_label": "of trails are critic seats (no branch pair found)",
+            "critic_rate_basis": basis,
+        }
+    return pairs, summary
+
+
+# ── gh enrichment (optional, never fatal) ─────────────────────────────
+
+def gh_index(repo: Path, toplevel: Optional[Path], enabled: bool) -> Dict[str, Any]:
+    """Index open/merged PRs + issues for the projected repo when `gh` is authed.
+
+    Contract: this function NEVER raises and NEVER fails a build. Any missing
+    tool, missing auth, timeout or parse error degrades to an empty index with
+    a machine-readable `status` + `reason`. Titles only — no issue/PR bodies,
+    no comments, no tokens.
+    """
+    empty = {
+        "status": "skipped",
+        "reason": "",
+        "repo": "",
+        "prs_indexed": 0,
+        "issues_indexed": 0,
+        "fetched_at": "",
+        "pr_by_branch": {},
+        "issue_by_number": {},
+    }
+    if not enabled:
+        empty["status"] = "disabled"
+        empty["reason"] = "disabled (--no-gh or FLEET_DESK_NO_GH=1)"
+        return empty
+    if toplevel is None or toplevel.resolve() != repo.resolve():
+        empty["reason"] = "projected repo is not a git work-tree root (fixture or sub-tree projection)"
+        return empty
+    if shutil.which("gh") is None:
+        empty["status"] = "unavailable"
+        empty["reason"] = "gh not on PATH"
+        return empty
+    rc, _, err = run_cmd(["gh", "auth", "status"], repo, GH_AUTH_TIMEOUT)
+    if rc != 0:
+        empty["status"] = "unauthenticated"
+        empty["reason"] = "gh auth status failed" + (" (timed out)" if rc == 124 else "")
+        return empty
+    rc, out, _ = run_cmd(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], repo, GH_LIST_TIMEOUT
+    )
+    slug = out.strip() if rc == 0 else ""
+    if not slug:
+        empty["status"] = "error"
+        empty["reason"] = "gh repo view failed (no default repo resolved)"
+        return empty
+
+    pr_by_branch: Dict[str, Dict[str, Any]] = {}
+    issue_by_number: Dict[str, Dict[str, Any]] = {}
+    rank = {"MERGED": 3, "OPEN": 2, "CLOSED": 1}
+
+    rc, out, _ = run_cmd(
+        [
+            "gh", "pr", "list", "--state", "all", "--limit", str(GH_LIST_LIMIT),
+            "--json", "number,url,state,headRefName,title,updatedAt",
+        ],
+        repo,
+        GH_LIST_TIMEOUT,
+    )
+    if rc != 0:
+        empty["status"] = "error"
+        empty["reason"] = "gh pr list failed" + (" (timed out)" if rc == 124 else "")
+        empty["repo"] = slug
+        return empty
+    try:
+        prs = json.loads(out or "[]")
+    except json.JSONDecodeError:
+        prs = []
+    for pr in prs:
+        branch = str(pr.get("headRefName") or "")
+        if not branch:
+            continue
+        title, _ = cap(redact(str(pr.get("title") or "")), GH_TITLE_CAP)
+        record = {
+            "number": pr.get("number"),
+            "url": str(pr.get("url") or ""),
+            "state": str(pr.get("state") or ""),
+            "title": title,
+            "updated_at": str(pr.get("updatedAt") or ""),
+        }
+        prev = pr_by_branch.get(branch)
+        if prev is None or (rank.get(record["state"], 0), record["updated_at"]) > (
+            rank.get(prev["state"], 0),
+            prev["updated_at"],
+        ):
+            pr_by_branch[branch] = record
+        issue_by_number[str(record["number"])] = {**record, "kind": "pr"}
+
+    rc, out, _ = run_cmd(
+        ["gh", "issue", "list", "--state", "all", "--limit", str(GH_LIST_LIMIT), "--json", "number,url,state,title"],
+        repo,
+        GH_LIST_TIMEOUT,
+    )
+    if rc == 0:
+        try:
+            issues = json.loads(out or "[]")
+        except json.JSONDecodeError:
+            issues = []
+        for issue in issues:
+            title, _ = cap(redact(str(issue.get("title") or "")), GH_TITLE_CAP)
+            issue_by_number[str(issue.get("number"))] = {
+                "number": issue.get("number"),
+                "url": str(issue.get("url") or ""),
+                "state": str(issue.get("state") or ""),
+                "title": title,
+                "kind": "issue",
+            }
+
+    return {
+        "status": "ok",
+        "reason": "",
+        "repo": slug,
+        "prs_indexed": len(pr_by_branch),
+        "issues_indexed": len(issue_by_number),
+        "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "pr_by_branch": pr_by_branch,
+        "issue_by_number": issue_by_number,
+    }
+
+
+def apply_gh(trails: List[Dict[str, Any]], index: Dict[str, Any]) -> None:
+    """Attach PR + resolved issue fields. Fields always exist (empty when the
+    enrichment did not run), so a page never has to guess why they are absent."""
+    pr_by_branch = index.get("pr_by_branch") or {}
+    issue_by_number = index.get("issue_by_number") or {}
+    slug = (index.get("repo") or "").lower()
+    for t in trails:
+        t["pr_url"] = ""
+        t["pr_state"] = ""
+        t["pr_number"] = None
+        t["issue_links_resolved"] = []
+        pr = pr_by_branch.get((t.get("branch") or "").strip())
+        if pr:
+            t["pr_url"] = pr["url"]
+            t["pr_state"] = pr["state"]
+            t["pr_number"] = pr["number"]
+        if not issue_by_number:
+            continue
+        resolved = []
+        for ref in t.get("issue_links") or []:
+            num = ""
+            if ref.startswith("#"):
+                # A bare `#123` is only this repo's issue when the trail itself
+                # belongs to this repo (its branch matched a PR here). Trails
+                # dispatched into a product repo keep the raw ref unresolved
+                # rather than pointing at an unrelated dev-agents issue.
+                num = ref[1:] if pr else ""
+            else:
+                m = re.match(r"https://github\.com/([^/]+/[^/]+)/(?:issues|pull)/(\d+)", ref)
+                if m and m.group(1).lower() == slug:
+                    num = m.group(2)
+            hit = issue_by_number.get(num) if num else None
+            if hit:
+                resolved.append({"ref": ref, **hit})
+        t["issue_links_resolved"] = resolved[:8]
+
+
 def watchlist(trails: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     counter: Counter = Counter()
     for t in trails:
@@ -521,13 +898,61 @@ def watchlist(trails: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 # ── metrics ───────────────────────────────────────────────────────────
 
-def compute_pmi(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    """SYNTHESIS §5.2. P2 requires outcomes; Phase 0 hard-caps display at P2."""
+def pmi_policy(history_available: bool) -> Dict[str, Any]:
+    """Published gates. The cap reason stays honest about what could be checked."""
+    policy = dict(PMI_GATES)
+    if not history_available:
+        policy["cap_reason"] += (
+            " — git history unavailable in this projection, so only the promotion path was evaluable"
+        )
+    policy["history_available"] = history_available
+    return policy
+
+
+def proven_loop_evidence(specialized: List[str], skill_index: Dict[str, Dict[str, Any]]) -> List[str]:
+    """P3 evidence (SYNTHESIS §5.2 "Proven loop", Phase 1).
+
+    Two accepted proofs, both read off artifacts already in this projection:
+
+      1. version history — a specialized pack with `version ≥ p3_min_pack_version`
+         AND `≥ p3_min_pack_revisions` commits touching its SKILL.md (the pack
+         was actually revised, not merely born at v2).
+      2. promotion — a specialized pack whose body cites a learning file
+         (learning → candidate → active loop closed at least once).
+
+    Shared default packs are excluded on purpose: everyone gets those, so they
+    prove nothing about this role.
+    """
+    evidence: List[str] = []
+    for pack in specialized:
+        s = skill_index.get(pack)
+        if not s:
+            continue
+        if s["version"] >= PMI_GATES["p3_min_pack_version"] and s["revisions"] >= PMI_GATES["p3_min_pack_revisions"]:
+            evidence.append(
+                f"{pack} v{s['version']} with {s['revisions']} recorded revisions ({s['path']})"
+            )
+        if s.get("promotes"):
+            evidence.append(f"{pack} promotes {', '.join(s['promotes'])}")
+    return evidence
+
+
+def compute_pmi(inputs: Dict[str, Any], policy: Dict[str, Any]) -> Dict[str, Any]:
+    """SYNTHESIS §5.2. P2 requires outcomes; P3 additionally requires proven-loop
+    evidence (skill version history or learning→skill promotion)."""
     n = inputs["n"]
     n_done = inputs["n_done"]
     success = inputs["success_rate"]
     specialized = inputs["specialized_packs"]
-    if n_done >= PMI_GATES["p2_min_done"] and success >= PMI_GATES["p2_min_success"]:
+    evidence = inputs.get("proven_loop_evidence") or []
+    p2_ok = n_done >= PMI_GATES["p2_min_done"] and success >= PMI_GATES["p2_min_success"]
+    if p2_ok and evidence:
+        band = "P3"
+        reason = (
+            f"Proven loop — n_done={n_done}, success={success:.0%}; "
+            f"playbook evidence: {'; '.join(evidence)}"
+        )
+    elif p2_ok:
         band = "P2"
         reason = (
             f"Playbooked — n_done={n_done} (≥{PMI_GATES['p2_min_done']}), "
@@ -535,6 +960,11 @@ def compute_pmi(inputs: Dict[str, Any]) -> Dict[str, Any]:
         )
         if specialized:
             reason += f"; specialized pack: {', '.join(specialized)}"
+        reason += (
+            "; no P3 yet — needs a specialized pack with "
+            f"version≥{PMI_GATES['p3_min_pack_version']} and ≥{PMI_GATES['p3_min_pack_revisions']} revisions, "
+            "or one citing a promoted learning"
+        )
     elif n >= PMI_GATES["p1_min_n"]:
         band = "P1"
         reason = f"Instrumented — n={n} (≥{PMI_GATES['p1_min_n']})"
@@ -553,16 +983,23 @@ def compute_pmi(inputs: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "band": band,
         "reason": reason,
-        "cap": PMI_GATES["phase0_cap"],
-        "cap_reason": PMI_GATES["cap_reason"],
-        "gates": dict(PMI_GATES),
+        "cap": policy["display_cap"],
+        "cap_reason": policy["cap_reason"],
+        "gates": dict(policy),
         "inputs": inputs,
     }
 
 
 def role_stats(
-    trails: List[Dict[str, Any]], role_packs: Dict[str, List[str]], defaults: List[str], repo: Path
+    trails: List[Dict[str, Any]],
+    role_packs: Dict[str, List[str]],
+    defaults: List[str],
+    repo: Path,
+    skill_index: Optional[Dict[str, Dict[str, Any]]] = None,
+    policy: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
+    skill_index = skill_index or {}
+    policy = policy or pmi_policy(False)
     by: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for t in trails:
         by[t["agent"]].append(t)
@@ -582,6 +1019,10 @@ def role_stats(
         success = (n_done / n_known) if n_known else 0.0
         packs = list(role_packs.get(role) or defaults)
         specialized = [p for p in packs if p not in default_set]
+        evidence = proven_loop_evidence(specialized, skill_index)
+        # critic pairing (Phase 1) — reviews received vs. reviews given
+        n_reviewed = sum(1 for t in items if t.get("reviewed_by"))
+        n_reviews_given = sum(len(t.get("reviews") or []) for t in items)
         inputs = {
             "n": n,
             "n_done": n_done,
@@ -591,7 +1032,14 @@ def role_stats(
             "success_rate": round(success, 4),
             "packs": packs,
             "specialized_packs": specialized,
-            "sources": ["wave-plans/**/handoffs/*.jsonl", "config/role-skills.yaml"],
+            "proven_loop": bool(evidence),
+            "proven_loop_evidence": evidence,
+            "history_available": bool(policy.get("history_available")),
+            "sources": [
+                "wave-plans/**/handoffs/*.jsonl",
+                "config/role-skills.yaml",
+                "git log -- skills/*/SKILL.md",
+            ],
         }
         out[role] = {
             "role": role,
@@ -605,26 +1053,49 @@ def role_stats(
             "packs": packs,
             "specialized_packs": specialized,
             "skill_coverage": len(specialized),
-            "is_critic": "critic" in role,
+            "is_critic": is_critic_role(role),
+            "n_reviewed": n_reviewed,
+            "review_rate": round(n_reviewed / n, 4) if n else 0.0,
+            "n_reviews_given": n_reviews_given,
+            "paired_branches": sorted({t["branch"] for t in items if t.get("reviewed_by") or t.get("reviews")})[:20],
             "task_ids": [t["task_id"] for t in items],
-            "pmi": compute_pmi(inputs),
+            "pmi": compute_pmi(inputs, policy),
         }
     return out
 
 
 # ── dataset ───────────────────────────────────────────────────────────
 
-def build_dataset(repo: Path) -> Dict[str, Any]:
+def build_dataset(repo: Path, use_gh: bool = True) -> Dict[str, Any]:
     companies = load_companies(repo)
     company_ids = [c["id"] for c in companies]
     joins, warnings = load_joins(repo, company_ids)
     trails = load_trails(repo, companies, joins)
-    skills = load_skills(repo)
+
+    toplevel = git_toplevel(repo)
+    history_available = toplevel is not None
+    if not history_available:
+        warnings.append("git unavailable for this repo — skill version history omitted (PMI P3 not evaluable from git)")
+    skills = load_skills(repo, history=history_available)
     learnings = load_learnings(repo, skills, companies)
+    link_promotions(skills, learnings)
+    skill_index = {s["id"]: s for s in skills}
+
+    critic_pairs, critic_summary = pair_critics(trails)
+
+    gh = gh_index(repo, toplevel, use_gh)
+    apply_gh(trails, gh)
+    if gh["status"] not in ("ok", "skipped", "disabled"):
+        warnings.append(f"gh enrichment {gh['status']}: {gh['reason']} (build continued without PR/issue data)")
+    gh_meta = {k: v for k, v in gh.items() if k not in ("pr_by_branch", "issue_by_number")}
+    gh_meta["trails_with_pr"] = sum(1 for t in trails if t["pr_url"])
+    gh_meta["fields"] = ["pr_url", "pr_state", "pr_number", "issue_links_resolved"]
+
     defaults, role_packs = parse_role_skills(repo / "config" / "role-skills.yaml")
     if not defaults:
         defaults = sorted(DEFAULT_PACKS)
-    roles = role_stats(trails, role_packs, defaults, repo)
+    policy = pmi_policy(history_available)
+    roles = role_stats(trails, role_packs, defaults, repo, skill_index, policy)
 
     pack_roles: Dict[str, List[str]] = defaultdict(list)
     for role, packs in role_packs.items():
@@ -647,12 +1118,11 @@ def build_dataset(repo: Path) -> Dict[str, Any]:
     )
 
     n_trails = len(trails)
-    critic_trails = sum(1 for t in trails if "critic" in t["agent"])
     return {
         "schema_version": SCHEMA_VERSION,
         "generator": "scripts/experience_data.py",
         "law": LAW,
-        "phase": 0,
+        "phase": PHASE,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "repo": repo.name,
         "counts": {
@@ -663,10 +1133,11 @@ def build_dataset(repo: Path) -> Dict[str, Any]:
             "learnings": len(learnings),
             "roles": len(roles),
             "unlinked_trails": sum(1 for t in trails if t["join_method"] == "unlinked"),
+            "critic_pairs": len(critic_pairs),
         },
         "fleet": {
             "n_done": sum(1 for t in trails if t["status"] == "done"),
-            "critic_rate": round(critic_trails / n_trails, 4) if n_trails else 0.0,
+            **critic_summary,
             "vendor_mix": dict(Counter(t["provenance"]["vendor"] for t in trails if t["provenance"]["vendor"])),
         },
         "join_rules": [
@@ -676,11 +1147,20 @@ def build_dataset(repo: Path) -> Dict[str, Any]:
             {"order": 4, "method": "name_token", "source": "companies/*.md name token"},
             {"order": 5, "method": "unlinked", "source": "project label only — never invents a company"},
         ],
-        "pmi_policy": dict(PMI_GATES),
+        "pmi_policy": policy,
+        "skill_history": {
+            "available": history_available,
+            "depth": GIT_LOG_DEPTH,
+            "source": "git log --follow -- <skill path>",
+            "reason": "" if history_available else "git not available for this repo",
+            "skills_with_history": sum(1 for s in skills if s["revisions"]),
+        },
+        "gh_enrichment": gh_meta,
         "warnings": warnings,
         "companies": companies,
         "trails": trails,
         "waves": wave_list,
+        "critic_pairs": critic_pairs,
         "skills": skills,
         "learnings": learnings,
         "role_stats": roles,
@@ -688,7 +1168,7 @@ def build_dataset(repo: Path) -> Dict[str, Any]:
     }
 
 
-def write_dataset(repo: Path, out_dir: Path, clean: bool = True) -> Path:
+def write_dataset(repo: Path, out_dir: Path, clean: bool = True, use_gh: bool = True) -> Path:
     """Emit the data contract at <out_dir>/data/index.json.
 
     Cleans ONLY the `data/` tree it owns. Rendered HTML and any other sibling
@@ -700,8 +1180,102 @@ def write_dataset(repo: Path, out_dir: Path, clean: bool = True) -> Path:
         shutil.rmtree(data_dir)
     data_path = data_dir / "index.json"
     data_path.parent.mkdir(parents=True, exist_ok=True)
-    data_path.write_text(json.dumps(build_dataset(repo), indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    data_path.write_text(
+        json.dumps(build_dataset(repo, use_gh=use_gh), indent=2, sort_keys=False) + "\n", encoding="utf-8"
+    )
     return data_path
+
+
+# ── optional shareable snapshot (SYNTHESIS §7 Phase 1, §10) ───────────
+
+SNAPSHOT_DIR = Path("docs/experience/snapshot")
+
+
+def snapshot_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    """A small, redacted rollup safe to check in.
+
+    Deliberately DROPS every free-text body: handoff markdown/sections, skill
+    bodies, learning bodies. What remains is counts, outcomes and one-line
+    summaries that already passed the redactor.
+    """
+    return {
+        "snapshot_of": "site/experience/data/index.json",
+        "schema_version": data["schema_version"],
+        "phase": data["phase"],
+        "law": data["law"],
+        "generated_at": data["generated_at"],
+        "repo": data["repo"],
+        "counts": data["counts"],
+        "fleet": data["fleet"],
+        "pmi_policy": data["pmi_policy"],
+        "skill_history": data["skill_history"],
+        "gh_enrichment": {k: v for k, v in data["gh_enrichment"].items() if k != "fields"},
+        "companies": [
+            {k: c[k] for k in ("id", "status", "github_repo", "trail_count")} for c in data["companies"]
+        ],
+        "waves": data["waves"],
+        "critic_pairs": data["critic_pairs"],
+        "roles": {
+            r: dict(
+                {
+                    k: st[k]
+                    for k in (
+                        "n", "n_done", "n_fail", "n_unknown", "success_rate", "vendor_mix",
+                        "specialized_packs", "is_critic", "n_reviewed", "review_rate",
+                    )
+                },
+                pmi_band=st["pmi"]["band"],
+                pmi_reason=st["pmi"]["reason"],
+            )
+            for r, st in data["role_stats"].items()
+        },
+        "skills": [
+            {k: s[k] for k in ("id", "version", "status", "scope", "path", "revisions", "last_commit", "promotes")}
+            for s in data["skills"]
+        ],
+        "learnings": [{k: lrn[k] for k in ("slug", "title", "status", "path", "promoted_by")} for lrn in data["learnings"]],
+        "trails": [
+            {
+                k: t[k]
+                for k in (
+                    "task_id", "wave", "role", "status", "branch", "company_id", "join_method",
+                    "ts", "base_sha", "head_sha", "agent_exit", "is_critic", "reviewed_by",
+                    "reviews", "pr_url", "pr_state", "handoff_summary",
+                )
+            }
+            for t in data["trails"]
+        ],
+        "watchlist": data["watchlist"],
+    }
+
+
+SNAPSHOT_README = """# Fleet Desk snapshot (redacted summary)
+
+Generated by `make experience-snapshot` (`scripts/experience_data.py --snapshot`).
+
+- `summary.json` is a **rollup** of `site/experience/data/index.json`: counts,
+  outcomes, PMI bands, critic pairs, skill versions, one-line trail summaries.
+- Free-text bodies are dropped on purpose — no handoff markdown, no skill or
+  learning bodies, no agent transcripts. Everything that remains already passed
+  the redactor in `scripts/experience_data.py`.
+- The live site (`site/experience/`) stays gitignored; this directory is the only
+  Fleet Desk output that may be committed, and committing it is an owner call
+  (SYNTHESIS §10 "checked-in static snapshot for sharing").
+
+Refresh:
+
+```bash
+make experience-snapshot
+```
+"""
+
+
+def write_snapshot(data: Dict[str, Any], dest: Path) -> Tuple[Path, int]:
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / "summary.json"
+    path.write_text(json.dumps(snapshot_payload(data), indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    (dest / "README.md").write_text(SNAPSHOT_README, encoding="utf-8")
+    return path, path.stat().st_size
 
 
 def main() -> None:
@@ -710,18 +1284,37 @@ def main() -> None:
     ap.add_argument("--repo", default=str(default_repo), help="repo root to project (default: this repo)")
     ap.add_argument("--out", default="", help="output site dir (default: <repo>/site/experience)")
     ap.add_argument("--no-clean", action="store_true", help="do not wipe the data/ dir first (never touches rendered HTML)")
+    ap.add_argument(
+        "--no-gh",
+        action="store_true",
+        help="skip optional gh PR/issue enrichment (also: FLEET_DESK_NO_GH=1). gh failures never fail the build.",
+    )
+    ap.add_argument("--snapshot", action="store_true", help=f"also write a redacted summary under {SNAPSHOT_DIR}/")
+    ap.add_argument("--snapshot-dir", default="", help=f"snapshot destination (default: <repo>/{SNAPSHOT_DIR})")
     args = ap.parse_args()
     repo = Path(args.repo).resolve()
     out_dir = Path(args.out).resolve() if args.out else repo / "site" / "experience"
-    path = write_dataset(repo, out_dir, clean=not args.no_clean)
+    use_gh = not (args.no_gh or os.environ.get("FLEET_DESK_NO_GH") == "1")
+    path = write_dataset(repo, out_dir, clean=not args.no_clean, use_gh=use_gh)
     data = json.loads(path.read_text(encoding="utf-8"))
     for w in data.get("warnings", []):
         print(f"warn: {w}")
     print(
         f"Fleet Desk data → {path} "
         f"({data['counts']['trails']} trails, {data['counts']['companies']} companies, "
-        f"{data['counts']['unlinked_trails']} unlinked)"
+        f"{data['counts']['unlinked_trails']} unlinked, {data['counts']['critic_pairs']} critic pairs)"
     )
+    gh = data["gh_enrichment"]
+    print(f"  gh enrichment: {gh['status']}{(' — ' + gh['reason']) if gh['reason'] else ''}")
+    hist = data["skill_history"]
+    print(
+        f"  skill history: {'available' if hist['available'] else 'unavailable'} "
+        f"({hist['skills_with_history']}/{data['counts']['skills']} packs with commits, depth {hist['depth']})"
+    )
+    if args.snapshot or args.snapshot_dir:
+        dest = Path(args.snapshot_dir).resolve() if args.snapshot_dir else repo / SNAPSHOT_DIR
+        snap, size = write_snapshot(data, dest)
+        print(f"  snapshot → {snap} ({size / 1024:.1f} KiB, bodies dropped)")
 
 
 if __name__ == "__main__":
