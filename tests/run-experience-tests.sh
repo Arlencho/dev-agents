@@ -58,6 +58,34 @@ assert_absent_html() {
 
 exists() { [ -f "$2" ] && ok "$1" || bad "$1"; }
 
+# assert_links_resolve <name> <site dir> — crawl every relative href in built
+# HTML and fail if any target is missing. A class="crumb" grep is satisfied by
+# a 404; only resolving the link catches singular/plural crumb-depth bugs.
+assert_links_resolve() {
+  local name="$1" dir="$2"
+  if python3 - "$dir" <<'PY'
+import re, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+bad = []
+for f in sorted(root.rglob("*.html")):
+    for m in re.finditer(r'href="([^"]+)"', f.read_text()):
+        u = m.group(1)
+        if u.startswith(("http", "mailto:", "#")):
+            continue
+        p = (f.parent / u.split("#")[0]).resolve()
+        if p.is_dir():
+            p = p / "index.html"
+        if not p.exists():
+            bad.append(f"{f.relative_to(root)} -> {u}")
+print(f"BROKEN: {len(bad)}")
+for b in bad:
+    print("  ", b)
+sys.exit(1 if bad else 0)
+PY
+  then ok "$name"; else bad "$name"; fi
+}
+
 SECRET_SHAPES='gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|BEGIN [A-Z ]*PRIVATE KEY|(api[_-]?key|password|secret|token)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9]{16,}'
 HOME_PATHS='/Users/[A-Za-z0-9._-]+/|/home/[A-Za-z0-9._-]+/'
 
@@ -178,7 +206,7 @@ grep -q 'rel="stylesheet" href="assets/site.css"' "$FIXOUT/index.html" \
 grep -q "prefers-color-scheme" "$FIXOUT/assets/site.css" \
   && ok "stylesheet honors prefers-color-scheme" || bad "stylesheet honors prefers-color-scheme"
 assert_absent_html "no inline <style> blocks in fixture HTML"  "$FIXOUT" '<style'
-assert_absent_html "no inline style= attributes in fixture HTML" "$FIXOUT" ' style="'
+assert_absent_html "no inline style= attributes in fixture HTML" "$FIXOUT" '[[:space:]]style='
 grep -q 'class="seg"' "$FIXOUT/work/index.html" && ok "work has group-by segmented control" || bad "work has group-by segmented control"
 grep -q 'aria-current="true"' "$FIXOUT/work/flat/index.html" && ok "flat view marks current segment" || bad "flat view marks current segment"
 grep -q 'class="st st-done">done' "$FIXOUT/work/index.html" \
@@ -193,6 +221,10 @@ grep -q 'Raw handoff record (audit, redacted)' "$FIXOUT/trail/1-fixture-builder-
 grep -q 'make experience' "$FIXOUT/company/ghostco/index.html" && ok "empty company teaches make experience" || bad "empty company teaches make experience"
 grep -q 'class="pmi band-p2">P2' "$FIXOUT/role/fixture-builder/index.html" && ok "PMI band rendered as badge" || bad "PMI band rendered as badge"
 grep -q 'PMI inputs' "$FIXOUT/role/fixture-builder/index.html" && ok "PMI disclosure present" || bad "PMI disclosure present"
+grep -q 'class="chip dim"' "$FIXOUT/index.html" \
+  && grep -q 'chipmark">placeholder' "$FIXOUT/index.html" \
+  && ok "dim chip marks placeholder status as visible text" || bad "dim chip marks placeholder status as visible text"
+assert_links_resolve "fixture: every relative href resolves (BROKEN: 0)" "$FIXOUT"
 
 # HTML must refuse a data contract it does not understand
 python3 - "$FJ" "$TMP/bad.json" <<'PY'
@@ -230,7 +262,8 @@ grep -q "group by wave\|Wave " "$SITE/work/index.html" && ok "work has wave grou
 grep -q "Playbook Maturity\|PMI" "$SITE/roles/index.html" && ok "roles PMI" || bad "roles PMI"
 grep -q 'rel="stylesheet"' "$SITE/index.html" && ok "site links external stylesheet" || bad "site links external stylesheet"
 grep -q 'class="seg"' "$SITE/work/index.html" && ok "site work has group toggle" || bad "site work has group toggle"
-assert_absent_html "no inline styles in site HTML" "$SITE" ' style="|<style'
+assert_absent_html "no inline styles in site HTML" "$SITE" '[[:space:]]style=|<style'
+assert_links_resolve "site: every relative href resolves (BROKEN: 0)" "$SITE"
 
 assert_json "real data parses with pinned schema" "$RJ" 'd["schema_version"] == 1 and isinstance(d["trails"], list)'
 assert_json "real trails carry contract fields"   "$RJ" \

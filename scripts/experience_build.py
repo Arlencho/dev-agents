@@ -110,11 +110,14 @@ class Renderer:
         chips = [f'<a class="chip" href="{pre}index.html"{global_current}>Global</a>']
         for c in self.companies:
             current = ' aria-current="true"' if scope == c["id"] else ""
-            dim = " dim" if str(c["status"]).lower() != "active" else ""
+            dim = str(c["status"]).lower() != "active"
             status = esc(c["status"])
+            # Placeholder status must not ride on opacity alone (a11y): a dim
+            # chip also carries the status as visible text, not just a tooltip.
+            mark = f'<span class="chipmark">{status}</span>' if dim else ""
             chips.append(
-                f'<a class="chip{dim}" href="{pre}company/{esc(c["id"])}/index.html"'
-                f' title="{esc(c["id"])} · {status}"{current}>{esc(c["id"])}</a>'
+                f'<a class="chip{" dim" if dim else ""}" href="{pre}company/{esc(c["id"])}/index.html"'
+                f' title="{esc(c["id"])} · {status}"{current}>{esc(c["id"])}{mark}</a>'
             )
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -275,13 +278,14 @@ class Renderer:
         )
 
     # ── pages ─────────────────────────────────────────────────────────
-    def home(self) -> None:
+    # home() assembles; each section is a small helper so the page stays slim.
+    def _home_stats(self) -> str:
         c = self.d["counts"]
         fleet = self.d["fleet"]
         n_trails = c["trails"]
         done_pct = f"{fleet['n_done'] / n_trails:.0%}" if n_trails else "—"
         vendor_mix = " · ".join(f"{v} {n}" for v, n in fleet["vendor_mix"].items()) or "—"
-        stats = f"""
+        return f"""
     <div class="stats" role="group" aria-label="Fleet totals">
       <div class="stat"><div class="num">{n_trails}</div><div class="lbl">trails</div></div>
       <div class="stat"><div class="num">{esc(done_pct)} <small>· n={fleet["n_done"]}</small></div><div class="lbl">done</div></div>
@@ -291,6 +295,8 @@ class Renderer:
       <div class="stat"><div class="num fit">{esc(vendor_mix)}</div><div class="lbl">vendor mix</div></div>
     </div>
 """
+
+    def _home_companies_card(self) -> str:
         co_cards = "".join(
             f'<a class="company-card{" dim" if str(co["status"]).lower() != "active" else ""}"'
             f' href="company/{esc(co["id"])}/index.html">'
@@ -298,14 +304,16 @@ class Renderer:
             f'<span class="sub">{esc(co["status"])} · n={co["trail_count"]}</span></a>'
             for co in self.companies
         )
-        companies_card = f"""
+        return f"""
       <div class="card">
         <div class="cardhead"><h2>Companies</h2></div>
         <div class="companies">{co_cards or '<p class="empty">No <code>companies/*.md</code> manifests yet.</p>'}</div>
       </div>
 """
+
+    def _home_watchlist(self) -> str:
         watchlist = self.d["watchlist"]
-        watch = (
+        return (
             '<ul class="tight">'
             + "".join(
                 f'<li>{esc(w["theme"])} <span class="muted">×{w["count"]}</span></li>' for w in watchlist[:6]
@@ -314,18 +322,22 @@ class Renderer:
             if watchlist
             else '<p class="empty">No recurring do-not-repeat themes (needs ≥2 similar lines across handoffs).</p>'
         )
+
+    def _home_roles_table(self) -> str:
         role_rows = "".join(
             f'<tr><td><a href="role/{esc(r)}/index.html">{esc(r)}</a></td>'
             f'<td class="num">{st["n"]}</td><td class="num">{st["n_done"]}</td>'
             f"<td>{self.pmi_badge(st['pmi']['band'])}</td></tr>"
             for r, st in sorted(self.d["role_stats"].items(), key=lambda kv: -kv[1]["n"])[:6]
         )
-        roles_table = (
+        return (
             f'<div class="tablewrap"><table><thead><tr><th>Role</th><th class="num">n</th>'
             f'<th class="num">done</th><th>PMI</th></tr></thead><tbody>{role_rows}</tbody></table></div>'
             if role_rows
             else '<p class="empty">No role usage yet — dispatch a task, then <code>make experience</code>.</p>'
         )
+
+    def _home_skills_card_inner(self) -> str:
         skill_bits = "".join(
             f'<div><a href="skill/{esc(s["id"])}/index.html">{esc(s["id"])}</a> '
             f'<span class="muted mono">v{esc(s["version"])}</span></div>'
@@ -336,13 +348,20 @@ class Renderer:
         cand_bit = f'<p class="muted">+ {len(candidates)} candidate{"s" if len(candidates) != 1 else ""}</p>' if candidates else ""
         n_doc = sum(1 for L in self.d["learnings"] if L["status"] == "documented")
         n_pro = sum(1 for L in self.d["learnings"] if L["status"] == "promoted")
+        return f"""{skill_bits or '<p class="empty">No skill packs found under <code>skills/</code>.</p>'}
+        {cand_bit}
+        <h2 class="sec">Learnings</h2>
+        <p class="muted">documented {n_doc} · promoted {n_pro}</p>
+        <p><a href="learnings/index.html">Index →</a></p>"""
+
+    def home(self) -> None:
         body = f"""
     <div class="pagehead">
       <h1>Global</h1>
       <p class="lede">The whole fleet: every trail, role, pack, and lesson projected from git artifacts.</p>
     </div>
-    {stats}
-    {companies_card}
+    {self._home_stats()}
+    {self._home_companies_card()}
     <div class="grid g2 mt">
       <div class="card">
         <div class="cardhead"><h2>Recent work</h2><a class="more" href="work/index.html">View all Work →</a></div>
@@ -350,21 +369,17 @@ class Renderer:
       </div>
       <div class="card">
         <div class="cardhead"><h2>Do-not-repeat watchlist</h2></div>
-        {watch}
+        {self._home_watchlist()}
       </div>
     </div>
     <div class="grid g2r">
       <div class="card">
         <div class="cardhead"><h2>Roles (top)</h2><a class="more" href="roles/index.html">All roles →</a></div>
-        {roles_table}
+        {self._home_roles_table()}
       </div>
       <div class="card">
         <div class="cardhead"><h2>Skills</h2><a class="more" href="skills/index.html">Library →</a></div>
-        {skill_bits or '<p class="empty">No skill packs found under <code>skills/</code>.</p>'}
-        {cand_bit}
-        <h2 class="sec">Learnings</h2>
-        <p class="muted">documented {n_doc} · promoted {n_pro}</p>
-        <p><a href="learnings/index.html">Index →</a></p>
+        {self._home_skills_card_inner()}
       </div>
     </div>
 """
@@ -521,7 +536,7 @@ class Renderer:
             specialized = ", ".join(st["specialized_packs"]) or "none"
             critic = ' <span class="pill">critic seat</span>' if st["is_critic"] else ""
             body = f"""
-    {self.crumb([("← Roles", "../index.html"), (role, None)])}
+    {self.crumb([("← Roles", "../../roles/index.html"), (role, None)])}
     <div class="pagehead">
       <h1>{esc(role)} {self.pmi_badge(pmi["band"])}{critic}</h1>
       <p class="lede">{esc(pmi["reason"])}</p>
@@ -571,7 +586,7 @@ class Renderer:
         write(self.out / "skills" / "index.html", self.page("Skills", body, 1, "global", "skills"))
         for s in self.d["skills"]:
             body = f"""
-    {self.crumb([("← Skills", "../index.html"), (s["id"], None)])}
+    {self.crumb([("← Skills", "../../skills/index.html"), (s["id"], None)])}
     <div class="pagehead">
       <h1 class="mono">{esc(s["id"])} {pill(s["status"])}</h1>
       <p class="lede">{esc(s["summary"])}</p>
@@ -617,7 +632,7 @@ class Renderer:
         for L in self.d["learnings"]:
             scope = L.get("company_id") or "fleet"
             body = f"""
-    {self.crumb([("← Learn", "../index.html"), (L["slug"], None)])}
+    {self.crumb([("← Learn", "../../learnings/index.html"), (L["slug"], None)])}
     <div class="pagehead">
       <h1>{esc(L["title"])} {pill(L["status"])}</h1>
       <p class="lede">scope <span class="mono">{esc(scope)}</span> · <span class="mono muted">{esc(L["path"])}</span></p>
@@ -659,6 +674,10 @@ class Renderer:
       <h2 class="sec">This build</h2>
       <p>Generated <strong>{esc(self.generated)}</strong> · {c["trails"]} trails · {c["companies"]} companies ·
       {c["skills"]} skill packs · {c["learnings"]} learnings · {c["unlinked_trails"]} unlinked trails</p>
+      <p class="muted">Unlinked trails are join-boundary behavior, not a broken page: a trail joins a
+      company only through the rules below, so a company with no matching trails shows n=0 by design.
+      Teach the join — <span class="mono">config/experience-joins.yaml</span> or a
+      <span class="mono">github_repo</span> match — then <code>make experience</code>.</p>
       <h2 class="sec">Data contract</h2>
       <p>Every page is rendered from <a href="../data/index.json" class="mono">data/index.json</a>
       (schema v{esc(self.d["schema_version"])}, documented in <span class="mono">docs/experience-data.md</span>).
