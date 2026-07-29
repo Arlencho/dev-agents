@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-Fleet Desk — HTML renderer (Phase 0 presentation).
+Fleet Desk — HTML renderer (Wave 2 presentation).
 
 Reads ONLY the data contract emitted by scripts/experience_data.py:
 
     site/experience/data/index.json    (schema: docs/experience-data.md)
 
-and writes static pages next to it. No repo scanning happens here — if a field
-is missing from the JSON it does not belong on the page. Law:
-docs/proposals/experience-console-SYNTHESIS.md
+and writes static pages plus a copied stylesheet next to it:
+
+    site/experience/assets/site.css    (from templates/experience/site.css)
+
+No repo scanning happens here — if a field is missing from the JSON it does not
+belong on the page. Law: docs/proposals/experience-console-SYNTHESIS.md
 """
 from __future__ import annotations
 
@@ -16,11 +19,14 @@ import argparse
 import html
 import json
 import re
+import shutil
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import experience_data
+
+CSS_SOURCE = Path(__file__).resolve().parents[1] / "templates" / "experience" / "site.css"
 
 
 def esc(s: Any) -> str:
@@ -35,115 +41,42 @@ def write(path: Path, content: str) -> None:
 def clean_html(out: Path) -> None:
     """Drop previously rendered HTML so pages for vanished trails cannot linger.
 
-    Owns HTML only: `<out>/data` (the contract written by experience_data.py) is
-    never touched, and non-HTML files are left alone.
+    Owns HTML only: `<out>/data` (the contract written by experience_data.py)
+    and `<out>/assets` (the stylesheet) are never touched, and non-HTML files
+    are left alone.
     """
     if not out.is_dir():
         return
-    data_dir = out / "data"
+    keep = {out / "data", out / "assets"}
     for page in out.rglob("*.html"):
-        if data_dir in page.parents:
+        if any(k == page.parent or k in page.parents for k in keep):
             continue
         page.unlink()
     # Prune directories the removed pages left empty (deepest first).
     for d in sorted((p for p in out.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
-        if d == data_dir or data_dir in d.parents:
+        if d in keep or any(k in d.parents for k in keep):
             continue
         if not any(d.iterdir()):
             d.rmdir()
 
 
-CSS = """
-:root {
-  --bg: #fafaf7;
-  --ink: #16161a;
-  --muted: #5c5c66;
-  --line: #e4e2da;
-  --card: #ffffff;
-  --ok: #2e7d4f;
-  --bad: #b3402e;
-  --accent: #b8892b;
-  --chip: #f0eee6;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #121214;
-    --ink: #f2f1ec;
-    --muted: #a0a0aa;
-    --line: #2a2a30;
-    --card: #1a1a1f;
-    --chip: #24242b;
-  }
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
-  background: var(--bg);
-  color: var(--ink);
-}
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-.wrap { max-width: 1120px; margin: 0 auto; padding: 16px 20px 48px; }
-header.site {
-  border-bottom: 1px solid var(--line);
-  padding: 12px 0 14px;
-  margin-bottom: 18px;
-  position: sticky; top: 0; background: var(--bg); z-index: 10;
-}
-.brand { font-weight: 700; letter-spacing: -0.02em; font-size: 15px; }
-.tag { color: var(--muted); font-size: 12px; margin-top: 2px; }
-.nav { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 10px; font-size: 13px; }
-.nav a { color: var(--ink); opacity: 0.85; }
-.nav a:hover { opacity: 1; color: var(--accent); }
-.scope { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.chip {
-  display: inline-block; padding: 3px 9px; border-radius: 999px;
-  background: var(--chip); color: var(--ink); font-size: 12px;
-  border: 1px solid var(--line);
-}
-.chip.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.chip.placeholder { opacity: 0.55; }
-.grid { display: grid; gap: 14px; }
-.grid.two { grid-template-columns: 1.4fr 1fr; }
-@media (max-width: 800px) { .grid.two { grid-template-columns: 1fr; } }
-.card {
-  background: var(--card); border: 1px solid var(--line);
-  border-radius: 10px; padding: 12px 14px;
-}
-.card h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
-.card h1 { margin: 0 0 10px; font-size: 20px; letter-spacing: -0.02em; }
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
-.status-done { color: var(--ok); font-weight: 600; }
-.status-fail { color: var(--bad); font-weight: 600; }
-.status-unk { color: var(--muted); }
-.wave-h { margin: 16px 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
-.empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
-.footer { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
-.skip { position: absolute; left: -999px; }
-.skip:focus { left: 8px; top: 8px; background: var(--card); padding: 6px 10px; z-index: 20; }
-pre, .body {
-  white-space: pre-wrap; word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px; line-height: 1.4;
-  background: var(--chip); padding: 10px; border-radius: 8px; max-height: 420px; overflow: auto;
-}
-details { margin-top: 8px; }
-summary { cursor: pointer; color: var(--accent); font-size: 13px; }
-.pmi { font-weight: 700; }
-.muted { color: var(--muted); }
-.companies { display: flex; flex-wrap: wrap; gap: 8px; }
-.company-card {
-  min-width: 120px; padding: 10px 12px; border: 1px solid var(--line);
-  border-radius: 10px; background: var(--card);
-}
-.company-card strong { display: block; }
-"""
+def write_assets(out: Path) -> None:
+    if not CSS_SOURCE.is_file():
+        raise SystemExit(f"missing stylesheet template: {CSS_SOURCE}")
+    target = out / "assets" / "site.css"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(CSS_SOURCE, target)
 
-TRAIL_COLS = "<tr><th>Status</th><th>Role</th><th>Scope</th><th>Wave</th><th>Task</th><th>When</th></tr>"
+
+NAV = [
+    ("home", "Home", "index.html"),
+    ("work", "Work", "work/index.html"),
+    ("skills", "Skills", "skills/index.html"),
+    ("learn", "Learn", "learnings/index.html"),
+    ("roles", "Roles", "roles/index.html"),
+    ("conductor", "Conductor", "conductor/index.html"),
+    ("about", "About", "about/index.html"),
+]
 
 
 class Renderer:
@@ -155,52 +88,66 @@ class Renderer:
         self.generated = data["generated_at"]
 
     # ── shell ─────────────────────────────────────────────────────────
-    def pre(self, depth: int) -> str:
+    @staticmethod
+    def pre(depth: int) -> str:
         return "" if depth == 0 else "../" * depth
 
-    def page(self, title: str, body: str, depth: int, scope: str = "global") -> str:
+    def page(
+        self,
+        title: str,
+        body: str,
+        depth: int,
+        scope: str = "global",
+        section: Optional[str] = None,
+    ) -> str:
         pre = self.pre(depth)
-        nav = [
-            ("Home", f"{pre}index.html"),
-            ("Work", f"{pre}work/index.html"),
-            ("Skills", f"{pre}skills/index.html"),
-            ("Learn", f"{pre}learnings/index.html"),
-            ("Roles", f"{pre}roles/index.html"),
-            ("Conductor", f"{pre}conductor/index.html"),
-            ("About", f"{pre}about/index.html"),
-        ]
-        chips = [f'<a class="chip {"active" if scope == "global" else ""}" href="{pre}index.html">Global</a>']
+        nav_bits = []
+        for key, label, href in NAV:
+            current = ' aria-current="page"' if key == section else ""
+            nav_bits.append(f'<a href="{pre}{href}"{current}>{esc(label)}</a>')
+        nav_html = " ".join(nav_bits)
+        global_current = ' aria-current="true"' if scope == "global" else ""
+        chips = [f'<a class="chip" href="{pre}index.html"{global_current}>Global</a>']
         for c in self.companies:
-            active = "active" if scope == c["id"] else ""
-            ph = " placeholder" if str(c["status"]).lower() != "active" else ""
+            current = ' aria-current="true"' if scope == c["id"] else ""
+            dim = str(c["status"]).lower() != "active"
+            status = esc(c["status"])
+            # Placeholder status must not ride on opacity alone (a11y): a dim
+            # chip also carries the status as visible text, not just a tooltip.
+            mark = f'<span class="chipmark">{status}</span>' if dim else ""
             chips.append(
-                f'<a class="chip {active}{ph}" href="{pre}company/{esc(c["id"])}/index.html">{esc(c["id"])}</a>'
+                f'<a class="chip{" dim" if dim else ""}" href="{pre}company/{esc(c["id"])}/index.html"'
+                f' title="{esc(c["id"])} · {status}"{current}>{esc(c["id"])}{mark}</a>'
             )
-        nav_html = " ".join(f'<a href="{href}">{esc(label)}</a>' for label, href in nav)
         return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>{esc(title)} · Fleet Desk</title>
-  <style>{CSS}</style>
+  <link rel="stylesheet" href="{pre}assets/site.css"/>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
   <div class="wrap">
     <header class="site">
-      <div class="brand">Fleet Desk</div>
-      <div class="tag">What the fleet did, learned, and now knows how to do. · generated {esc(self.generated)}</div>
+      <div class="brandrow">
+        <span class="brand"><a href="{pre}index.html">Fleet Desk</a></span>
+        <span class="tag">What the fleet did, learned, and now knows how to do.<span class="dot">·</span>read-only<span class="dot">·</span>generated {esc(self.generated)}</span>
+      </div>
       <nav class="nav" aria-label="Primary">{nav_html}</nav>
-      <div class="scope" aria-label="Scope">{"".join(chips)}</div>
+      <div class="scope" aria-label="Scope">
+        <span class="scope-label">Scope</span>{"".join(chips)}
+      </div>
     </header>
     <main id="main">
-      {body}
+{body}
     </main>
     <footer class="footer">
-      Fleet Desk Phase 0 · read-only · <span class="mono">make experience</span> ·
-      data <a href="{self.pre(depth)}data/index.json">data/index.json</a> (schema v{esc(self.d["schema_version"])}) ·
-      law: <span class="mono">{esc(self.d["law"])}</span>
+      <span>Fleet Desk Phase 0 · read-only</span>
+      <span>rebuild: <span class="mono">make experience</span></span>
+      <span>data: <a href="{pre}data/index.json">data/index.json</a> (schema v{esc(self.d["schema_version"])})</span>
+      <span>law: <span class="mono">{esc(self.d["law"])}</span></span>
     </footer>
   </div>
 </body>
@@ -209,12 +156,27 @@ class Renderer:
 
     # ── fragments ─────────────────────────────────────────────────────
     @staticmethod
-    def status_class(status: str) -> str:
+    def status_kind(status: str) -> str:
         if status == "done":
-            return "status-done"
+            return "done"
         if status in ("failed", "fail", "unavailable", "error"):
-            return "status-fail"
-        return "status-unk"
+            return "fail"
+        return "unk"
+
+    def status_pill(self, status: str) -> str:
+        kind = self.status_kind(status)
+        return f'<span class="st st-{kind}">{esc(status)}</span>'
+
+    @staticmethod
+    def pmi_badge(band: str) -> str:
+        return f'<span class="pmi band-{esc(band.lower())}">{esc(band)}</span>'
+
+    def crumb(self, items: List[Tuple[str, Optional[str]]]) -> str:
+        parts = []
+        for label, href in items:
+            parts.append(f'<a href="{href}">{esc(label)}</a>' if href else f"<span>{esc(label)}</span>")
+        sep = '<span class="sep">·</span>'
+        return f'<p class="crumb">{sep.join(parts)}</p>'
 
     def trail_row(self, t: Dict[str, Any], depth: int) -> str:
         pre = self.pre(depth)
@@ -223,8 +185,8 @@ class Renderer:
         wave = f"wave {t['wave']}" if t["wave"] is not None else "wave —"
         return (
             "<tr>"
-            f'<td class="{self.status_class(t["status"])}">{esc(t["status"])}</td>'
-            f'<td><a href="{href}">{esc(t["agent"])}</a></td>'
+            f"<td>{self.status_pill(t['status'])}</td>"
+            f'<td><a href="{pre}role/{esc(t["role"])}/index.html">{esc(t["role"])}</a></td>'
             f'<td class="mono">{esc(label)}</td>'
             f"<td>{esc(wave)}</td>"
             f'<td class="mono"><a href="{href}">{esc(t["task_id"])}</a></td>'
@@ -233,302 +195,464 @@ class Renderer:
         )
 
     def trail_table(self, subset: List[Dict[str, Any]], depth: int, empty: str) -> str:
+        head = (
+            "<thead><tr><th>Status</th><th>Role</th><th>Scope</th>"
+            "<th>Wave</th><th>Task</th><th>When</th></tr></thead>"
+        )
         rows = "".join(self.trail_row(t, depth) for t in subset)
         if not rows:
-            rows = f'<tr><td colspan="6" class="empty">{empty}</td></tr>'
-        return f"<table><thead>{TRAIL_COLS}</thead><tbody>{rows}</tbody></table>"
+            return f'<p class="empty">{empty}</p>'
+        return f'<div class="tablewrap"><table>{head}<tbody>{rows}</tbody></table></div>'
 
-    def work_body(self, subset: List[Dict[str, Any]], depth: int, scope: str) -> str:
+    @staticmethod
+    def wave_key(t: Dict[str, Any]) -> str:
+        return f"Wave {t['wave']}" if t["wave"] is not None else "Unlinked / no wave"
+
+    def wave_sections(self, subset: List[Dict[str, Any]], depth: int, empty: str) -> str:
+        if not subset:
+            return f'<p class="empty">{empty}</p>'
         by_wave: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for t in subset:
-            key = f"Wave {t['wave']}" if t["wave"] is not None else "Unlinked / no wave"
-            by_wave[key].append(t)
+            by_wave[self.wave_key(t)].append(t)
 
-        def sk(k: str):
+        def sk(k: str) -> Tuple[int, str]:
             m = re.match(r"Wave (\d+)", k)
             return (0, f"{int(m.group(1)):05d}") if m else (1, k)
 
-        parts = [
-            '<div class="card"><h1>Work</h1>'
-            f'<p class="muted">Scope: <strong>{esc(scope)}</strong> · group by wave · '
-            f"{len(subset)} trails · trail is the atom; wave clusters atoms.</p></div>"
-        ]
-        if not subset:
-            parts.append(
-                '<div class="card empty">No handoffs in this scope. Run dispatch, then '
-                '<span class="mono">make experience</span>.</div>'
-            )
+        parts = []
         for key in sorted(by_wave.keys(), key=sk, reverse=True):
+            trails = by_wave[key]
             parts.append(
-                '<div class="card" style="margin-top:12px">'
-                f'<div class="wave-h">{esc(key)} · {len(by_wave[key])} tasks</div>'
-                f'{self.trail_table(by_wave[key], depth, "none")}</div>'
+                f'<section class="wave">'
+                f'<div class="wavehead"><h2>{esc(key)}</h2>'
+                f'<span class="count">{len(trails)} task{"s" if len(trails) != 1 else ""}</span>'
+                f'<span class="rule"></span></div>'
+                f"{self.trail_table(trails, depth, empty)}</section>"
             )
         return "\n".join(parts)
 
-    # ── pages ─────────────────────────────────────────────────────────
-    def home(self) -> None:
-        co_cards = "".join(
-            f'<a class="company-card" href="company/{esc(c["id"])}/index.html">'
-            f'<strong>{esc(c["id"])}</strong>'
-            f'<span class="muted">{esc(c["status"])} · {c["trail_count"]} trails</span></a>'
-            for c in self.companies
+    @staticmethod
+    def seg(grouped: bool, wave_href: str, flat_href: str) -> str:
+        wave_cur = ' aria-current="true"' if grouped else ""
+        flat_cur = ' aria-current="true"' if not grouped else ""
+        return (
+            '<span class="seg" role="group" aria-label="Group work">'
+            f'<a href="{wave_href}"{wave_cur}>by wave</a>'
+            f'<a href="{flat_href}"{flat_cur}>flat</a>'
+            "</span>"
         )
+
+    def empty_teaches(self, what: str = "in this scope") -> str:
+        return (
+            f"No handoffs {esc(what)} yet. Run a dispatch wave, then "
+            f"<code>make experience</code> to rebuild this page."
+        )
+
+    # ── work (grouped + flat, global and per-company) ─────────────────
+    def work_pages(self, subset: List[Dict[str, Any]], base: Path, depth: int, scope: str) -> None:
+        n = len(subset)
+        noun = "trail" if n == 1 else "trails"
+        head = f"""
+    <div class="pagehead">
+      <h1>Work</h1>
+      <p class="lede">Scope <strong>{esc(scope)}</strong> · {n} {noun}.
+      Trail is the atom; wave clusters atoms. Group by wave, or switch to a flat newest-first list.</p>
+      <p>Group: {self.seg(True, "index.html", "flat/index.html")}</p>
+    </div>
+"""
+        grouped = head + self.wave_sections(subset, depth, self.empty_teaches())
+        write(base / "index.html", self.page(f"Work · {scope}" if scope != "global" else "Work", grouped, depth, scope, "work"))
+
+        # Flat view lives one directory deeper; its segment links point back up.
+        flat_head = f"""
+    <div class="pagehead">
+      <h1>Work — flat</h1>
+      <p class="lede">Scope <strong>{esc(scope)}</strong> · {len(subset)} trail{"s" if len(subset) != 1 else ""}, newest first.</p>
+      <p>Group: {self.seg(False, "../index.html", "index.html")}</p>
+    </div>
+"""
+        flat = flat_head + self.trail_table(subset, depth + 1, self.empty_teaches())
+        write(
+            base / "flat" / "index.html",
+            self.page(f"Work (flat) · {scope}" if scope != "global" else "Work (flat)", flat, depth + 1, scope, "work"),
+        )
+
+    # ── pages ─────────────────────────────────────────────────────────
+    # home() assembles; each section is a small helper so the page stays slim.
+    def _home_stats(self) -> str:
+        c = self.d["counts"]
+        fleet = self.d["fleet"]
+        n_trails = c["trails"]
+        done_pct = f"{fleet['n_done'] / n_trails:.0%}" if n_trails else "—"
+        vendor_mix = " · ".join(f"{v} {n}" for v, n in fleet["vendor_mix"].items()) or "—"
+        return f"""
+    <div class="stats" role="group" aria-label="Fleet totals">
+      <div class="stat"><div class="num">{n_trails}</div><div class="lbl">trails</div></div>
+      <div class="stat"><div class="num">{esc(done_pct)} <small>· n={fleet["n_done"]}</small></div><div class="lbl">done</div></div>
+      <div class="stat"><div class="num">{fleet["critic_rate"]:.0%} <small>of trails</small></div><div class="lbl">critic share</div></div>
+      <div class="stat"><div class="num">{c["waves"]}</div><div class="lbl">waves</div></div>
+      <div class="stat"><div class="num">{c["companies"]}</div><div class="lbl">companies</div></div>
+      <div class="stat"><div class="num fit">{esc(vendor_mix)}</div><div class="lbl">vendor mix</div></div>
+    </div>
+"""
+
+    def _home_companies_card(self) -> str:
+        co_cards = "".join(
+            f'<a class="company-card{" dim" if str(co["status"]).lower() != "active" else ""}"'
+            f' href="company/{esc(co["id"])}/index.html">'
+            f'<strong>{esc(co["id"])}</strong>'
+            f'<span class="sub">{esc(co["status"])} · n={co["trail_count"]}</span></a>'
+            for co in self.companies
+        )
+        return f"""
+      <div class="card">
+        <div class="cardhead"><h2>Companies</h2></div>
+        <div class="companies">{co_cards or '<p class="empty">No <code>companies/*.md</code> manifests yet.</p>'}</div>
+      </div>
+"""
+
+    def _home_watchlist(self) -> str:
+        watchlist = self.d["watchlist"]
+        return (
+            '<ul class="tight">'
+            + "".join(
+                f'<li>{esc(w["theme"])} <span class="muted">×{w["count"]}</span></li>' for w in watchlist[:6]
+            )
+            + "</ul>"
+            if watchlist
+            else '<p class="empty">No recurring do-not-repeat themes (needs ≥2 similar lines across handoffs).</p>'
+        )
+
+    def _home_roles_table(self) -> str:
         role_rows = "".join(
             f'<tr><td><a href="role/{esc(r)}/index.html">{esc(r)}</a></td>'
-            f'<td>{st["n"]}</td><td>{st["n_done"]}</td>'
-            f'<td class="pmi">{esc(st["pmi"]["band"])}</td></tr>'
-            for r, st in sorted(self.d["role_stats"].items(), key=lambda kv: -kv[1]["n"])[:8]
+            f'<td class="num">{st["n"]}</td><td class="num">{st["n_done"]}</td>'
+            f"<td>{self.pmi_badge(st['pmi']['band'])}</td></tr>"
+            for r, st in sorted(self.d["role_stats"].items(), key=lambda kv: -kv[1]["n"])[:6]
         )
+        return (
+            f'<div class="tablewrap"><table><thead><tr><th>Role</th><th class="num">n</th>'
+            f'<th class="num">done</th><th>PMI</th></tr></thead><tbody>{role_rows}</tbody></table></div>'
+            if role_rows
+            else '<p class="empty">No role usage yet — dispatch a task, then <code>make experience</code>.</p>'
+        )
+
+    def _home_skills_card_inner(self) -> str:
         skill_bits = "".join(
             f'<div><a href="skill/{esc(s["id"])}/index.html">{esc(s["id"])}</a> '
-            f'<span class="muted mono">v{s["version"]}</span></div>'
+            f'<span class="muted mono">v{esc(s["version"])}</span></div>'
             for s in self.d["skills"]
             if s["status"] == "active"
         )
-        learn_bits = (
-            f"documented {sum(1 for L in self.d['learnings'] if L['status'] == 'documented')} · "
-            f"promoted {sum(1 for L in self.d['learnings'] if L['status'] == 'promoted')}"
-        )
-        themes = self.d["watchlist"]
-        watch = (
-            "<ul>" + "".join(f'<li>{esc(w["theme"])} <span class="muted">×{w["count"]}</span></li>' for w in themes[:6]) + "</ul>"
-            if themes
-            else '<p class="empty">No recurring do-not-repeat themes (need ≥2 similar lines).</p>'
-        )
-        empty_work = (
-            'No handoffs yet — run <span class="mono">./scripts/dispatch.sh …</span> then '
-            '<span class="mono">make experience</span>.'
-        )
-        body = f"""
-    <div class="card"><h2>Companies</h2><div class="companies">{co_cards or '<p class="empty">No companies/</p>'}</div></div>
-    <div class="grid two" style="margin-top:14px">
-      <div class="card">
-        <h2>Recent work <a href="work/index.html" style="float:right;font-weight:500">View all Work →</a></h2>
-        {self.trail_table(self.trails[:15], 0, empty_work)}
-      </div>
-      <div class="card">
-        <h2>Do-not-repeat watchlist</h2>
-        {watch}
-      </div>
-    </div>
-    <div class="grid two" style="margin-top:14px">
-      <div class="card">
-        <h2>Roles (top)</h2>
-        <table><thead><tr><th>Role</th><th>n</th><th>done</th><th>PMI</th></tr></thead>
-        <tbody>{role_rows or '<tr><td colspan="4" class="empty">No trails</td></tr>'}</tbody></table>
-        <p><a href="roles/index.html">Full roles →</a></p>
-      </div>
-      <div class="card">
-        <h2>Skills</h2>{skill_bits or '<p class="empty">No skills</p>'}
-        <p style="margin-top:10px"><a href="skills/index.html">Library →</a></p>
-        <h2 style="margin-top:16px">Learnings</h2>
-        <p class="muted">{esc(learn_bits)}</p>
-        <p><a href="learnings/index.html">Index →</a></p>
-      </div>
-    </div>
-    """
-        write(self.out / "index.html", self.page("Home", body, 0, "global"))
+        candidates = [s for s in self.d["skills"] if s["status"] == "candidate"]
+        cand_bit = f'<p class="muted">+ {len(candidates)} candidate{"s" if len(candidates) != 1 else ""}</p>' if candidates else ""
+        n_doc = sum(1 for L in self.d["learnings"] if L["status"] == "documented")
+        n_pro = sum(1 for L in self.d["learnings"] if L["status"] == "promoted")
+        return f"""{skill_bits or '<p class="empty">No skill packs found under <code>skills/</code>.</p>'}
+        {cand_bit}
+        <h2 class="sec">Learnings</h2>
+        <p class="muted">documented {n_doc} · promoted {n_pro}</p>
+        <p><a href="learnings/index.html">Index →</a></p>"""
 
-    def work(self) -> None:
-        write(self.out / "work" / "index.html", self.page("Work", self.work_body(self.trails, 1, "global"), 1))
+    def home(self) -> None:
+        body = f"""
+    <div class="pagehead">
+      <h1>Global</h1>
+      <p class="lede">The whole fleet: every trail, role, pack, and lesson projected from git artifacts.</p>
+    </div>
+    {self._home_stats()}
+    {self._home_companies_card()}
+    <div class="grid g2 mt">
+      <div class="card">
+        <div class="cardhead"><h2>Recent work</h2><a class="more" href="work/index.html">View all Work →</a></div>
+        {self.trail_table(self.trails[:10], 0, self.empty_teaches("yet"))}
+      </div>
+      <div class="card">
+        <div class="cardhead"><h2>Do-not-repeat watchlist</h2></div>
+        {self._home_watchlist()}
+      </div>
+    </div>
+    <div class="grid g2r">
+      <div class="card">
+        <div class="cardhead"><h2>Roles (top)</h2><a class="more" href="roles/index.html">All roles →</a></div>
+        {self._home_roles_table()}
+      </div>
+      <div class="card">
+        <div class="cardhead"><h2>Skills</h2><a class="more" href="skills/index.html">Library →</a></div>
+        {self._home_skills_card_inner()}
+      </div>
+    </div>
+"""
+        write(self.out / "index.html", self.page("Home", body, 0, "global", "home"))
 
     def trail_pages(self) -> None:
         for t in self.trails:
             sec = t["handoff_sections"]
             links = (
                 " · ".join(
-                    f'<a href="{esc(u)}">{esc(u)}</a>' if u.startswith("http") else esc(u) for u in t["issue_links"]
+                    f'<a href="{esc(u)}">{esc(u)}</a>' if u.startswith("http") else f'<span class="mono">{esc(u)}</span>'
+                    for u in t["issue_links"]
                 )
                 or '<span class="muted">none parsed</span>'
             )
             scope_label = t["company_id"] or t["project_label"] or "unlinked"
-            join_note = f' <span class="muted">({esc(t["join_evidence"])})</span>' if t["join_evidence"] else ""
+            if t["company_id"]:
+                work_href = f"../../company/{esc(t['company_id'])}/work/index.html"
+            else:
+                work_href = "../../work/index.html"
+            wave_label = f"wave {t['wave']}" if t["wave"] is not None else "no wave"
+            crumb = self.crumb([("← Work", work_href), (scope_label, None), (wave_label, None)])
             prov = t["provenance"]
+            join_note = f' <span class="muted">({esc(t["join_evidence"])})</span>' if t["join_evidence"] else ""
+            conductor = ' <span class="pill accent">conductor</span>' if t["conductor"] else ""
+
+            def section_block(title: str, key: str) -> str:
+                text = sec[key]["text"].strip()
+                if not text:
+                    return ""
+                return f'<h2 class="sec">{esc(title)}</h2><div class="body">{esc(text)}</div>'
+
             body = f"""
-        <div class="card">
-          <h1 class="mono">{esc(t["task_id"])}</h1>
-          <p>
-            <span class="{self.status_class(t["status"])}">{esc(t["status"])}</span>
-            · role <strong>{esc(t["agent"])}</strong>
-            · wave <strong>{esc(t["wave"] if t["wave"] is not None else "—")}</strong>
-            · scope <strong>{esc(scope_label)}</strong>
-            · join <span class="mono">{esc(t["join_method"])}</span>{join_note}
-            {"· conductor" if t["conductor"] else ""}
-          </p>
-          <p class="mono muted">
-            vendor {esc(prov["vendor"])} {esc(prov["model"])} · branch {esc(t["branch"])} ·
-            {esc(t["base_sha"])}→{esc(t["head_sha"])} · exit {esc(t["agent_exit"])} · {esc(t["ts"])}
-          </p>
-          <p>Links: {links}</p>
-          <p class="muted mono">source {esc(t["source"]["jsonl"])}</p>
-        </div>
-        <div class="card" style="margin-top:12px">
-          <h2>Plan / title</h2>
-          <p>{esc(t["plan_hint"]) or '<span class="muted">—</span>'}</p>
-          <h2>Built</h2><div class="body">{esc(sec["built"]["text"]) or "—"}</div>
-          <h2>Decisions</h2><div class="body">{esc(sec["decisions"]["text"]) or "—"}</div>
-          <h2>Do not repeat</h2><div class="body">{esc(sec["do_not_repeat"]["text"]) or "—"}</div>
-          <h2>Evidence</h2><div class="body">{esc(sec["evidence"]["text"]) or "—"}</div>
-          <details><summary>Handoff markdown (redacted)</summary><pre>{esc(t["handoff_markdown"])}</pre></details>
-        </div>
-        """
+    {crumb}
+    <div class="pagehead">
+      <h1 class="mono">{esc(t["task_id"])}</h1>
+      <p class="lede">{self.status_pill(t["status"])} {conductor}
+      · role <strong>{esc(t["role"])}</strong> · {esc(wave_label)} · scope <strong>{esc(scope_label)}</strong></p>
+    </div>
+    <div class="card">
+      <dl class="meta">
+        <div><dt>Vendor · model</dt><dd class="mono">{esc(prov["vendor"])} · {esc(prov["model"])} <span class="muted">({esc(prov["host"])})</span></dd></div>
+        <div><dt>Branch</dt><dd class="mono">{esc(t["branch"] or "—")}</dd></div>
+        <div><dt>Base → head</dt><dd class="mono">{esc(t["base_sha"])}→{esc(t["head_sha"])}</dd></div>
+        <div><dt>Exit</dt><dd class="mono">{esc(t["agent_exit"])}</dd></div>
+        <div><dt>When</dt><dd class="mono">{esc(t["ts"])}</dd></div>
+        <div><dt>Join</dt><dd><span class="mono">{esc(t["join_method"])}</span>{join_note}</dd></div>
+        <div><dt>Links</dt><dd>{links}</dd></div>
+        <div><dt>Source</dt><dd class="mono muted">{esc(t["source"]["jsonl"])}</dd></div>
+      </dl>
+    </div>
+    <div class="card mt">
+      <h2 class="sec">Plan line</h2>
+      <p>{esc(t["plan_hint"]) or '<span class="muted">—</span>'}</p>
+      {section_block("Built", "built")}
+      {section_block("Decisions", "decisions")}
+      {section_block("Do not repeat", "do_not_repeat")}
+      {section_block("Evidence", "evidence")}
+      {section_block("Open questions", "open_questions")}
+      {section_block("Next hint", "next_hint")}
+      <details><summary>Raw handoff record (audit, redacted)</summary><pre>{esc(t["handoff_markdown"])}</pre></details>
+    </div>
+"""
             write(
                 self.out / "trail" / t["task_id"] / "index.html",
-                self.page(t["task_id"], body, 2, t["company_id"] or "global"),
+                self.page(t["task_id"], body, 2, t["company_id"] or "global", "work"),
             )
 
     def company_pages(self) -> None:
+        learnings = self.d["learnings"]
         for c in self.companies:
-            subset = [t for t in self.trails if t["company_id"] == c["id"]]
-            empty = f"No handoffs joined to {esc(c['id'])} yet (join gaps are OK in Phase 0)."
-            body = f"""
-        <div class="card">
-          <h1>{esc(c["id"])}</h1>
-          <p class="muted">{esc(c["status"])} · repo <span class="mono">{esc(c["repo"] or "—")}</span>
-          · github <span class="mono">{esc(c["github_repo"] or "—")}</span></p>
-          <p class="muted">{esc(c["phase_note"])}</p>
-          <p><a href="work/index.html">Open Work for {esc(c["id"])} →</a></p>
-        </div>
-        <div class="card" style="margin-top:12px">
-          <h2>Work trails (joined)</h2>
-          {self.trail_table(subset[:20], 2, empty)}
-        </div>
-        """
-            write(self.out / "company" / c["id"] / "index.html", self.page(c["id"], body, 2, c["id"]))
-            write(
-                self.out / "company" / c["id"] / "work" / "index.html",
-                self.page(f"Work · {c['id']}", self.work_body(subset, 3, c["id"]), 3, c["id"]),
+            cid = c["id"]
+            subset = [t for t in self.trails if t["company_id"] == cid]
+            empty = (
+                f"No handoffs joined to {esc(cid)} yet — join gaps are OK in Phase 0. "
+                f"See join rules on <a href=\"../../about/index.html\">About</a>, then "
+                f"<code>make experience</code> after the next dispatch."
             )
+            gh = c["github_repo"]
+            gh_html = (
+                f'<a class="mono" href="https://github.com/{esc(gh)}">{esc(gh)}</a>' if gh else '<span class="mono">—</span>'
+            )
+            status_kind = "ok" if str(c["status"]).lower() == "active" else ""
+            co_learnings = [L for L in learnings if L.get("company_id") == cid]
+            learn_bits = "".join(
+                f'<div><a href="../../learning/{esc(L["slug"])}/index.html">{esc(L["title"])}</a> '
+                f'<span class="pill">{esc(L["status"])}</span></div>'
+                for L in co_learnings
+            )
+            body = f"""
+    {self.crumb([("← Home", "../../index.html"), ("companies", None), (cid, None)])}
+    <div class="pagehead">
+      <h1>{esc(cid)} <span class="pill {status_kind}">{esc(c["status"])}</span></h1>
+      <p class="lede">{esc(c["phase_note"] or "No phase note recorded.")}</p>
+    </div>
+    <div class="card">
+      <dl class="meta">
+        <div><dt>Repo</dt><dd class="mono">{esc(c["repo"] or "—")}</dd></div>
+        <div><dt>GitHub</dt><dd>{gh_html}</dd></div>
+        <div><dt>Joined trails</dt><dd>n={c["trail_count"]}</dd></div>
+        <div><dt>Manifest</dt><dd class="mono muted">{esc(c["source"])}</dd></div>
+      </dl>
+      <p class="flush"><a href="work/index.html">Open Work for {esc(cid)} →</a></p>
+    </div>
+    <div class="card mt">
+      <div class="cardhead"><h2>Work trails (joined only)</h2></div>
+      {self.trail_table(subset[:20], 2, empty)}
+    </div>
+    <div class="card mt">
+      <div class="cardhead"><h2>Learnings</h2></div>
+      {learn_bits or f'<p class="empty">No learnings discovered for {esc(cid)} yet. Fleet learnings live under <code>learnings/</code>; product learnings are picked up when the repo is on disk.</p>'}
+      <p class="muted flush">Skill packs are fleet-global in Phase 0 — see <a href="../../skills/index.html">Skills</a>.</p>
+    </div>
+"""
+            write(self.out / "company" / cid / "index.html", self.page(cid, body, 2, cid))
+            self.work_pages(subset, self.out / "company" / cid / "work", 3, cid)
 
     def role_pages(self) -> None:
         stats = self.d["role_stats"]
         rows = "".join(
             f'<tr><td><a href="../role/{esc(r)}/index.html">{esc(r)}</a></td>'
-            f'<td>{st["n"]}</td><td>{st["n_done"]}</td><td>{st["n_fail"]}</td>'
+            f'<td class="num">{st["n"]}</td><td class="num">{st["n_done"]}</td><td class="num">{st["n_fail"]}</td>'
             f'<td>{st["success_rate"]:.0%} · n={st["n_known"]}</td>'
-            f'<td class="mono">{esc(", ".join(f"{v} {n}" for v, n in st["vendor_mix"].items()) or "—")}</td>'
-            f'<td class="pmi">{esc(st["pmi"]["band"])}</td></tr>'
+            f'<td class="mono muted">{esc(", ".join(f"{v} {n}" for v, n in st["vendor_mix"].items()) or "—")}</td>'
+            f"<td>{self.pmi_badge(st['pmi']['band'])}</td></tr>"
             for r, st in sorted(stats.items(), key=lambda kv: -kv[1]["n"])
         )
         policy = self.d["pmi_policy"]
-        index = f"""
-    <div class="card">
+        body = f"""
+    <div class="pagehead">
       <h1>Roles</h1>
-      <p class="muted">Usage + Playbook Maturity Index (PMI). P2 requires outcomes
-      (n_done ≥ {policy["p2_min_done"]} and success ≥ {policy["p2_min_success"]:.0%});
-      a dedicated pack alone does not grant P2. Phase 0 caps display at {esc(policy["phase0_cap"])} —
-      {esc(policy["cap_reason"])}.</p>
-      <table>
-        <thead><tr><th>Role</th><th>n</th><th>done</th><th>fail</th><th>success</th><th>vendors</th><th>PMI</th></tr></thead>
-        <tbody>{rows or '<tr><td colspan="7" class="empty">No data</td></tr>'}</tbody>
-      </table>
+      <p class="lede">Usage plus the Playbook Maturity Index (PMI) — a score over each role's
+      playbook system and recorded outcomes, never an agent IQ badge.</p>
     </div>
-    """
-        write(self.out / "roles" / "index.html", self.page("Roles", index, 1))
+    <div class="card">
+      <p class="muted">P2 requires outcomes: n_done ≥ {policy["p2_min_done"]} and success ≥
+      {policy["p2_min_success"]:.0%} — a dedicated pack alone never grants P2.
+      Phase 0 caps display at {esc(policy["phase0_cap"])}: {esc(policy["cap_reason"])}.
+      Percentages always sit next to their <em>n</em>.</p>
+      {('<div class="tablewrap"><table><thead><tr><th>Role</th><th class="num">n</th><th class="num">done</th><th class="num">fail</th><th>success</th><th>vendors</th><th>PMI</th></tr></thead><tbody>' + rows + "</tbody></table></div>") if rows else '<p class="empty">No role data yet — dispatch a task, then <code>make experience</code>.</p>'}
+    </div>
+"""
+        write(self.out / "roles" / "index.html", self.page("Roles", body, 1, "global", "roles"))
 
         for role, st in stats.items():
-            subset = [t for t in self.trails if t["agent"] == role]
-            packs = ", ".join(st["packs"]) or "—"
-            inputs = st["pmi"]["inputs"]
+            subset = [t for t in self.trails if t["role"] == role]
+            pmi = st["pmi"]
+            inputs = pmi["inputs"]
             input_rows = "".join(
-                f"<li>{esc(k)}={esc(', '.join(map(str, v)) if isinstance(v, list) else v)}</li>"
+                f"<li>{esc(k)} = {esc(', '.join(map(str, v)) if isinstance(v, list) else v)}</li>"
                 for k, v in inputs.items()
             )
+            packs = ", ".join(st["packs"]) or "—"
+            specialized = ", ".join(st["specialized_packs"]) or "none"
+            critic = ' <span class="pill">critic seat</span>' if st["is_critic"] else ""
             body = f"""
-        <div class="card">
-          <h1>{esc(role)}</h1>
-          <p>n={st["n"]} · done={st["n_done"]} · fail={st["n_fail"]} ·
-          success {st["success_rate"]:.0%} · n_known={st["n_known"]} ·
-          <span class="pmi">{esc(st["pmi"]["band"])}</span></p>
-          <p class="muted">{esc(st["pmi"]["reason"])}</p>
-          <p class="muted">Display capped at {esc(st["pmi"]["cap"])} — {esc(st["pmi"]["cap_reason"])}.</p>
-          <details open><summary>PMI inputs (from data/index.json)</summary>
-            <ul class="mono">{input_rows}</ul>
-          </details>
-          <p class="muted">Injected packs: <span class="mono">{esc(packs)}</span></p>
-        </div>
-        <div class="card" style="margin-top:12px">
-          <h2>Trails</h2>
-          {self.trail_table(subset[:50], 2, "None")}
-        </div>
-        """
-            write(self.out / "role" / role / "index.html", self.page(role, body, 2))
+    {self.crumb([("← Roles", "../../roles/index.html"), (role, None)])}
+    <div class="pagehead">
+      <h1>{esc(role)} {self.pmi_badge(pmi["band"])}{critic}</h1>
+      <p class="lede">{esc(pmi["reason"])}</p>
+    </div>
+    <div class="card">
+      <div class="stats">
+        <div class="stat"><div class="num">{st["n"]}</div><div class="lbl">trails</div></div>
+        <div class="stat"><div class="num">{st["n_done"]}</div><div class="lbl">done</div></div>
+        <div class="stat"><div class="num">{st["n_fail"]}</div><div class="lbl">fail</div></div>
+        <div class="stat"><div class="num">{st["success_rate"]:.0%} <small>· n={st["n_known"]}</small></div><div class="lbl">success</div></div>
+      </div>
+      <p class="muted">Display capped at {esc(pmi["cap"])} — {esc(pmi["cap_reason"])}.</p>
+      <details open><summary>PMI inputs (from data/index.json)</summary>
+        <ul class="tight mono">{input_rows}</ul>
+      </details>
+      <p class="muted flush">Injected packs: <span class="mono">{esc(packs)}</span><br/>
+      Specialized packs (beyond shared defaults): <span class="mono">{esc(specialized)}</span> — a boost label, never a P2 shortcut.</p>
+    </div>
+    <div class="card mt">
+      <div class="cardhead"><h2>Trails</h2></div>
+      {self.trail_table(subset[:50], 2, "None recorded.")}
+    </div>
+"""
+            write(self.out / "role" / role / "index.html", self.page(role, body, 2, "global", "roles"))
 
     def skill_pages(self) -> None:
+        def pill(status: str) -> str:
+            cls = "accent" if status == "candidate" else "ok"
+            return f'<span class="pill {cls}">{esc(status)}</span>'
+
         rows = "".join(
-            f'<tr><td><a href="../skill/{esc(s["id"])}/index.html">{esc(s["id"])}</a></td>'
-            f'<td class="mono">v{s["version"]}</td><td>{esc(s["status"])}</td>'
+            f'<tr><td><a href="../skill/{esc(s["id"])}/index.html" class="mono">{esc(s["id"])}</a></td>'
+            f'<td class="mono">v{esc(s["version"])}</td><td>{pill(s["status"])}</td>'
             f'<td class="muted">{esc(s["summary"])}</td>'
-            f'<td class="mono">{esc(", ".join(s["roles"]) or "—")}</td></tr>'
+            f'<td class="mono muted">{esc(", ".join(s["roles"]) or "—")}</td></tr>'
             for s in self.d["skills"]
         )
-        index = f"""
-    <div class="card">
+        body = f"""
+    <div class="pagehead">
       <h1>Skills</h1>
-      <p class="muted">Promotion is PR-only (skills-evolution SYNTHESIS). This page is read-only status.</p>
-      <table>
-        <thead><tr><th>Pack</th><th>Ver</th><th>Status</th><th>Summary</th><th>Roles</th></tr></thead>
-        <tbody>{rows or '<tr><td colspan="5" class="empty">No skills</td></tr>'}</tbody>
-      </table>
+      <p class="lede">Pack library with promotion status. Promotion stays PR-only — this page never writes skills.</p>
     </div>
-    """
-        write(self.out / "skills" / "index.html", self.page("Skills", index, 1))
+    <div class="card">
+      {('<div class="tablewrap"><table><thead><tr><th>Pack</th><th>Ver</th><th>Status</th><th>Summary</th><th>Injected by</th></tr></thead><tbody>' + rows + "</tbody></table></div>") if rows else '<p class="empty">No skill packs found under <code>skills/</code>.</p>'}
+    </div>
+"""
+        write(self.out / "skills" / "index.html", self.page("Skills", body, 1, "global", "skills"))
         for s in self.d["skills"]:
             body = f"""
-        <div class="card">
-          <h1 class="mono">{esc(s["id"])}</h1>
-          <p>v{s["version"]} · {esc(s["status"])} · scope {esc(s["scope"])}</p>
-          <p>{esc(s["summary"])}</p>
-          <p class="muted mono">{esc(s["path"])}</p>
-          <p>Injected by: <span class="mono">{esc(", ".join(s["roles"]) or "—")}</span></p>
-          <p class="muted">To promote candidates or change packs: open a PR — never from this UI.</p>
-        </div>
-        <div class="card" style="margin-top:12px">
-          <h2>Body</h2>
-          <div class="body">{esc(s["body"])}</div>
-        </div>
-        """
-            write(self.out / "skill" / s["id"] / "index.html", self.page(s["id"], body, 2))
+    {self.crumb([("← Skills", "../../skills/index.html"), (s["id"], None)])}
+    <div class="pagehead">
+      <h1 class="mono">{esc(s["id"])} {pill(s["status"])}</h1>
+      <p class="lede">{esc(s["summary"])}</p>
+    </div>
+    <div class="card">
+      <dl class="meta">
+        <div><dt>Version</dt><dd class="mono">v{esc(s["version"])}</dd></div>
+        <div><dt>Scope</dt><dd class="mono">{esc(s["scope"])}</dd></div>
+        <div><dt>Injected by</dt><dd class="mono">{esc(", ".join(s["roles"]) or "—")}</dd></div>
+        <div><dt>Path</dt><dd class="mono muted">{esc(s["path"])}</dd></div>
+      </dl>
+      <p class="muted flush">To promote a candidate or change a pack: open a PR — never from this UI.</p>
+    </div>
+    <div class="card mt">
+      <div class="cardhead"><h2>Body</h2></div>
+      <div class="body">{esc(s["body"])}</div>
+    </div>
+"""
+            write(self.out / "skill" / s["id"] / "index.html", self.page(s["id"], body, 2, "global", "skills"))
 
     def learning_pages(self) -> None:
+        def pill(status: str) -> str:
+            cls = "ok" if status == "promoted" else ""
+            return f'<span class="pill {cls}">{esc(status)}</span>'
+
         rows = "".join(
-            f'<tr><td><a href="../learning/{esc(L["slug"])}/index.html">{esc(L["slug"])}</a></td>'
-            f'<td>{esc(L["status"])}</td><td>{esc(L["title"])}</td>'
+            f'<tr><td><a href="../learning/{esc(L["slug"])}/index.html">{esc(L["title"])}</a></td>'
+            f"<td>{pill(L['status'])}</td>"
+            f'<td class="mono muted">{esc(L.get("company_id") or "fleet")}</td>'
             f'<td class="mono muted">{esc(L["path"])}</td></tr>'
             for L in self.d["learnings"]
         )
-        index = f"""
-    <div class="card">
-      <h1>Learnings</h1>
-      <p class="muted">documented = file exists · promoted = cited from a skill via [ev:]. Promotion remains PR-only.</p>
-      <table>
-        <thead><tr><th>Slug</th><th>Status</th><th>Title</th><th>Path</th></tr></thead>
-        <tbody>{rows or '<tr><td colspan="4" class="empty">No learnings</td></tr>'}</tbody>
-      </table>
+        body = f"""
+    <div class="pagehead">
+      <h1>Learn</h1>
+      <p class="lede">documented = the file exists · promoted = a skill body cites it via [ev:]. Promotion remains PR-only.</p>
     </div>
-    """
-        write(self.out / "learnings" / "index.html", self.page("Learnings", index, 1))
+    <div class="card">
+      {('<div class="tablewrap"><table><thead><tr><th>Title</th><th>Status</th><th>Scope</th><th>Path</th></tr></thead><tbody>' + rows + "</tbody></table></div>") if rows else '<p class="empty">No learnings yet — write one under <code>learnings/</code>, then <code>make experience</code>.</p>'}
+    </div>
+"""
+        write(self.out / "learnings" / "index.html", self.page("Learn", body, 1, "global", "learn"))
         for L in self.d["learnings"]:
+            scope = L.get("company_id") or "fleet"
             body = f"""
-        <div class="card">
-          <h1>{esc(L["title"])}</h1>
-          <p>status <strong>{esc(L["status"])}</strong> · <span class="mono">{esc(L["path"])}</span></p>
-        </div>
-        <div class="card" style="margin-top:12px"><div class="body">{esc(L["body"])}</div></div>
-        """
-            write(self.out / "learning" / L["slug"] / "index.html", self.page(L["slug"], body, 2))
+    {self.crumb([("← Learn", "../../learnings/index.html"), (L["slug"], None)])}
+    <div class="pagehead">
+      <h1>{esc(L["title"])} {pill(L["status"])}</h1>
+      <p class="lede">scope <span class="mono">{esc(scope)}</span> · <span class="mono muted">{esc(L["path"])}</span></p>
+    </div>
+    <div class="card"><div class="body">{esc(L["body"])}</div></div>
+"""
+            write(self.out / "learning" / L["slug"] / "index.html", self.page(L["slug"], body, 2, "global", "learn"))
 
     def conductor(self) -> None:
         subset = [t for t in self.trails if t["conductor"]]
         body = f"""
-    <div class="card">
+    <div class="pagehead">
       <h1>Conductor</h1>
-      <p class="muted">One-shot plans under <span class="mono">wave-plans/conductor/</span> · Session Modes Phase 0.</p>
-      {self.trail_table(subset, 1, "No conductor handoffs yet.")}
+      <p class="lede">One-shot plans under <span class="mono">wave-plans/conductor/</span> — Session Modes Phase 0.</p>
     </div>
-    """
-        write(self.out / "conductor" / "index.html", self.page("Conductor", body, 1))
+    <div class="card">
+      {self.trail_table(subset, 1, "No conductor handoffs yet. Conductor plans live under <code>wave-plans/conductor/</code>; run one, then <code>make experience</code>.")}
+    </div>
+"""
+        write(self.out / "conductor" / "index.html", self.page("Conductor", body, 1, "global", "conductor"))
 
     def about(self) -> None:
         c = self.d["counts"]
@@ -537,51 +661,58 @@ class Renderer:
         )
         policy = self.d["pmi_policy"]
         warnings = (
-            "<ul>" + "".join(f"<li>{esc(w)}</li>" for w in self.d["warnings"]) + "</ul>"
+            '<ul class="tight">' + "".join(f"<li>{esc(w)}</li>" for w in self.d["warnings"]) + "</ul>"
             if self.d["warnings"]
             else '<p class="muted">none</p>'
         )
         body = f"""
-    <div class="card">
+    <div class="pagehead">
       <h1>About Fleet Desk</h1>
-      <p>Phase 0 read-only projection. Law: <span class="mono">{esc(self.d["law"])}</span></p>
+      <p class="lede">A Phase 0 read-only projection of git artifacts. Law: <span class="mono">{esc(self.d["law"])}</span></p>
+    </div>
+    <div class="card">
+      <h2 class="sec">This build</h2>
       <p>Generated <strong>{esc(self.generated)}</strong> · {c["trails"]} trails · {c["companies"]} companies ·
       {c["skills"]} skill packs · {c["learnings"]} learnings · {c["unlinked_trails"]} unlinked trails</p>
-      <h2>Data contract</h2>
-      <p>Every page on this site is rendered from
-      <a href="../data/index.json"><span class="mono">data/index.json</span></a>
+      <p class="muted">Unlinked trails are join-boundary behavior, not a broken page: a trail joins a
+      company only through the rules below, so a company with no matching trails shows n=0 by design.
+      Teach the join — <span class="mono">config/experience-joins.yaml</span> or a
+      <span class="mono">github_repo</span> match — then <code>make experience</code>.</p>
+      <h2 class="sec">Data contract</h2>
+      <p>Every page is rendered from <a href="../data/index.json" class="mono">data/index.json</a>
       (schema v{esc(self.d["schema_version"])}, documented in <span class="mono">docs/experience-data.md</span>).
-      HTML never reads the repo directly.</p>
-      <h2>Sources</h2>
-      <ul class="mono">
+      The HTML never reads the repo directly.</p>
+      <h2 class="sec">Sources</h2>
+      <ul class="tight mono">
         <li>companies/*.md</li>
         <li>wave-plans/**/handoffs/*.jsonl + *.md</li>
         <li>skills/*/SKILL.md · config/role-skills.yaml</li>
         <li>learnings/* · product docs/qa/learning-*.md when on disk</li>
       </ul>
       <p class="muted">Agent transcript logs are never ingested — only the log filename is used as a join hint.</p>
-      <h2>Join rules (in order)</h2>
-      <ol>{joins}</ol>
-      <h2>PMI</h2>
+      <h2 class="sec">Join rules (in order)</h2>
+      <ol class="tight">{joins}</ol>
+      <h2 class="sec">PMI</h2>
       <p>P0 n&lt;{policy["p1_min_n"]} · P1 n≥{policy["p1_min_n"]} ·
       P2 n_done≥{policy["p2_min_done"]} AND success≥{policy["p2_min_success"]:.0%} ·
       P3 Phase 1 only (display capped at {esc(policy["phase0_cap"])}: {esc(policy["cap_reason"])}).</p>
-      <h2>Build warnings</h2>
+      <h2 class="sec">Build warnings</h2>
       {warnings}
-      <h2>How to refresh</h2>
+      <h2 class="sec">How to refresh</h2>
       <pre>make experience
 make experience-open   # build + open browser
 make desk              # alias</pre>
-      <p class="muted">See <span class="mono">docs/experience.md</span> and
+      <p class="muted flush">See <span class="mono">docs/experience.md</span> and
       <span class="mono">docs/experience-data.md</span>.</p>
     </div>
-    """
-        write(self.out / "about" / "index.html", self.page("About", body, 1))
+"""
+        write(self.out / "about" / "index.html", self.page("About", body, 1, "global", "about"))
 
     def render(self) -> None:
         clean_html(self.out)
+        write_assets(self.out)
         self.home()
-        self.work()
+        self.work_pages(self.trails, self.out / "work", 1, "global")
         self.trail_pages()
         self.company_pages()
         self.role_pages()

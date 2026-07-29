@@ -71,22 +71,34 @@ cd site/experience && python3 -m http.server 8765
 
 | Nav | Meaning |
 |-----|---------|
-| **Home** | Global overview: companies, recent tasks, roles, skills, learnings |
-| **Work** | All tasks, **grouped by wave** (global). Per-company Work under each company page |
-| **Skills** | Global packs + versions + which roles inject them |
+| **Home** | Global overview: fleet stat strip (trails, done %, critic share, waves, vendor mix), companies, recent tasks, watchlist, roles, skills, learnings |
+| **Work** | All tasks, **grouped by wave** by default — use the `by wave \| flat` toggle for a flat newest-first list. Per-company Work under each company page |
+| **Skills** | Global packs + versions + which roles inject them (active / candidate status) |
 | **Learn** | Learnings + promoted/documented status |
-| **Roles** | Usage counts + **Playbook Maturity Index (PMI)** |
+| **Roles** | Usage counts + **Playbook Maturity Index (PMI)** badges with expandable raw inputs |
 | **Conductor** | One-shot conductor trails |
 | **About** | Sources, join rules, PMI formula, how to refresh |
 
-**Scope chip** (always visible): `Global | olympus | safeplace | …`  
-Same UI grammar in both scopes.
+**Scope chip** (always visible): `Global | olympus | safeplace | …` — placeholder
+companies are dimmed. Same UI grammar in both scopes.
+
+Reading the chrome (Wave 2 visual system):
+
+- **Status is text AND color**: `done` / `failed` pills always carry the word — never color alone.
+- **Wave is always visible** on trail rows, wave section headers, and trail detail breadcrumbs (`← Work · scope · wave N`).
+- **SHAs, branches, task ids, paths** render in monospace; `base → head` pairs on trail detail.
+- **Empty states teach**: every empty table/card names the next command (`make experience`, dispatch).
+- Light/dark follows `prefers-color-scheme`; keyboard users get a skip link, visible focus rings, and `aria-current` on nav/scope/toggle.
+
+The stylesheet lives at `templates/experience/site.css` and is copied to
+`site/experience/assets/site.css` on every build — edit the template, not the copy.
 
 ### Tasks and waves
 
 - **Trail** = one handoff task (atom).  
 - **Wave** = grouping field on trails.  
-- Open **Work** → sections “Wave 11”, “Wave 9”, … → click a row → full trail detail (plan title, decisions, do-not-repeat, evidence).
+- Open **Work** → sections “Wave 19”, “Wave 17”, … (newest wave first, `Unlinked / no wave` last) → click a row → full trail detail (meta grid, plan line, built / decisions / do-not-repeat / evidence, raw redacted record under a disclosure).  
+- Prefer a single list? Click **flat** in the `Group:` toggle (`work/flat/`). The toggle is plain links — no JavaScript required anywhere.
 
 ### Company / repo
 

@@ -207,8 +207,11 @@ def load_companies(repo: Path) -> List[Dict[str, Any]]:
         cid = meta.get("name") or p.stem
         phase = ""
         for line in body.splitlines():
-            if "active phase" in line.lower() or line.strip().startswith("| Wave plan"):
-                phase = line.strip()[:120]
+            s = line.strip()
+            if s.startswith("#"):  # a heading marks the section; it is not the note
+                continue
+            if "active phase" in s.lower() or s.startswith("| Wave plan"):
+                phase = s[:120]
                 break
         repo_path = meta.get("repo", "")
         if repo_path.upper().startswith("TBD"):
