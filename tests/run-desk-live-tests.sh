@@ -447,6 +447,79 @@ grep -qE '^desk-live:' "$REPO_DIR/Makefile" && ok "make desk-live target exists"
 grep -qE '^experience-live:' "$REPO_DIR/Makefile" \
   && ok "make experience-live target exists" || bad "make experience-live target exists"
 
+# ── Part D: Phase C replay ─────────────────────────────────────────────
+echo ""
+echo "== Part D: Phase C replay (scrubber + REPLAY watermark) =="
+
+SETTLED_DIR="$TMP/settled-events"
+mkdir -p "$SETTLED_DIR"
+# Stream filename must match dispatch_id (resolve_stream looks up <id>.jsonl).
+cp "$FIX/settled-run.jsonl" "$SETTLED_DIR/20260729-180000-dev-agents.jsonl"
+echo "20260729-180000-dev-agents.jsonl" > "$SETTLED_DIR/latest"
+
+# Full settled projection (live view of a finished run — status settled, not necessarily replay)
+python3 "$DESK_LIVE" --once --events-dir "$SETTLED_DIR" --out "$TMP/settled-full.json" \
+  --dispatch-id 20260729-180000-dev-agents >/dev/null 2>&1
+assert_py "settled full projects status settled" "$TMP/settled-full.json" \
+  'd["status"]=="settled"'
+assert_py "settled full default view is live (not auto-replay)" "$TMP/settled-full.json" \
+  'd.get("view","live")=="live"'
+assert_py "settled full has 2 seats" "$TMP/settled-full.json" \
+  'len(d["seats"])==2'
+
+# --as-of-seq mid-run: only first 4 events → 1 seat dispatch, no exits
+python3 "$DESK_LIVE" --once --events-dir "$SETTLED_DIR" --out "$TMP/settled-mid.json" \
+  --dispatch-id 20260729-180000-dev-agents --as-of-seq 4 >/dev/null 2>&1
+assert_py "as_of_seq 4 sets view=replay" "$TMP/settled-mid.json" \
+  'd["view"]=="replay"'
+assert_py "as_of_seq 4 forces staleness.state=replay (never live)" "$TMP/settled-mid.json" \
+  'd["staleness"]["state"]=="replay"'
+assert_py "as_of_seq 4 watermark is REPLAY" "$TMP/settled-mid.json" \
+  '(d.get("replay") or {}).get("watermark")=="REPLAY"'
+assert_py "as_of_seq 4 keeps as_of_seq in replay block" "$TMP/settled-mid.json" \
+  'd["replay"]["as_of_seq"]==4 and d["replay"]["total_events"]==9'
+assert_py "as_of_seq 4 projects only early seats (1 dispatched, still running/unknown)" "$TMP/settled-mid.json" \
+  'len(d["seats"])==1'
+assert_py "as_of_seq 4 has fewer events_seen than full stream" "$TMP/settled-mid.json" \
+  'd["events_seen"] < 9'
+
+# --replay without as_of_seq: whole stream, watermarked
+python3 "$DESK_LIVE" --once --events-dir "$SETTLED_DIR" --out "$TMP/settled-replay.json" \
+  --dispatch-id 20260729-180000-dev-agents --replay >/dev/null 2>&1
+assert_py "--replay stamps view=replay on full stream" "$TMP/settled-replay.json" \
+  'd["view"]=="replay" and d["staleness"]["state"]=="replay"'
+assert_py "--replay still projects all seats" "$TMP/settled-replay.json" \
+  'len(d["seats"])==2 and d["counts"]["settled"]==2'
+
+# list_runs catalog
+python3 "$DESK_LIVE" --list-runs --events-dir "$SETTLED_DIR" > "$TMP/runs.json" 2>/dev/null
+assert_py "list_runs schema fleet-runs/1" "$TMP/runs.json" \
+  'd["schema"]=="fleet-runs/1" and isinstance(d["runs"], list)'
+assert_py "list_runs marks settled run" "$TMP/runs.json" \
+  'any(r.get("dispatch_id")=="20260729-180000-dev-agents" and r.get("settled") for r in d["runs"])'
+assert_py "list_runs reports event count" "$TMP/runs.json" \
+  'any(r.get("events")==9 for r in d["runs"])'
+
+# truncate never invents seats past the cut
+python3 "$DESK_LIVE" --once --events-dir "$SETTLED_DIR" --out "$TMP/settled-early.json" \
+  --dispatch-id 20260729-180000-dev-agents --as-of-seq 2 >/dev/null 2>&1
+assert_py "as_of_seq 2 has zero seats (only plan, no seat_dispatch)" "$TMP/settled-early.json" \
+  'd["seats"]==[]'
+
+# docs pin
+grep -q 'REPLAY' "$REPO_DIR/docs/experience.md" \
+  && ok "docs/experience.md documents REPLAY" \
+  || bad "docs/experience.md documents REPLAY"
+grep -q 'as_of_seq\|as-of-seq\|Phase C' "$REPO_DIR/docs/experience-data.md" \
+  && ok "docs/experience-data.md documents Phase C replay fields" \
+  || bad "docs/experience-data.md documents Phase C replay fields"
+grep -q 'floor-watermark\|REPLAY\|replay' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "floor.js carries REPLAY scrubber chrome" \
+  || bad "floor.js carries REPLAY scrubber chrome"
+grep -q 'api/replay\|/api/runs' "$REPO_DIR/scripts/desk_live.py" \
+  && ok "desk_live.py serves /api/runs and /api/replay" \
+  || bad "desk_live.py serves /api/runs and /api/replay"
+
 echo ""
 echo "----------------------------------------"
 echo "  passed: $pass   failed: $fail"
