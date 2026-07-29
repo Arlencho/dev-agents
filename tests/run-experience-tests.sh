@@ -382,6 +382,86 @@ else
   ok "no PR row invented when gh enrichment is off"
 fi
 
+# ── v2: hierarchy chrome, missions route, live shell (fixture) ────────
+exists "fixture missions index"          "$FIXOUT/missions/index.html"
+exists "fixture live shell"              "$FIXOUT/live/index.html"
+for page in index work/index company/acme/index missions/index live/index \
+            trail/1-fixture-builder-widget-x/index; do
+  grep -q 'class="hier"' "$FIXOUT/$page.html" \
+    && ok "hierarchy strip on $page" || bad "hierarchy strip on $page"
+done
+grep -q 'aria-label="Hierarchy"' "$FIXOUT/index.html" \
+  && ok "hierarchy strip is a labeled nav (a11y)" || bad "hierarchy strip is a labeled nav (a11y)"
+grep -q "No issue-linked missions yet" "$FIXOUT/missions/index.html" \
+  && ok "missions index empty state teaches issue links" || bad "missions index empty state teaches issue links"
+grep -q 'In flight <span class="n">—' "$FIXOUT/index.html" \
+  && ok "pipeline renders In flight as an honest dash" || bad "pipeline renders In flight as an honest dash"
+grep -q 'class="led off"' "$FIXOUT/live/index.html" \
+  && ok "live shell LED is honestly off" || bad "live shell LED is honestly off"
+grep -q 'class="lane ghost"' "$FIXOUT/live/index.html" \
+  && ok "live shell shows ghost lane structure" || bad "live shell shows ghost lane structure"
+grep -q 'class="spine"' "$FIXOUT/live/index.html" \
+  && ok "live shell shows conductor spine structure" || bad "live shell shows conductor spine structure"
+grep -q 'make desk-live' "$FIXOUT/live/index.html" \
+  && ok "live shell teaches the Phase B path" || bad "live shell teaches the Phase B path"
+grep -q 'class="mode"' "$FIXOUT/index.html" \
+  && ok "attention-mode toggle (Almanac | Floor) present" || bad "attention-mode toggle (Almanac | Floor) present"
+grep -q '\.st-warn' "$FIXOUT/assets/site.css" \
+  && ok "mixed/blocked pipeline state styled" || bad "mixed/blocked pipeline state styled"
+assert_absent_html "live shell invents no live-state chrome" "$FIXOUT/live" 'lane run|spine-node hot|led live'
+
+# ── v2: mission derivation from issue_links (injected contract) ───────
+# Offline: enrich the fixture JSON with issue refs the way handoffs would,
+# then check the renderer groups trails into missions — multi-wave grouping,
+# simple 1:1 collapse, company scoping of bare refs, hex-color rejection.
+python3 "$REPO_DIR/scripts/experience_data.py" --repo "$FIX" --out "$TMP/msite" --no-gh >/dev/null 2>&1
+python3 - "$TMP/msite/data/index.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for t in d["trails"]:
+    if t["task_id"] in ("1-fixture-builder-widget-x", "6-fixture-critic-1", "2-fixture-builder-name-token"):
+        t["issue_links"] = ["#12"]                      # one mission, three waves
+    if t["task_id"] == "7-fixture-veteran-1":
+        t["issue_links"] = ["https://github.com/Example/acme-app/issues/9"]  # simple 1:1
+    if t["task_id"] == "3-fixture-builder-secrets":
+        t["issue_links"] = ["#050505"]                  # hex color, not an issue
+json.dump(d, open(p, "w"))
+PY
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$TMP/msite" >"$TMP/m-html.log" 2>&1 \
+  && ok "renderer succeeds with mission-linked trails" || bad "renderer succeeds with mission-linked trails"
+MS="$TMP/msite"
+exists "mission page: multi-wave (bare ref)" "$MS/mission/acme-12/index.html"
+exists "mission page: simple 1:1 (full URL)" "$MS/mission/example-acme-app-9/index.html"
+grep -q 'acme / Example/acme-app / #12' "$MS/missions/index.html" \
+  && ok "missions index shows company / repo / #issue path" || bad "missions index shows company / repo / #issue path"
+grep -q 'Example/acme-app#9' "$MS/missions/index.html" \
+  && ok "missions index shows URL-keyed mission" || bad "missions index shows URL-keyed mission"
+[ "$(grep -o 'class="wave-card"' "$MS/mission/acme-12/index.html" | wc -l | tr -d ' ')" = "3" ] \
+  && ok "multi-wave mission renders one card per wave" || bad "multi-wave mission renders one card per wave"
+grep -q 'Single task' "$MS/mission/example-acme-app-9/index.html" \
+  && ok "simple 1:1 mission collapses to a single task" || bad "simple 1:1 mission collapses to a single task"
+if grep -q 'class="wave-card"' "$MS/mission/example-acme-app-9/index.html"; then
+  bad "simple 1:1 hides the wave chrome"
+else
+  ok "simple 1:1 hides the wave chrome"
+fi
+grep -q 'href="../mission/acme-12/index.html"' "$MS/work/index.html" \
+  && ok "work table links trails up to their mission" || bad "work table links trails up to their mission"
+grep -q '<dt>Mission</dt>' "$MS/trail/1-fixture-builder-widget-x/index.html" \
+  && ok "trail detail links its mission" || bad "trail detail links its mission"
+grep -q 'href="../../mission/acme-12/index.html"' "$MS/company/acme/index.html" \
+  && ok "company page lists its missions" || bad "company page lists its missions"
+if ls "$MS/mission" | grep -q '050505'; then
+  bad "hex color token never becomes a mission"
+else
+  ok "hex color token never becomes a mission"
+fi
+grep -q '(title from trail)' "$MS/missions/index.html" \
+  && ok "mission title source is disclosed when gh did not resolve it" \
+  || bad "mission title source is disclosed when gh did not resolve it"
+assert_links_resolve "mission site: every relative href resolves (BROKEN: 0)" "$MS"
+
 # HTML must refuse a data contract it does not understand
 python3 - "$FJ" "$TMP/bad.json" <<'PY'
 import json, sys
@@ -709,6 +789,13 @@ exists "learnings/index.html"  "$SITE/learnings/index.html"
 exists "conductor/index.html"  "$SITE/conductor/index.html"
 exists "assets/site.css"       "$SITE/assets/site.css"
 exists "work/flat/index.html"  "$SITE/work/flat/index.html"
+exists "missions/index.html"   "$SITE/missions/index.html"
+exists "live/index.html"       "$SITE/live/index.html"
+
+grep -q 'class="hier"' "$SITE/index.html" && ok "site home has hierarchy strip" || bad "site home has hierarchy strip"
+grep -q 'Ops Floor' "$SITE/live/index.html" && ok "site live shell present" || bad "site live shell present"
+grep -q 'make desk-live' "$SITE/live/index.html" && ok "site live shell teaches Phase B" || bad "site live shell teaches Phase B"
+grep -q 'class="mode"' "$SITE/index.html" && ok "site has Almanac | Floor toggle" || bad "site has Almanac | Floor toggle"
 
 grep -q "Fleet Desk" "$SITE/index.html" && ok "brand present" || bad "brand present"
 grep -qi "make experience" "$SITE/about/index.html" && ok "about refresh hint" || bad "about refresh hint"

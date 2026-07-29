@@ -158,6 +158,53 @@ can be expanded to its raw inputs. `inputs` adds `proven_loop`,
 
 ---
 
+## Derived views (renderer-side, schema unchanged at v2)
+
+Fleet Desk v2 (Phase A, [`fleet-desk-v2-SYNTHESIS.md`](proposals/fleet-desk-v2-SYNTHESIS.md))
+adds pages that are **pure derivations** over the fields above. The renderer
+computes them from `trails[]` at render time; nothing new is stored, so
+`schema_version` stays `2`, the join rules and PMI gates are untouched, and
+`experience_data.py` needs no change.
+
+### Missions
+
+A **mission** is usually a GitHub issue: trails are grouped by their primary
+issue anchor, resolved in this order:
+
+1. a gh-resolved link (`issue_links_resolved`, `kind: "issue"`) — wins because
+   it carries a verified repo, title and state;
+2. a full `…/issues/N` URL from `issue_links` — key = `owner/repo#N`;
+3. a bare `#N` ref — **repo-ambiguous**, so the key is scoped per company
+   (`<company_id>#N`, `unlinked#N` when unjoined) instead of merging unrelated
+   issues that share a number. Refs with 6+ digits are treated as IDs/colors
+   (e.g. the hex `#050505` in a theme handoff) and never anchor a mission.
+
+Derived per mission: `company_id` (first non-null among its trails), `repo`
+(from the URL key, else the company `github_repo`), waves (distinct `wave`
+values), and state: **settled** (all trails `done`) · **blocked** (no `done`,
+some `failed`/`unavailable`) · **mixed** (some `done`, some not) · **open**
+(nothing `done`, nothing blocked). A mission with exactly one trail is
+**simple 1:1** and renders without wave chrome. When no resolved issue
+carried a title, the card title falls back to the newest trail's `plan_hint`
+and says so (`title from trail`). Trails with no issue link have **no
+mission** — they stay honest under Work.
+
+### Pipeline language
+
+Every surface speaks Queued · In flight · Blocked · Settled, mapped from trail
+`status`: `done` → Settled; `failed` / `fail` / `unavailable` / `error` →
+Blocked. **Queued and In flight are not derivable from settled handoffs**, so
+the Almanac renders them as `—` with a pointer to the Ops Floor. Live counts
+are never invented, and live state is never written into this contract
+(Phase B streams it separately).
+
+### Ops Floor (`/live/`)
+
+A static shell: Wave-lane and Conductor-spine **structure** with empty states.
+It ships no data and fakes no agents; Phase B wires `logs/fleet-events/`.
+
+---
+
 ## Join rules (ordered, SYNTHESIS §3.5)
 
 1. `config_map` — `config/experience-joins.yaml` (`pattern: company_id`). A pattern

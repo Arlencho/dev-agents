@@ -1,7 +1,7 @@
 # Fleet Desk — operator guide
 
 **What it is:** a local, **read-only** static site that projects fleet work, skills, learnings, and role maturity.  
-**Law:** [`docs/proposals/experience-console-SYNTHESIS.md`](proposals/experience-console-SYNTHESIS.md)  
+**Law:** [`docs/proposals/experience-console-SYNTHESIS.md`](proposals/experience-console-SYNTHESIS.md) · v2: [`docs/proposals/fleet-desk-v2-SYNTHESIS.md`](proposals/fleet-desk-v2-SYNTHESIS.md) (Phase A)  
 **Not:** GitHub Issues, skill promote UI, or a live agent control panel.
 
 ---
@@ -70,28 +70,58 @@ cd site/experience && python3 -m http.server 8765
 
 ---
 
-## What you will see
+## What you will see (v2 navigation)
+
+Two attention modes, toggled in the header: **Almanac** (the settled record —
+every page below except Floor) and **Floor** (the live radar — a static shell
+in Phase A). Tagline: *See the fleet move. Keep the record honest.*
+
+Every page opens with a **hierarchy strip**:
+
+```text
+Global › Company › Repo › Mission › Wave / Task
+```
+
+Levels that do not apply yet render dimmed (`…`, `any`, `—`); the current
+level is highlighted. You should always know where you are in the tree.
 
 | Nav | Meaning |
 |-----|---------|
-| **Home** | Global overview: fleet stat strip (trails, done %, critic share, waves, vendor mix), companies, recent tasks, watchlist, roles, skills, learnings |
-| **Work** | All tasks, **grouped by wave** by default — use the `by wave \| flat` toggle for a flat newest-first list. Per-company Work under each company page |
+| **Home** | Global rollup: pipeline strip, fleet stats, companies, top missions, live teaser, recent work, watchlist, roles, skills |
+| **Missions** | Issue-centric portfolio: one card per mission with path `company / repo / #issue`, state pill, wave count, settled meter |
+| **Work** | All tasks, **grouped by wave** by default — `by wave \| flat` toggle; each row links up to its mission when the trail cites an issue |
 | **Skills** | Global packs + versions + which roles inject them (active / candidate status) |
 | **Learn** | Learnings + promoted/documented status |
 | **Roles** | Usage counts + **Playbook Maturity Index (PMI)** badges with expandable raw inputs |
 | **Conductor** | One-shot conductor trails |
-| **About** | Sources, join rules, PMI formula, how to refresh |
+| **Floor** | Ops Floor shell: Wave lanes + Conductor spine **structure** with honest empty states — no fake agents (Phase B wires real events) |
+| **About** | Sources, join rules, PMI formula, derived-view rules, how to refresh |
+
+**Pipeline language everywhere:** Queued · In flight · Blocked · Settled.
+The Almanac is a projection of *settled* handoffs, so `done` → **Settled** and
+`failed`/`unavailable` → **Blocked**, while Queued and In flight render as an
+honest **—** with a pointer to the Ops Floor. Counts are never invented.
+
+**Missions** are derived, not stored: trails that cite the same GitHub issue
+(`#123` or a full issue URL in the handoff) group into a mission. A mission
+with several waves renders one collapsible card per wave with its seat/task
+table; a mission with exactly one trail collapses to the **simple 1:1** view
+(issue → 1 task → 1 seat) with the wave chrome hidden. Bare `#123` refs group
+per company (the repo is ambiguous), and 6+-digit tokens like hex colors never
+become missions. When `gh` did not resolve the issue, the card says the title
+comes from a trail. Full rules: [`docs/experience-data.md`](experience-data.md)
+§ Derived views.
 
 **Scope chip** (always visible): `Global | olympus | safeplace | …` — placeholder
 companies are dimmed. Same UI grammar in both scopes.
 
-Reading the chrome (Wave 2 visual system):
+Reading the chrome (v2 visual system — dark-first Almanac craft):
 
-- **Status is text AND color**: `done` / `failed` pills always carry the word — never color alone.
-- **Wave is always visible** on trail rows, wave section headers, and trail detail breadcrumbs (`← Work · scope · wave N`).
+- **Status is text AND color**: `done` / `failed` / pipeline pills always carry the word — never color alone.
+- **Wave is always visible** on trail rows, wave section headers, mission detail wave cards, and trail detail breadcrumbs (`← Work · scope · wave N`).
 - **SHAs, branches, task ids, paths** render in monospace; `base → head` pairs on trail detail.
-- **Empty states teach**: every empty table/card names the next command (`make experience`, dispatch).
-- Light/dark follows `prefers-color-scheme`; keyboard users get a skip link, visible focus rings, and `aria-current` on nav/scope/toggle.
+- **Empty states teach**: every empty table/card names the next command (`make experience`, dispatch, `make desk-live` on the Floor).
+- Dark theme is the default; light honors `prefers-color-scheme`. Keyboard users get a skip link, visible focus rings, and `aria-current` on nav/scope/toggle; `prefers-reduced-motion` kills all animation.
 
 The stylesheet lives at `templates/experience/site.css` and is copied to
 `site/experience/assets/site.css` on every build — edit the template, not the copy.
@@ -105,8 +135,19 @@ The stylesheet lives at `templates/experience/site.css` and is copied to
 
 ### Company / repo
 
-Click a company chip → company home → **Open Work for &lt;company&gt;** for that product’s joined trails only.  
+Click a company chip → company home: repo chips (1..N from the manifest), a
+company-scoped pipeline strip, its **missions**, then joined work trails →
+**Open Work for &lt;company&gt;** for that product’s joined trails only.  
 Unlinked work (e.g. black-aces without a company join) stays on **Global** with an honest label.
+
+### The Ops Floor (Phase A shell)
+
+**Floor** (`site/experience/live/index.html`) is the live radar's structure
+without a live run: ghost Wave lanes, a dashed Conductor spine, an empty
+waiting-on strip, and an offline LED. It teaches the Phase B path
+(`make desk-live`, `logs/fleet-events/*.jsonl`) and never renders fake agents,
+fake timers, or invented live state. Live state will **never** be stored in
+`index.json` — see the v2 SYNTHESIS §3 Phase B.
 
 ---
 

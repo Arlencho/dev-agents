@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fleet Desk — HTML renderer (Wave 2 presentation).
+Fleet Desk — HTML renderer (v2: Almanac restyle + hierarchy + mission shells).
 
 Reads ONLY the data contract emitted by scripts/experience_data.py:
 
@@ -11,7 +11,12 @@ and writes static pages plus a copied stylesheet next to it:
     site/experience/assets/site.css    (from templates/experience/site.css)
 
 No repo scanning happens here — if a field is missing from the JSON it does not
-belong on the page. Law: docs/proposals/experience-console-SYNTHESIS.md
+belong on the page. Missions are a pure derivation over schema v2 fields
+(issue_links, company_id, wave, status) — see docs/experience-data.md
+§ Derived views; the schema itself is unchanged. The /live/ Ops Floor is a
+static shell: no live state is invented (Phase B wires real events).
+Law: docs/proposals/experience-console-SYNTHESIS.md
+     docs/proposals/fleet-desk-v2-SYNTHESIS.md (Phase A)
 """
 from __future__ import annotations
 
@@ -70,13 +75,151 @@ def write_assets(out: Path) -> None:
 
 NAV = [
     ("home", "Home", "index.html"),
+    ("missions", "Missions", "missions/index.html"),
     ("work", "Work", "work/index.html"),
     ("skills", "Skills", "skills/index.html"),
     ("learn", "Learn", "learnings/index.html"),
     ("roles", "Roles", "roles/index.html"),
     ("conductor", "Conductor", "conductor/index.html"),
+    ("floor", "Floor", "live/index.html"),
     ("about", "About", "about/index.html"),
 ]
+
+# Pipeline language (Fleet Desk v2 SYNTHESIS §1): every surface talks in
+# Queued · In flight · Blocked · Settled. The Almanac only sees settled
+# trails, so Queued / In flight are honest dashes — never invented counts.
+BLOCKED_STATUSES = ("failed", "fail", "unavailable", "error")
+
+ISSUE_URL_RE = re.compile(r"github\.com/([^/\s]+)/([^/\s]+)/issues/(\d+)")
+
+
+def _mission_anchor(t: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """Primary issue anchor for a trail, or None when it cites no issue.
+
+    A mission is usually a GitHub issue (SYNTHESIS §1 hierarchy). Prefer a
+    gh-resolved issue link (carries title/state); fall back to raw refs.
+    Bare `#123` refs are repo-ambiguous, so they group per company scope
+    instead of merging unrelated issues that share a number.
+    """
+    for x in t.get("issue_links_resolved") or []:
+        if x.get("kind") != "issue":
+            continue
+        m = ISSUE_URL_RE.search(x.get("url") or "")
+        if m:
+            slug = f"{m.group(1)}/{m.group(2)}"
+            return {
+                "key": f"{slug}#{m.group(3)}",
+                "ref": f"{slug}#{m.group(3)}",
+                "url": x.get("url") or "",
+                "title": x.get("title") or "",
+                "issue_state": (x.get("state") or "").lower(),
+            }
+    for ref in t.get("issue_links") or []:
+        m = ISSUE_URL_RE.search(str(ref))
+        if m:
+            slug = f"{m.group(1)}/{m.group(2)}"
+            return {
+                "key": f"{slug}#{m.group(3)}",
+                "ref": f"{slug}#{m.group(3)}",
+                "url": str(ref),
+                "title": "",
+                "issue_state": "",
+            }
+        m2 = re.fullmatch(r"#(\d+)", str(ref).strip())
+        if m2:
+            # Bare refs are repo-ambiguous, so they group per company scope
+            # instead of merging unrelated issues that share a number.
+            # 6+ digit tokens are IDs/colors (e.g. the hex `#050505` in a
+            # theme handoff), not issue numbers — never a mission anchor.
+            if len(m2.group(1)) > 5:
+                continue
+            scope = t.get("company_id") or "unlinked"
+            return {
+                "key": f"{scope}#{m2.group(1)}",
+                "ref": f"#{m2.group(1)}",
+                "url": "",
+                "title": "",
+                "issue_state": "",
+            }
+    return None
+
+
+def _slugify(key: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", key.lower()).strip("-") or "mission"
+
+
+def derive_missions(
+    trails: List[Dict[str, Any]], companies: List[Dict[str, Any]]
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """Group trails into missions by primary issue anchor.
+
+    Pure derivation over the schema v2 contract (issue_links,
+    issue_links_resolved, company_id, wave, status) — documented in
+    docs/experience-data.md § Derived views. Returns (missions newest-first,
+    task_id → mission slug).
+    """
+    groups: Dict[str, Dict[str, Any]] = {}
+    for t in trails:
+        a = _mission_anchor(t)
+        if not a:
+            continue
+        g = groups.setdefault(a["key"], {**a, "trails": []})
+        # Resolved metadata may arrive on a later trail of the same mission.
+        for k in ("url", "title", "issue_state"):
+            if not g[k] and a[k]:
+                g[k] = a[k]
+        g["trails"].append(t)
+
+    gh_by_company = {c["id"]: c.get("github_repo") or "" for c in companies}
+    missions: List[Dict[str, Any]] = []
+    used_slugs: Dict[str, int] = {}
+    for key, g in groups.items():
+        ts = g["trails"]  # trails arrive newest-first
+        company_id = next((t["company_id"] for t in ts if t["company_id"]), None)
+        repo = key.rsplit("#", 1)[0] if "/" in key else gh_by_company.get(company_id or "", "")
+        n = len(ts)
+        n_done = sum(1 for t in ts if t["status"] == "done")
+        n_blocked = sum(1 for t in ts if t["status"] in BLOCKED_STATUSES)
+        n_open = n - n_done - n_blocked
+        if n_done == n:
+            state = "settled"
+        elif n_blocked and not n_done:
+            state = "blocked"
+        elif n_done:
+            state = "mixed"
+        else:
+            state = "open"
+        waves = sorted({t["wave"] for t in ts if t["wave"] is not None})
+        slug = _slugify(key)
+        if slug in used_slugs:  # keep page URLs unique on key collision
+            used_slugs[slug] += 1
+            slug = f"{slug}-{used_slugs[slug]}"
+        else:
+            used_slugs[slug] = 1
+        missions.append(
+            {
+                "slug": slug,
+                "key": key,
+                "ref": g["ref"],
+                "url": g["url"],
+                "title": g["title"] or ts[0]["plan_hint"] or g["ref"],
+                "title_source": "issue" if g["title"] else "trail",
+                "issue_state": g["issue_state"],
+                "company_id": company_id,
+                "repo": repo,
+                "trails": ts,
+                "waves": waves,
+                "n": n,
+                "n_done": n_done,
+                "n_blocked": n_blocked,
+                "n_open": n_open,
+                "state": state,
+                "simple": n == 1,
+            }
+        )
+    missions.sort(key=lambda m: max((t["ts"] or "") for t in m["trails"]), reverse=True)
+    trail_mission = {t["task_id"]: m["slug"] for m in missions for t in m["trails"]}
+    return missions, trail_mission
 
 
 class Renderer:
@@ -86,6 +229,8 @@ class Renderer:
         self.companies = data["companies"]
         self.trails = data["trails"]
         self.generated = data["generated_at"]
+        self.missions, self.trail_mission = derive_missions(self.trails, self.companies)
+        self.mission_by_slug = {m["slug"]: m for m in self.missions}
 
     # ── shell ─────────────────────────────────────────────────────────
     @staticmethod
@@ -99,6 +244,8 @@ class Renderer:
         depth: int,
         scope: str = "global",
         section: Optional[str] = None,
+        mode: str = "almanac",
+        hier: Optional[str] = None,
     ) -> str:
         pre = self.pre(depth)
         nav_bits = []
@@ -106,6 +253,21 @@ class Renderer:
             current = ' aria-current="page"' if key == section else ""
             nav_bits.append(f'<a href="{pre}{href}"{current}>{esc(label)}</a>')
         nav_html = " ".join(nav_bits)
+        almanac_cur = ' aria-current="true"' if mode == "almanac" else ""
+        floor_cur = ' aria-current="true"' if mode == "floor" else ""
+        mode_html = (
+            '<span class="mode" role="group" aria-label="Attention mode">'
+            f'<a href="{pre}index.html"{almanac_cur}>Almanac</a>'
+            f'<a href="{pre}live/index.html"{floor_cur}>Floor</a></span>'
+        )
+        if hier is None:
+            # Cross-cutting fleet-global pages (roles, skills, …) sit under
+            # Global without a company/repo/mission chain.
+            view = (section or scope).replace("-", " ").capitalize()
+            hier = self.hier(
+                [("Global", "Fleet Desk", f"{pre}index.html", False), ("View", view, None, True)],
+                hint="fleet-global",
+            )
         global_current = ' aria-current="true"' if scope == "global" else ""
         chips = [f'<a class="chip" href="{pre}index.html"{global_current}>Global</a>']
         for c in self.companies:
@@ -135,8 +297,9 @@ class Renderer:
   <div class="wrap">
     <header class="site">
       <div class="brandrow">
-        <span class="brand"><a href="{pre}index.html">Fleet Desk</a></span>
-        <span class="tag">What the fleet did, learned, and now knows how to do.<span class="dot">·</span>read-only<span class="dot">·</span>generated {esc(self.generated)}</span>
+        <span class="brand"><span class="mark" aria-hidden="true"></span><a href="{pre}index.html">Fleet Desk</a></span>
+        <span class="tag">See the fleet move. Keep the record honest.<span class="dot">·</span>read-only<span class="dot">·</span>generated {esc(self.generated)}</span>
+        {mode_html}
       </div>
       <nav class="nav" aria-label="Primary">{nav_html}</nav>
       <div class="scope" aria-label="Scope">
@@ -144,6 +307,7 @@ class Renderer:
       </div>
     </header>
     <main id="main">
+{hier}
 {body}
     </main>
     <footer class="footer">
@@ -162,7 +326,7 @@ class Renderer:
     def status_kind(status: str) -> str:
         if status == "done":
             return "done"
-        if status in ("failed", "fail", "unavailable", "error"):
+        if status in BLOCKED_STATUSES:
             return "fail"
         return "unk"
 
@@ -181,11 +345,129 @@ class Renderer:
         sep = '<span class="sep">·</span>'
         return f'<p class="crumb">{sep.join(parts)}</p>'
 
+    # ── v2 chrome: hierarchy strip, pipeline language, missions ───────
+    @staticmethod
+    def hier(levels: List[Tuple[str, str, Optional[str], bool]], hint: str = "") -> str:
+        """Hierarchy strip: Global › Company › Repo › Mission › Wave/Task.
+
+        Each level is (label, text, href, current). Placeholder levels pass
+        text like "…" / "any" and render dimmed — the strip always shows the
+        full chain so the reader never loses the mental model.
+        """
+        bits = []
+        for i, (label, text, href, current) in enumerate(levels):
+            if i:
+                bits.append('<span class="sep" aria-hidden="true">›</span>')
+            cls = "lvl on" if current else "lvl"
+            if href:
+                inner = f"<b>{esc(label)}</b> <a href=\"{esc(href)}\">{esc(text)}</a>"
+            elif text in ("…", "any", "—"):
+                inner = f"<b>{esc(label)}</b> <em class=\"faint\">{esc(text)}</em>"
+            else:
+                inner = f"<b>{esc(label)}</b> <em>{esc(text)}</em>"
+            bits.append(f'<span class="{cls}">{inner}</span>')
+        hint_html = f'<span class="hint">{esc(hint)}</span>' if hint else ""
+        return f'<nav class="hier" aria-label="Hierarchy">{"".join(bits)}{hint_html}</nav>'
+
+    @staticmethod
+    def _counts(subset: List[Dict[str, Any]]) -> Tuple[int, int, int]:
+        n_done = sum(1 for t in subset if t["status"] == "done")
+        n_blocked = sum(1 for t in subset if t["status"] in BLOCKED_STATUSES)
+        return n_done, n_blocked, len(subset) - n_done - n_blocked
+
+    def pipeline(self, subset: List[Dict[str, Any]], depth: int = 0, scope_note: str = "") -> str:
+        """Pipeline strip in the v2 language: Queued · In flight · Blocked · Settled.
+
+        Honesty: the Almanac is a projection of settled handoffs. Queued
+        seats live in plans and In flight lives on the Ops Floor — both are
+        rendered as "—" with a pointer, never as invented counts.
+        """
+        n_done, n_blocked, _ = self._counts(subset)
+        note = f" · {scope_note}" if scope_note else ""
+        return f"""
+    <div class="pipeline" role="group" aria-label="Pipeline">
+      <div class="pipe todo"><div class="ph">Queued <span class="n">—</span></div><div class="desc">Plan-side seats — not in the Almanac</div></div>
+      <div class="pipe wip"><div class="ph">In flight <span class="n">—</span></div><div class="desc">Live motion belongs to the <a href="{self.pre(depth)}live/index.html">Ops Floor</a></div></div>
+      <div class="pipe blocked"><div class="ph">Blocked <span class="n">{n_blocked}</span></div><div class="desc">failed / unavailable trails{esc(note)}</div></div>
+      <div class="pipe done"><div class="ph">Settled <span class="n">{n_done}</span></div><div class="desc">trails with handoffs{esc(note)}</div></div>
+    </div>
+"""
+
+    @staticmethod
+    def _state_pill(state: str) -> str:
+        cls = {"settled": "st-done", "blocked": "st-fail", "mixed": "st-warn"}.get(state, "st-unk")
+        return f'<span class="st {cls}">{esc(state)}</span>'
+
+    def mission_href(self, slug: str, depth: int) -> str:
+        return f"{self.pre(depth)}mission/{esc(slug)}/index.html"
+
+    def mission_card(self, m: Dict[str, Any], depth: int) -> str:
+        path = f"{m['company_id'] or 'unlinked'} / {m['repo'] or 'repo —'} / {m['ref']}"
+        if m["simple"]:
+            shape = '<span class="pill accent">simple 1:1</span><span class="pill">1 task</span>'
+        else:
+            n_waves = len(m["waves"])
+            shape = (
+                f'<span class="pill">{n_waves} wave{"s" if n_waves != 1 else ""}</span>'
+                if n_waves
+                else '<span class="pill">no wave</span>'
+            )
+        title_note = "" if m["title_source"] == "issue" else ' <span class="faint">(title from trail)</span>'
+        return f"""
+      <a class="mission" href="{self.mission_href(m['slug'], depth)}">
+        <span class="path">{esc(path)}</span>
+        {self._state_pill(m["state"])}
+        <span class="t">{esc(m["title"])}{title_note}</span>
+        <span class="d">{m["n"]} trail{"s" if m["n"] != 1 else ""} · {m["n_done"]} settled · {m["n_blocked"]} blocked</span>
+        <span class="bar">{shape}<meter min="0" max="{m["n"]}" value="{m["n_done"]}">{m["n_done"]}/{m["n"]}</meter><span class="mono">{m["n_done"]}/{m["n"]}</span></span>
+      </a>
+"""
+
+    def mission_grid(self, missions: List[Dict[str, Any]], depth: int, empty: str) -> str:
+        if not missions:
+            return f'<p class="empty">{empty}</p>'
+        cards = "".join(self.mission_card(m, depth) for m in missions)
+        return f'<div class="mission-grid">{cards}</div>'
+
+    @staticmethod
+    def _task_table(subset: List[Dict[str, Any]], depth: int) -> str:
+        rows = "".join(
+            "<tr>"
+            f"<td>{Renderer._static_status_pill(t['status'])}</td>"
+            f"<td>{esc(t['role'])}</td>"
+            f'<td class="mono"><a href="{Renderer.pre(depth)}trail/{esc(t["task_id"])}/index.html">{esc(t["task_id"])}</a></td>'
+            f'<td class="mono muted">{esc(t["branch"] or "—")}</td>'
+            f'<td class="muted mono">{esc((t["ts"] or "")[:16])}</td>'
+            "</tr>"
+            for t in subset
+        )
+        head = (
+            "<thead><tr><th>Status</th><th>Seat</th><th>Task</th>"
+            "<th>Branch</th><th>When</th></tr></thead>"
+        )
+        return f'<div class="tablewrap"><table>{head}<tbody>{rows}</tbody></table></div>'
+
+    @staticmethod
+    def _static_status_pill(status: str) -> str:
+        if status == "done":
+            kind = "done"
+        elif status in BLOCKED_STATUSES:
+            kind = "fail"
+        else:
+            kind = "unk"
+        return f'<span class="st st-{kind}">{esc(status)}</span>'
+
     def trail_row(self, t: Dict[str, Any], depth: int) -> str:
         pre = self.pre(depth)
         href = f"{pre}trail/{esc(t['task_id'])}/index.html"
         label = t["company_id"] or t["project_label"] or "unlinked"
         wave = f"wave {t['wave']}" if t["wave"] is not None else "wave —"
+        mission_slug = self.trail_mission.get(t["task_id"])
+        if mission_slug:
+            m_ref = self.mission_by_slug[mission_slug]["ref"]
+            mission_cell = f'<a href="{self.mission_href(mission_slug, depth)}">{esc(m_ref)}</a>'
+        else:
+            mission_cell = '<span class="faint">—</span>'
         return (
             "<tr>"
             f"<td>{self.status_pill(t['status'])}</td>"
@@ -193,6 +475,7 @@ class Renderer:
             f'<td class="mono">{esc(label)}</td>'
             f"<td>{esc(wave)}</td>"
             f'<td class="mono"><a href="{href}">{esc(t["task_id"])}</a></td>'
+            f"<td>{mission_cell}</td>"
             f'<td class="muted mono">{esc((t["ts"] or "")[:16])}</td>'
             "</tr>"
         )
@@ -200,7 +483,7 @@ class Renderer:
     def trail_table(self, subset: List[Dict[str, Any]], depth: int, empty: str) -> str:
         head = (
             "<thead><tr><th>Status</th><th>Role</th><th>Scope</th>"
-            "<th>Wave</th><th>Task</th><th>When</th></tr></thead>"
+            "<th>Wave</th><th>Task</th><th>Mission</th><th>When</th></tr></thead>"
         )
         rows = "".join(self.trail_row(t, depth) for t in subset)
         if not rows:
@@ -255,11 +538,28 @@ class Renderer:
     def work_pages(self, subset: List[Dict[str, Any]], base: Path, depth: int, scope: str) -> None:
         n = len(subset)
         noun = "trail" if n == 1 else "trails"
+        pre = self.pre(depth)
+        if scope == "global":
+            hier = self.hier(
+                [("Global", "Fleet Desk", f"{pre}index.html", False), ("Mission", "all work", None, True)],
+                hint="trail = atom · grouped by wave",
+            )
+        else:
+            hier = self.hier(
+                [
+                    ("Global", "Fleet Desk", f"{pre}index.html", False),
+                    ("Company", scope, f"{pre}company/{esc(scope)}/index.html", False),
+                    ("Mission", "all work", None, True),
+                ],
+                hint="company scope · trails",
+            )
         head = f"""
+    {hier}
     <div class="pagehead">
       <h1>Work</h1>
       <p class="lede">Scope <strong>{esc(scope)}</strong> · {n} {noun}.
-      Trail is the atom; wave clusters atoms. Group by wave, or switch to a flat newest-first list.</p>
+      Trail is the atom; wave clusters atoms; a <a href="{pre}missions/index.html">mission</a> groups trails that share a GitHub issue.
+      Status speaks pipeline: <strong>settled</strong> done · <strong>blocked</strong> failed — queued and in-flight live on the <a href="{pre}live/index.html">Ops Floor</a>.</p>
       <p>Group: {self.seg(True, "index.html", "flat/index.html")}</p>
     </div>
 """
@@ -279,6 +579,246 @@ class Renderer:
             base / "flat" / "index.html",
             self.page(f"Work (flat) · {scope}" if scope != "global" else "Work (flat)", flat, depth + 1, scope, "work"),
         )
+
+    # ── missions (issue-centric portfolio + issue run detail) ─────────
+    def missions_index(self) -> None:
+        hier = self.hier(
+            [
+                ("Global", "Fleet Desk", "../index.html", False),
+                ("Company", "any", None, False),
+                ("Repo", "any", None, False),
+                ("Mission", "portfolio", None, True),
+            ],
+            hint="issue-centric list",
+        )
+        empty = (
+            "No issue-linked missions yet. A mission appears when a handoff cites a GitHub issue "
+            "(<code>#123</code> or a full issue URL) — then <code>make experience</code>. "
+            "Unlinked trails stay honest under <a href=\"../work/index.html\">Work</a>."
+        )
+        body = f"""
+    {hier}
+    <div class="pagehead">
+      <h1>Missions</h1>
+      <p class="lede">A <strong>mission</strong> is usually a GitHub issue. Every card carries its path
+      <span class="mono">company / repo / #issue</span> → waves → tasks. Derived from trail issue links —
+      never invented (see <a href="../about/index.html">About</a>).</p>
+    </div>
+    {self.pipeline(self.trails, 1)}
+    {self.mission_grid(self.missions, 1, empty)}
+"""
+        write(self.out / "missions" / "index.html", self.page("Missions", body, 1, "global", "missions"))
+
+    def mission_pages(self) -> None:
+        for m in self.missions:
+            pre = "../../"
+            company_id = m["company_id"]
+            company_lvl: Tuple[str, str, Optional[str], bool] = (
+                ("Company", company_id, f"{pre}company/{esc(company_id)}/index.html", False)
+                if company_id
+                else ("Company", "unlinked", None, False)
+            )
+            wave_text = f"{len(m['waves'])} wave{'s' if len(m['waves']) != 1 else ''}" if m["waves"] else "no wave"
+            hier = self.hier(
+                [
+                    ("Global", "Fleet Desk", f"{pre}index.html", False),
+                    company_lvl,
+                    ("Repo", m["repo"] or "—", None, False),
+                    ("Mission", m["ref"], None, True),
+                    ("Wave / Task", wave_text, None, False),
+                ],
+                hint="mission detail" + (" · simple 1:1" if m["simple"] else ""),
+            )
+            if m["url"]:
+                gh = f'<a class="gh" href="{esc(m["url"])}">{esc(m["ref"])} ↗</a>'
+            else:
+                gh = f'<span class="gh">{esc(m["ref"])}</span> <span class="faint">unresolved ref — repo not confirmed</span>'
+            issue_state = f'<span class="pill">{esc(m["issue_state"])}</span>' if m["issue_state"] else ""
+            shape = "simple 1:1" if m["simple"] else ("complex" if len(m["waves"]) > 1 else "single wave")
+            title_note = (
+                ""
+                if m["title_source"] == "issue"
+                else '<p class="faint flush">Title comes from the newest trail’s plan hint — '
+                "the issue ref was not resolved by gh enrichment in this build.</p>"
+            )
+            hero = f"""
+    <div class="issue-hero">
+      <div class="row1">
+        {gh}
+        {self._state_pill(m["state"])}
+        <span class="pill accent">{esc(shape)}</span>
+        {issue_state}
+      </div>
+      <h1>{esc(m["title"])}</h1>
+      <dl class="meta">
+        <div><dt>Company</dt><dd>{esc(company_id or "unlinked")}</dd></div>
+        <div><dt>Repo</dt><dd class="mono">{esc(m["repo"] or "—")}</dd></div>
+        <div><dt>Trails</dt><dd>{m["n"]} · {m["n_done"]} settled · {m["n_blocked"]} blocked</dd></div>
+        <div><dt>Waves</dt><dd>{esc(wave_text)}</dd></div>
+      </dl>
+      {title_note}
+    </div>
+"""
+            if m["simple"]:
+                t = m["trails"][0]
+                work_html = f"""
+    <div class="card">
+      <div class="cardhead"><h2>Single task — issue → 1 task → 1 seat</h2></div>
+      {self._task_table([t], 2)}
+      <p class="muted flush">Smallest mapping: one trail carries the whole mission, so the wave chrome stays hidden.</p>
+    </div>
+"""
+            else:
+                by_wave: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+                for t in m["trails"]:
+                    by_wave[self.wave_key(t)].append(t)
+
+                def sk(k: str) -> Tuple[int, str]:
+                    mo = re.match(r"Wave (\d+)", k)
+                    return (0, f"{int(mo.group(1)):05d}") if mo else (1, k)
+
+                cards = []
+                for key in sorted(by_wave.keys(), key=sk):
+                    ts = by_wave[key]
+                    w_done, w_blocked, w_open = self._counts(ts)
+                    if w_done == len(ts):
+                        w_pill = '<span class="st st-done">settled</span>'
+                    elif w_blocked and not w_done:
+                        w_pill = '<span class="st st-fail">blocked</span>'
+                    elif w_done:
+                        w_pill = '<span class="st st-warn">mixed</span>'
+                    else:
+                        w_pill = '<span class="st st-unk">open</span>'
+                    counts = f"{w_done}/{len(ts)} settled"
+                    if w_blocked:
+                        counts += f" · {w_blocked} blocked"
+                    cards.append(
+                        f'<details class="wave-card" open><summary><span class="wh">'
+                        f"<strong>{esc(key)}</strong> {w_pill} "
+                        f'<span class="counts">{esc(counts)}</span></span></summary>'
+                        f"{self._task_table(ts, 2)}</details>"
+                    )
+                work_html = f"""
+    <div class="card">
+      <div class="cardhead"><h2>Waves under this mission</h2><a class="more" href="{pre}live/index.html">Ops Floor →</a></div>
+      <div class="wave-list">{"".join(cards)}</div>
+    </div>
+"""
+            # Around this mission — context from the contract, each line honest
+            # about where it came from.
+            seen_pairs = sorted(
+                {x for t in m["trails"] for x in t["reviewed_by"] if x in {u["task_id"] for u in m["trails"]}}
+            )
+            pair_line = (
+                ", ".join(f'<span class="mono">{esc(x)}</span>' for x in seen_pairs)
+                if seen_pairs
+                else "no critic review recorded inside this mission"
+            )
+            issue_line = (
+                f'<a href="{esc(m["url"])}">{esc(m["ref"])}</a>'
+                + (f' <span class="pill">{esc(m["issue_state"])}</span>' if m["issue_state"] else "")
+                if m["url"]
+                else f'<span class="mono">{esc(m["ref"])}</span> <span class="faint">unresolved</span>'
+            )
+            context = f"""
+    <div class="card">
+      <div class="cardhead"><h2>Around this mission</h2></div>
+      <dl class="meta">
+        <div><dt>Hierarchy</dt><dd class="mono">{esc(company_id or "unlinked")} → {esc(m["repo"] or "repo —")} → {esc(m["ref"])}</dd></div>
+        <div><dt>Issue</dt><dd>{issue_line}</dd></div>
+        <div><dt>Critic loop</dt><dd>{pair_line}</dd></div>
+        <div><dt>Derivation</dt><dd>grouped from trail <span class="mono">issue_links</span> (schema v2) — see <a href="{pre}about/index.html">About</a></dd></div>
+      </dl>
+    </div>
+"""
+            body = f"""
+    {hier}
+    {hero}
+    {self.pipeline(m["trails"], 2)}
+    {work_html}
+    {context}
+"""
+            write(
+                self.out / "mission" / m["slug"] / "index.html",
+                self.page(f"Mission {m['ref']}", body, 2, company_id or "global", "missions"),
+            )
+
+    # ── live shell (Ops Floor — Phase A static empty states) ──────────
+    def live_page(self) -> None:
+        hier = self.hier(
+            [
+                ("Global", "Fleet Desk", "../index.html", False),
+                ("Company", "—", None, False),
+                ("Mission", "—", None, False),
+                ("Wave", "no live run", None, True),
+            ],
+            hint="Ops Floor · static shell",
+        )
+        lanes = "".join(
+            f"""
+        <div class="lane ghost">
+          <div class="lane-top"><span class="role">seat lane</span><span class="st st-unk">empty</span><span class="timer">—</span></div>
+          <div class="branch">branch appears with a dispatch</div>
+          <span class="vendor">vendor —</span>
+        </div>"""
+            for _ in range(3)
+        )
+        spine_nodes = ["issue", "packet", "producer", "critic", "merge"]
+        spine = '<span class="spine-link"></span>'.join(
+            f'<div class="spine-node todo"><div class="orb">{i + 1}</div><div class="nm">{esc(n)}</div><div class="meta">—</div></div>'
+            for i, n in enumerate(spine_nodes)
+        )
+        body = f"""
+    {hier}
+    <div class="pagehead">
+      <h1>Ops Floor</h1>
+      <p class="lede">The live radar. <strong>This is the Phase A shell</strong> — structure without a live run.
+      No agents are faked here: lanes and spine light up only when the Phase B event stream
+      (<span class="mono">logs/fleet-events/</span> + <code>make desk-live</code>) lands.
+      Law: <span class="mono">docs/proposals/fleet-desk-v2-SYNTHESIS.md</span>.</p>
+    </div>
+
+    <div class="ambient">
+      <span class="led off" aria-hidden="true"></span>
+      <span class="msg"><strong>offline</strong> — no live run in this build</span>
+      <span class="meta">fleet-events: none · age —</span>
+    </div>
+
+    <div class="waiting">
+      <div class="label">Waiting on</div>
+      <p class="muted flush">Nothing waiting — there is no live dispatch to wait on.</p>
+    </div>
+
+    <div class="pipeline" role="group" aria-label="Pipeline">
+      <div class="pipe todo"><div class="ph">Queued <span class="n">—</span></div><div class="desc">no plan armed</div></div>
+      <div class="pipe wip"><div class="ph">Running <span class="n">—</span></div><div class="desc">no seat live</div></div>
+      <div class="pipe blocked"><div class="ph">Blocked <span class="n">—</span></div><div class="desc">—</div></div>
+      <div class="pipe done"><div class="ph">Done <span class="n">—</span></div><div class="desc">settled work lives in the <a href="../work/index.html">Almanac</a></div></div>
+    </div>
+
+    <div class="card">
+      <div class="cardhead"><h2>Wave layout — parallel seat lanes</h2><span class="more faint">structure preview</span></div>
+      <p class="muted">Ghost lanes show where plan seats will sit. Rate-cap and failover ride the lane as honest chrome.</p>
+      <div class="lanes">{lanes}
+      </div>
+    </div>
+
+    <div class="card mt">
+      <div class="cardhead"><h2>Conductor layout — serial spine</h2><span class="more faint">structure preview</span></div>
+      <p class="muted">A Conductor run renders as a spine: settled nodes fill, the hot pin marks the live seat, dashed nodes stay ahead of it.</p>
+      <div class="spine">{spine}</div>
+    </div>
+
+    <div class="card mt teaser">
+      <div class="cardhead"><h2>Go live</h2></div>
+      <p>Phase B wires <span class="mono">dispatch.sh</span> events to this page
+      (<code>make desk-live</code>, SSE and/or <span class="mono">live.json</span> polling).
+      Until then the Almanac — <a href="../index.html">Global</a>, <a href="../missions/index.html">Missions</a>,
+      <a href="../work/index.html">Work</a> — is the honest record.</p>
+    </div>
+"""
+        write(self.out / "live" / "index.html", self.page("Ops Floor", body, 1, "global", "floor", mode="floor"))
+
 
     # ── pages ─────────────────────────────────────────────────────────
     # home() assembles; each section is a small helper so the page stays slim.
@@ -358,14 +898,50 @@ class Renderer:
         <p class="muted">documented {n_doc} · promoted {n_pro}</p>
         <p><a href="learnings/index.html">Index →</a></p>"""
 
+    def _home_live_teaser(self) -> str:
+        return """
+      <div class="card teaser">
+        <div class="cardhead"><h2>Live · Ops Floor</h2><a class="more" href="live/index.html">Open Floor →</a></div>
+        <p class="empty">No live run in this build. The Ops Floor is a static shell until the Phase B
+        event stream lands (<code>make desk-live</code>) — agent motion is never faked here.
+        Settled work below is the honest record.</p>
+      </div>
+"""
+
     def home(self) -> None:
+        hier = self.hier(
+            [
+                ("Global", "Fleet Desk", None, True),
+                ("Company", "…", None, False),
+                ("Repo", "…", None, False),
+                ("Mission", "…", None, False),
+                ("Wave / Task", "…", None, False),
+            ],
+            hint="you are here · top",
+        )
+        missions_empty = (
+            'No issue-linked missions yet — a handoff citing a GitHub issue creates one. '
+            'See <a href="missions/index.html">Missions</a>.'
+        )
+        missions_card = f"""
+      <div class="card">
+        <div class="cardhead"><h2>Missions</h2><a class="more" href="missions/index.html">All missions →</a></div>
+        {self.mission_grid(self.missions[:4], 0, missions_empty)}
+      </div>
+"""
         body = f"""
+    {hier}
     <div class="pagehead">
       <h1>Global</h1>
-      <p class="lede">The whole fleet: every trail, role, pack, and lesson projected from git artifacts.</p>
+      <p class="lede">Fleet-wide rollup. Drill: <strong>Company</strong> → <strong>Repo</strong> →
+      <strong>Mission</strong> (GitHub issue) → <strong>Waves</strong> → <strong>Tasks</strong>.
+      Live motion sits on the <a href="live/index.html">Ops Floor</a>.</p>
     </div>
+    {self.pipeline(self.trails, 0)}
     {self._home_stats()}
     {self._home_companies_card()}
+    {missions_card}
+    {self._home_live_teaser()}
     <div class="grid g2 mt">
       <div class="card">
         <div class="cardhead"><h2>Recent work</h2><a class="more" href="work/index.html">View all Work →</a></div>
@@ -438,6 +1014,36 @@ class Renderer:
                 work_href = "../../work/index.html"
             wave_label = f"wave {t['wave']}" if t["wave"] is not None else "no wave"
             crumb = self.crumb([("← Work", work_href), (scope_label, None), (wave_label, None)])
+            mission_slug = self.trail_mission.get(t["task_id"])
+            if mission_slug:
+                m = self.mission_by_slug[mission_slug]
+                mission_row = (
+                    f'<div><dt>Mission</dt><dd><a href="{self.mission_href(mission_slug, 2)}">{esc(m["ref"])}</a>'
+                    f' <span class="muted">· {esc(m["title"])}</span></dd></div>'
+                )
+                mission_lvl: Tuple[str, str, Optional[str], bool] = (
+                    "Mission",
+                    m["ref"],
+                    self.mission_href(mission_slug, 2),
+                    False,
+                )
+            else:
+                mission_row = ""
+                mission_lvl = ("Mission", "—", None, False)
+            company_lvl: Tuple[str, str, Optional[str], bool] = (
+                ("Company", t["company_id"], f"../../company/{esc(t['company_id'])}/index.html", False)
+                if t["company_id"]
+                else ("Company", "unlinked", None, False)
+            )
+            hier = self.hier(
+                [
+                    ("Global", "Fleet Desk", "../../index.html", False),
+                    company_lvl,
+                    mission_lvl,
+                    ("Wave / Task", wave_label, None, True),
+                ],
+                hint="trail detail",
+            )
             prov = t["provenance"]
             join_note = f' <span class="muted">({esc(t["join_evidence"])})</span>' if t["join_evidence"] else ""
             conductor = ' <span class="pill accent">conductor</span>' if t["conductor"] else ""
@@ -449,6 +1055,7 @@ class Renderer:
                 return f'<h2 class="sec">{esc(title)}</h2><div class="body">{esc(text)}</div>'
 
             body = f"""
+    {hier}
     {crumb}
     <div class="pagehead">
       <h1 class="mono">{esc(t["task_id"])}</h1>
@@ -460,6 +1067,7 @@ class Renderer:
         <div><dt>Vendor · model</dt><dd class="mono">{esc(prov["vendor"])} · {esc(prov["model"])} <span class="muted">({esc(prov["host"])})</span></dd></div>
         <div><dt>Branch</dt><dd class="mono">{esc(t["branch"] or "—")}</dd></div>
         {pr_row}
+        {mission_row}
         <div><dt>Base → head</dt><dd class="mono">{esc(t["base_sha"])}→{esc(t["head_sha"])}</dd></div>
         <div><dt>Exit</dt><dd class="mono">{esc(t["agent_exit"])}</dd></div>
         <div><dt>When</dt><dd class="mono">{esc(t["ts"])}</dd></div>
@@ -491,6 +1099,7 @@ class Renderer:
         for c in self.companies:
             cid = c["id"]
             subset = [t for t in self.trails if t["company_id"] == cid]
+            co_missions = [m for m in self.missions if m["company_id"] == cid]
             empty = (
                 f"No handoffs joined to {esc(cid)} yet — join gaps are OK in Phase 0. "
                 f"See join rules on <a href=\"../../about/index.html\">About</a>, then "
@@ -500,6 +1109,25 @@ class Renderer:
             gh_html = (
                 f'<a class="mono" href="https://github.com/{esc(gh)}">{esc(gh)}</a>' if gh else '<span class="mono">—</span>'
             )
+            # Repos: 1..N per company. The manifest carries a local path and a
+            # GitHub slug; each becomes a chip, never invented beyond the fields.
+            repo_chips = []
+            if gh:
+                repo_chips.append(
+                    f'<a class="repo-chip" href="https://github.com/{esc(gh)}">'
+                    f'<span class="name">{esc(gh)}</span>'
+                    f'<span class="meta">primary · GitHub ↗</span></a>'
+                )
+            if c["repo"]:
+                repo_chips.append(
+                    f'<span class="repo-chip"><span class="name">{esc(c["repo"])}</span>'
+                    f'<span class="meta">local path (manifest)</span></span>'
+                )
+            repos_row = (
+                f'<div class="repo-row">{"".join(repo_chips)}</div>'
+                if repo_chips
+                else '<p class="empty">No repo recorded in the manifest yet.</p>'
+            )
             status_kind = "ok" if str(c["status"]).lower() == "active" else ""
             co_learnings = [L for L in learnings if L.get("company_id") == cid]
             learn_bits = "".join(
@@ -507,20 +1135,41 @@ class Renderer:
                 f'<span class="pill">{esc(L["status"])}</span></div>'
                 for L in co_learnings
             )
+            hier = self.hier(
+                [
+                    ("Global", "Fleet Desk", "../../index.html", False),
+                    ("Company", cid, None, True),
+                    ("Repo", "pick below", None, False),
+                    ("Mission", "…", None, False),
+                ],
+                hint="company scope",
+            )
+            missions_empty = (
+                f"No missions for {esc(cid)} yet — a mission appears when a joined handoff "
+                "cites a GitHub issue. Unlinked trails stay under Work."
+            )
             body = f"""
+    {hier}
     {self.crumb([("← Home", "../../index.html"), ("companies", None), (cid, None)])}
     <div class="pagehead">
       <h1>{esc(cid)} <span class="pill {status_kind}">{esc(c["status"])}</span></h1>
       <p class="lede">{esc(c["phase_note"] or "No phase note recorded.")}</p>
     </div>
     <div class="card">
+      <div class="cardhead"><h2>Repos</h2></div>
+      {repos_row}
       <dl class="meta">
-        <div><dt>Repo</dt><dd class="mono">{esc(c["repo"] or "—")}</dd></div>
         <div><dt>GitHub</dt><dd>{gh_html}</dd></div>
         <div><dt>Joined trails</dt><dd>n={c["trail_count"]}</dd></div>
+        <div><dt>Missions</dt><dd>n={len(co_missions)}</dd></div>
         <div><dt>Manifest</dt><dd class="mono muted">{esc(c["source"])}</dd></div>
       </dl>
       <p class="flush"><a href="work/index.html">Open Work for {esc(cid)} →</a></p>
+    </div>
+    {self.pipeline(subset, 2, "in this company")}
+    <div class="card mt">
+      <div class="cardhead"><h2>Missions</h2><a class="more" href="../../missions/index.html">All missions →</a></div>
+      {self.mission_grid(co_missions, 2, missions_empty)}
     </div>
     <div class="card mt">
       <div class="cardhead"><h2>Work trails (joined only)</h2></div>
@@ -809,6 +1458,16 @@ class Renderer:
       <p>Every page is rendered from <a href="../data/index.json" class="mono">data/index.json</a>
       (schema v{esc(self.d["schema_version"])}, documented in <span class="mono">docs/experience-data.md</span>).
       The HTML never reads the repo directly.</p>
+      <h2 class="sec">Derived views (v2)</h2>
+      <p><strong>Missions</strong> are a pure projection: trails are grouped by their primary
+      <span class="mono">issue_links</span> anchor (a gh-resolved issue wins over a raw ref; a bare
+      <span class="mono">#123</span> groups per company, since the repo is ambiguous). No schema change,
+      no new atoms — a trail without an issue link simply has no mission and stays under Work.</p>
+      <p><strong>Pipeline language</strong> — Queued · In flight · Blocked · Settled — maps honestly:
+      <span class="mono">done</span> → settled, <span class="mono">failed/unavailable</span> → blocked.
+      Queued and In flight are not derivable from settled handoffs, so the Almanac renders them as
+      <strong>—</strong> and points at the <a href="../live/index.html">Ops Floor</a> (a static shell
+      until Phase B wires dispatch events; live state is never stored in <span class="mono">index.json</span>).</p>
       <h2 class="sec">Sources</h2>
       <ul class="tight mono">
         <li>companies/*.md</li>
@@ -843,6 +1502,9 @@ make desk              # alias</pre>
         clean_html(self.out)
         write_assets(self.out)
         self.home()
+        self.missions_index()
+        self.mission_pages()
+        self.live_page()
         self.work_pages(self.trails, self.out / "work", 1, "global")
         self.trail_pages()
         self.company_pages()
