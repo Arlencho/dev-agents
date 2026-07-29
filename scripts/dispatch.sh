@@ -26,6 +26,7 @@ fi
 #   --auto                     Auto-continue between waves (no prompt)
 #   --retries N                Max retries per task (default: 2)
 #   --retry-on-different-worker Retry failed tasks on a different worker
+#   --skip-auth-preflight      Skip vendor session preflight (not recommended)
 #
 # Example plan.txt:
 #   1 | go-backend | implement payment service | feat/payments-svc
@@ -62,6 +63,7 @@ usage() {
     echo "  --retries N                  Max retries per task (default: 2)"
     echo "  --review                     Run autoplan review before dispatching"
     echo "  --retry-on-different-worker  Retry failed tasks on a different worker"
+    echo "  --skip-auth-preflight        Skip vendor CLI session preflight (default: on)"
     echo ""
     echo "Plan file format:"
     echo "  [wave] | agent | task description | [branch-name]"
@@ -83,6 +85,7 @@ AUTO_CONTINUE=false
 MAX_RETRIES=2
 RETRY_DIFFERENT_WORKER=false
 REVIEW_PLAN=false
+SKIP_AUTH_PREFLIGHT=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -100,6 +103,10 @@ while [ $# -gt 0 ]; do
             ;;
         --retry-on-different-worker)
             RETRY_DIFFERENT_WORKER=true
+            shift
+            ;;
+        --skip-auth-preflight)
+            SKIP_AUTH_PREFLIGHT=true
             shift
             ;;
         --help|-h)
@@ -493,6 +500,68 @@ for w in "${SORTED_WAVES[@]}"; do
     echo -e "  Wave $w: ${#indices[@]} task(s)"
 done
 echo ""
+
+# --------------------------------------------------
+# Vendor auth preflight (session validity before any launch)
+# --------------------------------------------------
+# Fail-closed for seats the plan needs (primary + failover). Validate only —
+# does not re-login. Override: --skip-auth-preflight.
+if [ "$SKIP_AUTH_PREFLIGHT" = false ]; then
+    AUTH_CHECK="$SCRIPT_DIR/vendor-auth-check.sh"
+    if [ ! -x "$AUTH_CHECK" ] && [ -f "$AUTH_CHECK" ]; then
+        chmod +x "$AUTH_CHECK" 2>/dev/null || true
+    fi
+    if [ -f "$AUTH_CHECK" ]; then
+        # Union of primary + failover vendors for every role in the plan
+        declare -A NEED_VENDORS=()
+        for i in "${!TASK_AGENT[@]}"; do
+            agent="${TASK_AGENT[$i]}"
+            primary=$(get_provider "$agent")
+            chain=$(get_failover_chain "$agent")
+            for v in $primary $chain; do
+                v=$(echo "$v" | xargs)
+                [ -n "$v" ] && NEED_VENDORS["$v"]=1
+            done
+        done
+        VENDOR_LIST=""
+        for v in "${!NEED_VENDORS[@]}"; do
+            VENDOR_LIST="${VENDOR_LIST:+$VENDOR_LIST,}$v"
+        done
+
+        # Unique worker hosts that may run tasks (role: worker only)
+        declare -A NEED_HOSTS=()
+        while IFS='|' read -r _wname whost; do
+            [ -n "$whost" ] && NEED_HOSTS["$whost"]=1
+        done <<< "$WORKERS"
+
+        echo -e "${BOLD}Vendor auth preflight${NC} (vendors: ${VENDOR_LIST:-none})"
+        AUTH_FAIL=0
+        for whost in "${!NEED_HOSTS[@]}"; do
+            if [ "$whost" = "localhost" ] || [ "$whost" = "127.0.0.1" ]; then
+                if ! "$AUTH_CHECK" --vendors "$VENDOR_LIST"; then
+                    AUTH_FAIL=1
+                fi
+            else
+                echo -e "  remote host ${CYAN}$whost${NC}:"
+                if ! "$AUTH_CHECK" --host "$whost" --vendors "$VENDOR_LIST"; then
+                    AUTH_FAIL=1
+                fi
+            fi
+        done
+        if [ "$AUTH_FAIL" -ne 0 ]; then
+            echo -e "${RED}ERROR: vendor auth preflight failed — fix login(s) above, then re-dispatch.${NC}"
+            echo "  Skip only if intentional: --skip-auth-preflight"
+            exit 1
+        fi
+        echo ""
+    else
+        echo -e "${YELLOW}WARNING: vendor-auth-check.sh missing — skipping preflight${NC}"
+        echo ""
+    fi
+else
+    echo -e "${YELLOW}Vendor auth preflight skipped (--skip-auth-preflight)${NC}"
+    echo ""
+fi
 
 # --------------------------------------------------
 # Assign tasks to workers

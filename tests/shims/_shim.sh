@@ -8,6 +8,50 @@ MODE="${SHIM_MODE:-success}"
 
 [ -n "${SHIM_ARGV_LOG:-}" ] && printf '%s\0' "$@" > "$SHIM_ARGV_LOG"
 
+# ── Auth preflight probes (vendor-auth-check.sh) ──────────────────────
+# claude auth status → JSON loggedIn
+if [ "$VENDOR" = "claude" ] && [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+    case "$MODE" in
+        success)
+            echo '{"loggedIn":true,"authMethod":"claude.ai","email":"shim@example.com"}'
+            exit 0
+            ;;
+        noauth)
+            echo '{"loggedIn":false}'
+            exit 0
+            ;;
+        fail)
+            echo "Failed to authenticate: OAuth session expired and could not be refreshed"
+            exit 1
+            ;;
+        ratecap)
+            echo "You've reached your usage limit. Limit resets at 5pm."
+            exit 1
+            ;;
+    esac
+fi
+
+# kimi doctor → config ok (credentials checked via filesystem separately)
+if [ "$VENDOR" = "kimi" ] && [ "${1:-}" = "doctor" ]; then
+    case "$MODE" in
+        success|noauth)
+            # noauth still returns doctor ok — credential files decide fail
+            echo "Kimi doctor"
+            echo "All checked config files are valid."
+            exit 0
+            ;;
+        fail)
+            echo "Kimi doctor"
+            echo "ERROR: invalid config"
+            exit 1
+            ;;
+        ratecap)
+            echo "HTTP 429: rate limit exceeded"
+            exit 1
+            ;;
+    esac
+fi
+
 # Emit a realistic prompt echo so charter-injection assertions have something
 # to grep. The prompt is the argument after -p / --prompt / --agent, but the
 # simplest robust thing is to echo every arg.
