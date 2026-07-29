@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fleet Desk v2 — Phase B live watcher (Ops Floor data path).
+"""Fleet Desk v2 — Ops Floor live watcher + Phase C replay.
 
 Tails the append-only dispatch event stream (``logs/fleet-events/*.jsonl``,
 schema ``fleet-events/1``) and folds it into a small projection at
@@ -7,16 +7,22 @@ schema ``fleet-events/1``) and folds it into a small projection at
 reads. Optionally serves ``site/experience/`` over localhost with an SSE
 channel at ``/events`` so the page updates without polling.
 
+Phase C adds settled-run **replay**: truncate the stream at ``as_of_seq``,
+mark ``view=replay`` with an honesty watermark so the Floor never looks live
+while scrubbing history.
+
     make desk-live                    serve + watch (http://127.0.0.1:8777/live/)
     python3 scripts/desk_live.py --once     write live.json once and exit
+    python3 scripts/desk_live.py --once --dispatch-id ID --as-of-seq N --replay
 
-Law: docs/proposals/fleet-desk-v2-SYNTHESIS.md §3 Phase B
+Law: docs/proposals/fleet-desk-v2-SYNTHESIS.md §3 Phases B+C
 Schema: docs/experience-data.md § Live event stream
 
 Honesty rules (do not weaken):
   * only facts present in the stream are projected — no invented seats
   * live state never enters ``data/index.json`` (the settled Almanac contract)
   * a stream that stopped updating reads STALE, then OFFLINE — never "live"
+  * replay projections never claim LIVE — ``view=replay`` + watermark
   * stdlib only; no network access; binds loopback only
 
 Python 3.8+ (stdlib only).
@@ -175,7 +181,118 @@ def empty_projection(now=None, reason="no dispatch has emitted events yet"):
         "events_seen": 0,
         "recent_events": [],
         "warnings": [],
+        "view": "live",  # "live" | "replay" — replay never paints a green LIVE LED
+        "replay": None,
     }
+
+
+TERMINAL_STATUSES = frozenset(("settled", "aborted", "completed", "failed"))
+
+
+def mark_replay(proj, as_of_seq, total_events):
+    """Stamp a projection as historical replay — never LIVE, always watermarked."""
+    proj["view"] = "replay"
+    # Force non-live chrome: age is still useful for "how far into the past",
+    # but state is always "replay" so Floor honesty watermark fires.
+    age = (proj.get("staleness") or {}).get("seconds")
+    proj["staleness"] = {
+        "seconds": age,
+        "state": "replay",
+        "stale_after_s": STALE_AFTER,
+        "offline_after_s": OFFLINE_AFTER,
+    }
+    max_seq = total_events
+    # Prefer explicit event seq numbers when present.
+    seqs = [e.get("seq") for e in (proj.get("recent_events") or []) if isinstance(e.get("seq"), int)]
+    if as_of_seq is not None and isinstance(as_of_seq, int):
+        max_seq = max(max_seq, as_of_seq)
+    proj["replay"] = {
+        "as_of_seq": as_of_seq,
+        "total_events": total_events,
+        "max_seq": max(seqs) if seqs else total_events,
+        "watermark": "REPLAY",
+        "settled_run": proj.get("status") in TERMINAL_STATUSES,
+    }
+    return proj
+
+
+def truncate_events(events, as_of_seq=None):
+    """Keep events with seq <= as_of_seq. If events lack seq, keep first N by order."""
+    if as_of_seq is None:
+        return events
+    try:
+        cut = int(as_of_seq)
+    except (TypeError, ValueError):
+        return events
+    if cut < 1:
+        return []
+    has_seq = any(isinstance(e.get("seq"), int) for e in events)
+    if has_seq:
+        return [e for e in events if isinstance(e.get("seq"), int) and e["seq"] <= cut]
+    return events[:cut]
+
+
+def list_runs(events_dir):
+    """Catalog every *.jsonl stream — metadata only, no invented motion."""
+    runs = []
+    try:
+        names = sorted(n for n in os.listdir(events_dir) if n.endswith(".jsonl"))
+    except OSError:
+        return runs
+    for name in names:
+        path = os.path.join(events_dir, name)
+        events, _mal = read_events(path)
+        if not events:
+            continue
+        did = name[:-6]
+        first = events[0]
+        last = events[-1]
+        status = "running"
+        ended_at = None
+        for ev in events:
+            if ev.get("event") == "dispatch_end":
+                st = ev.get("status")
+                status = "settled" if st == "completed" else (st or "settled")
+                ended_at = ev.get("ts")
+        # Prefer dispatch_id from stream envelope when present.
+        for ev in events:
+            if ev.get("dispatch_id"):
+                did = ev["dispatch_id"]
+                break
+        mode = "wave"
+        repo = plan = None
+        started_at = None
+        for ev in events:
+            if ev.get("event") == "dispatch_start":
+                if ev.get("mode") in ("wave", "conductor"):
+                    mode = ev["mode"]
+                repo = ev.get("repo")
+                plan = ev.get("plan")
+                started_at = ev.get("ts")
+                break
+        max_seq = 0
+        for ev in events:
+            if isinstance(ev.get("seq"), int):
+                max_seq = max(max_seq, ev["seq"])
+        if max_seq == 0:
+            max_seq = len(events)
+        runs.append({
+            "dispatch_id": did,
+            "source": rel(path),
+            "status": status,
+            "settled": status in TERMINAL_STATUSES,
+            "mode": mode,
+            "repo": repo,
+            "plan": plan,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "events": len(events),
+            "max_seq": max_seq,
+            "last_event_ts": last.get("ts") if isinstance(last, dict) else None,
+            "first_event_ts": first.get("ts") if isinstance(first, dict) else None,
+        })
+    runs.sort(key=lambda r: r.get("last_event_ts") or "", reverse=True)
+    return runs
 
 
 def _seat(state, task_id):
@@ -408,16 +525,30 @@ def project(events, now=None, source=None, malformed=0):
     return out
 
 
-def build(events_dir, dispatch_id=None, now=None):
-    """Resolve the current stream and project it (never raises on missing data)."""
+def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False):
+    """Resolve the current stream and project it (never raises on missing data).
+
+    Phase C: pass ``as_of_seq`` and/or ``replay=True`` to get a historical
+    projection. Replay always sets ``view=replay`` so the Floor cannot paint a
+    green LIVE LED for the past.
+    """
     path, resolved_id = resolve_stream(events_dir, dispatch_id)
     if not path:
         return empty_projection(
             now, reason="no event stream in %s — run a dispatch (FLEET_EVENTS=1)" % rel(events_dir))
     events, malformed = read_events(path)
+    total = len(events)
+    if as_of_seq is not None:
+        events = truncate_events(events, as_of_seq)
     proj = project(events, now=now, source=rel(path), malformed=malformed)
     if not proj.get("dispatch_id"):
         proj["dispatch_id"] = resolved_id
+    # Replay when asked, or when the caller is scrubbing (as_of_seq set).
+    force_replay = replay or as_of_seq is not None
+    if force_replay:
+        # Use the cut seq (or full length when replaying the whole settled run).
+        cut = as_of_seq if as_of_seq is not None else total
+        mark_replay(proj, cut, total)
     return proj
 
 
@@ -470,6 +601,20 @@ def serve(args, out_path):
         def _no_cache(self):
             self.send_header("Cache-Control", "no-store, max-age=0")
 
+        def _query(self):
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return {k: (v[0] if v else None) for k, v in q.items()}
+
+        def _json_response(self, obj, code=200):
+            body = json.dumps(obj).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self._no_cache()
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):
             path = self.path.split("?")[0]
             if path == "/events":
@@ -482,6 +627,25 @@ def serve(args, out_path):
                 self._no_cache()
                 self.end_headers()
                 self.wfile.write(body)
+                return None
+            # Phase C — catalog + scrubber projections (never invent seats).
+            if path in ("/api/runs", "/runs.json"):
+                self._json_response({
+                    "schema": "fleet-runs/1",
+                    "generated_at": fmt_ts(utcnow()),
+                    "runs": list_runs(args.events_dir),
+                })
+                return None
+            if path in ("/api/replay", "/replay.json"):
+                q = self._query()
+                did = q.get("dispatch_id") or args.dispatch_id
+                as_of = q.get("as_of_seq")
+                try:
+                    as_of_i = int(as_of) if as_of is not None and as_of != "" else None
+                except ValueError:
+                    as_of_i = None
+                proj = build(args.events_dir, did, as_of_seq=as_of_i, replay=True)
+                self._json_response(proj)
                 return None
             return SimpleHTTPRequestHandler.do_GET(self)
 
@@ -546,6 +710,12 @@ def main(argv=None):
                         help="projection output path (default: <site-dir>/data/live.json)")
     parser.add_argument("--dispatch-id", default=None,
                         help="project a specific run instead of the latest pointer")
+    parser.add_argument("--as-of-seq", type=int, default=None,
+                        help="Phase C: project only events with seq <= N (implies replay view)")
+    parser.add_argument("--replay", action="store_true",
+                        help="Phase C: force view=replay + REPLAY watermark (never LIVE LED)")
+    parser.add_argument("--list-runs", action="store_true",
+                        help="Phase C: print settled/running run catalog as JSON and exit")
     parser.add_argument("--once", action="store_true",
                         help="write the projection once and exit (no server, no network)")
     parser.add_argument("--watch", action="store_true",
@@ -561,21 +731,30 @@ def main(argv=None):
 
     out_path = args.out or os.path.join(args.site_dir, "data", "live.json")
 
+    if args.list_runs:
+        print(json.dumps({"schema": "fleet-runs/1", "runs": list_runs(args.events_dir)}, indent=2))
+        return 0
+
     if args.once or args.watch:
-        proj = build(args.events_dir, args.dispatch_id)
+        proj = build(args.events_dir, args.dispatch_id,
+                     as_of_seq=args.as_of_seq, replay=args.replay)
         write_projection(proj, out_path)
         if args.print_json:
             print(json.dumps(proj, indent=2))
         if args.once:
-            print("live.json written: %s (status=%s, seats=%d, staleness=%s)"
-                  % (out_path, proj["status"], len(proj["seats"]), proj["staleness"]["state"]),
+            print("live.json written: %s (status=%s, seats=%d, view=%s, staleness=%s)"
+                  % (out_path, proj["status"], len(proj["seats"]),
+                     proj.get("view"), proj["staleness"]["state"]),
                   file=sys.stderr)
             return 0
         print("desk-live: watching %s → %s (Ctrl-C to stop)" % (args.events_dir, out_path))
         try:
             while True:
                 time.sleep(args.interval)
-                write_projection(build(args.events_dir, args.dispatch_id), out_path)
+                write_projection(
+                    build(args.events_dir, args.dispatch_id,
+                          as_of_seq=args.as_of_seq, replay=args.replay),
+                    out_path)
         except KeyboardInterrupt:
             print("\ndesk-live: stopped")
         return 0

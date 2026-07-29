@@ -187,6 +187,34 @@ Logs and plans travel as **filenames**. Full schema:
 [`experience-data.md` § Live event stream](experience-data.md#live-event-stream-phase-b--logsfleet-eventsjsonl).
 The home page's Live teaser mirrors the same projection snapshot when present.
 
+### Replay scrubber (Phase C)
+
+Settled runs can be scrubbed on the Floor without looking like a live dispatch.
+
+1. Run `make desk-live` (needs HTTP so the scrubber can call `/api/runs` and `/api/replay`).
+2. Open **Floor**. When the projection is terminal (settled / aborted), click **Enter REPLAY**.
+3. Drag the scrubber — the Floor re-projects only events with `seq <= as_of_seq`.
+4. Honesty chrome: violet LED + **REPLAY** watermark. Green LIVE is never painted in replay.
+
+```bash
+# One-shot historical snapshot (file:// desks — no scrubber UI without a server)
+python3 scripts/desk_live.py --once --dispatch-id 20260729-180000-dev-agents --as-of-seq 4 --replay
+make experience   # rebuild pages against data/live.json
+# Catalog known streams
+python3 scripts/desk_live.py --list-runs
+```
+
+### Trail ↔ mission ↔ floor links (Phase C)
+
+| From | To |
+|------|----|
+| **Trail** detail | Ops Floor (live) + REPLAY entry |
+| **Mission** page | Ops Floor + REPLAY |
+| **Floor** seats | trail detail when seat `branch` matches an Almanac trail |
+| **Floor** cross-links | Work · Missions · plan context |
+
+Joins stay honest: no invented mission when the Almanac has none.
+
 ---
 
 ## While using (daily loop)

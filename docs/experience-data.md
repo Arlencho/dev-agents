@@ -428,10 +428,12 @@ failed by its own telemetry.
 | `counts` | object | pipeline counts: `queued`, `in_flight`, `blocked`, `settled`, `total` |
 | `waiting_on[]` | array | first-class strip: open human gates, then rate-capped seats, else the longest-running seat. Each entry has `kind` (`human_gate`\|`ratecap`\|`seat`), `label`, `since` |
 | `last_event_ts` | string | newest event timestamp seen |
-| `staleness` | object | `{seconds, state, stale_after_s: 120, offline_after_s: 900}`; `state` ∈ `live` · `stale` · `offline` · `none` |
+| `staleness` | object | `{seconds, state, stale_after_s: 120, offline_after_s: 900}`; `state` ∈ `live` · `stale` · `offline` · `none` · **`replay`** (Phase C) |
 | `events_seen` | int | lines folded |
 | `recent_events[]` | array | last 50 raw events (already redaction-safe) |
 | `warnings[]` | array | malformed lines, unknown event schema |
+| `view` | string | **`live`** (default) or **`replay`** (Phase C scrub) |
+| `replay` | object\|null | Phase C: `{as_of_seq, total_events, max_seq, watermark: "REPLAY", settled_run}` when `view=replay` |
 
 Honesty rules the projector enforces:
 
@@ -439,7 +441,19 @@ Honesty rules the projector enforces:
   an eternal spinner;
 * an old stream reads `stale` then `offline` — never `live`;
 * an empty events dir projects `idle` with a reason, not an empty "running" desk;
-* malformed lines are skipped and counted in `warnings`, never guessed at.
+* malformed lines are skipped and counted in `warnings`, never guessed at;
+* **Phase C:** when `view=replay` (or `--as-of-seq` / `--replay`), `staleness.state`
+  is forced to **`replay`** and `replay.watermark` is **`REPLAY`** — never a green LIVE LED.
+
+### Phase C — replay API
+
+| Route / flag | Meaning |
+|--------------|---------|
+| `GET /api/runs` | catalog of `logs/fleet-events/*.jsonl` (`schema: fleet-runs/1`) |
+| `GET /api/replay?dispatch_id=&as_of_seq=` | `live/1` projection truncated at seq, always `view=replay` |
+| `--as-of-seq N` | keep only events with `seq <= N` (implies replay view) |
+| `--replay` | force replay watermark on the full (or truncated) stream |
+| `--list-runs` | print the run catalog to stdout |
 
 ### Running it
 
@@ -449,12 +463,14 @@ make desk-live PORT=9000           # different port
 make desk-live-once                # write live.json once, no server (file:// desks)
 python3 scripts/desk_live.py --watch          # rewrite live.json on a timer, no server
 python3 scripts/desk_live.py --once --dispatch-id 20260729-100000-dev-agents --print
+python3 scripts/desk_live.py --once --dispatch-id ID --as-of-seq 4 --replay
+python3 scripts/desk_live.py --list-runs
 ```
 
-The server binds loopback only, serves `site/experience/`, and adds two routes:
-`/live.json` (always fresh) and `/events` (SSE, one `event: live` frame per
-projection change plus keep-alives). Pages that cannot use SSE poll
-`data/live.json`; `file://` desks use `--watch` / `--once`.
+The server binds loopback only, serves `site/experience/`, and adds routes:
+`/live.json` (always fresh), `/events` (SSE), **`/api/runs`**, **`/api/replay`**.
+Pages that cannot use SSE poll `data/live.json`; `file://` desks use `--watch` /
+`--once` (scrubber UI needs HTTP for the replay API).
 
 ## Migration v1 → v2
 

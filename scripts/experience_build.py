@@ -17,9 +17,10 @@ belong on the page. Missions are a pure derivation over schema v2 fields
 labeled snapshot of data/live.json (schema live/1, written by
 scripts/desk_live.py) when present, and the honest empty shell otherwise;
 assets/floor.js re-reads the projection over http so the page refreshes under
-`make desk-live`. Live state is never merged into index.json.
+`make desk-live`. Phase C adds REPLAY scrubber + trail↔mission↔floor links.
+Live state is never merged into index.json.
 Law: docs/proposals/experience-console-SYNTHESIS.md
-     docs/proposals/fleet-desk-v2-SYNTHESIS.md (Phases A+B)
+     docs/proposals/fleet-desk-v2-SYNTHESIS.md (Phases A–C)
 """
 from __future__ import annotations
 
@@ -692,9 +693,11 @@ class Renderer:
                 t = m["trails"][0]
                 work_html = f"""
     <div class="card">
-      <div class="cardhead"><h2>Single task — issue → 1 task → 1 seat</h2></div>
+      <div class="cardhead"><h2>Single task — issue → 1 task → 1 seat</h2>
+        <a class="more" href="{pre}live/index.html">Ops Floor →</a></div>
       {self._task_table([t], 2)}
-      <p class="muted flush">Smallest mapping: one trail carries the whole mission, so the wave chrome stays hidden.</p>
+      <p class="muted flush">Smallest mapping: one trail carries the whole mission, so the wave chrome stays hidden.
+      Motion (live or REPLAY) lives on the <a href="{pre}live/index.html">Ops Floor</a>.</p>
     </div>
 """
             else:
@@ -756,6 +759,10 @@ class Renderer:
         <div><dt>Hierarchy</dt><dd class="mono">{esc(company_id or "unlinked")} → {esc(m["repo"] or "repo —")} → {esc(m["ref"])}</dd></div>
         <div><dt>Issue</dt><dd>{issue_line}</dd></div>
         <div><dt>Critic loop</dt><dd>{pair_line}</dd></div>
+        <div><dt>Ops Floor</dt><dd><a href="{pre}live/index.html">Live</a>
+          <span class="faint">·</span>
+          <a href="{pre}live/index.html#replay">REPLAY</a>
+          <span class="muted"> — scrub settled runs when <code>make desk-live</code> is up</span></dd></div>
         <div><dt>Derivation</dt><dd>grouped from trail <span class="mono">issue_links</span> (schema v2) — see <a href="{pre}about/index.html">About</a></dd></div>
       </dl>
     </div>
@@ -792,14 +799,29 @@ class Renderer:
 
     @staticmethod
     def _live_state(live: Dict[str, Any]) -> Tuple[str, Optional[int]]:
-        """live/stale/offline derived from last_event_ts at BUILD time — the same
-        thresholds desk_live.py publishes in the projection and floor.js derives
-        from in the browser (`staleness.stale_after_s` / `offline_after_s`,
-        default 120/900). The stored staleness.state is a claim from projection
-        time and is never trusted on its own for the age display: a live.json
-        left behind from a dead run must rebuild as STALE/OFFLINE, never green.
-        Stored state is only the fallback when last_event_ts is absent or
-        unparseable (mirrors floor.js liveState)."""
+        """live/stale/offline/replay derived at BUILD time.
+
+        Phase B: thresholds desk_live.py publishes (`stale_after_s` /
+        `offline_after_s`, default 120/900). Stored staleness.state alone is
+        never trusted for a green LIVE LED.
+
+        Phase C: when view=replay (or watermark REPLAY), state is always
+        ``replay`` — historical scrub never paints live.
+        """
+        if live.get("view") == "replay" or (live.get("replay") or {}).get("watermark") == "REPLAY":
+            age = (live.get("staleness") or {}).get("seconds")
+            if isinstance(age, int):
+                return "replay", age
+            # Still try to compute age for display.
+            ts = live.get("last_event_ts")
+            if isinstance(ts, str):
+                try:
+                    last = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                    age = max(0, int((datetime.now(timezone.utc) - last).total_seconds()))
+                    return "replay", age
+                except ValueError:
+                    pass
+            return "replay", None
         staleness = live.get("staleness") or {}
         stale_after = staleness.get("stale_after_s") or 120
         offline_after = staleness.get("offline_after_s") or 900
@@ -814,6 +836,26 @@ class Renderer:
                 state = "offline" if age >= offline_after else "stale" if age >= stale_after else "live"
                 return state, age
         return staleness.get("state") or "none", None
+
+    def _floor_almanac_links_json(self) -> str:
+        """Branch → trail and plan → mission maps for Floor cross-links.
+
+        Pure Almanac derivation (schema v2) — no live state. Used by floor.js
+        so a seat branch can deep-link to its trail when the join exists.
+        """
+        by_branch: Dict[str, str] = {}
+        for t in self.trails:
+            b = (t.get("branch") or "").strip()
+            if b and b not in by_branch:
+                by_branch[b] = t["task_id"]
+        by_plan: Dict[str, str] = {}
+        # Missions do not carry plan filenames; plan_hint on trails is free text.
+        # Link by mission slug when only one mission and we know it — otherwise
+        # leave by_plan empty (honest). Floor still links Work + Missions.
+        payload = {"by_branch": by_branch, "by_plan": by_plan, "by_mission": {}}
+        for m in self.missions:
+            payload["by_mission"][m["slug"]] = m["ref"]
+        return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
     @staticmethod
     def _time_of(ts: Any) -> str:
@@ -930,7 +972,14 @@ class Renderer:
 
     def live_page(self) -> None:
         live = self.live
-        script = '<script src="../assets/floor.js" data-live-json="../data/live.json" defer></script>'
+        # Almanac link map for trail↔floor (Phase C). Do NOT html-escape the
+        # JSON body (that would break JSON.parse); only neutralize </script>.
+        links_json = self._floor_almanac_links_json().replace("</", "<\\/")
+        script = (
+            f'<script type="application/json" id="floor-almanac-links">{links_json}</script>\n'
+            '<script src="../assets/floor.js" data-live-json="../data/live.json" '
+            'data-runs-url="/api/runs" data-replay-url="/api/replay" defer></script>'
+        )
         if live is None:
             body = self._live_shell_body()
         else:
@@ -939,6 +988,35 @@ class Renderer:
             self.out / "live" / "index.html",
             self.page("Ops Floor", body, 1, "global", "floor", mode="floor", script=script),
         )
+
+    def _floor_chrome_regions(self) -> str:
+        """Shared Phase C regions: REPLAY watermark, scrubber, cross-links."""
+        return """
+    <div class="floor-watermark" id="floor-watermark" hidden></div>
+    <div class="floor-scrubber" id="floor-scrubber" hidden></div>
+    <div class="floor-cross card mt" id="floor-cross">
+      <div class="cardhead"><h2>Trail · Mission · Floor</h2><span class="more faint">Phase C links</span></div>
+      <p class="muted flush" id="floor-cross-links">
+        <a href="../work/index.html">Almanac · Work</a>
+        <span class="faint">·</span>
+        <a href="../missions/index.html">Missions</a>
+        <span class="faint">·</span>
+        <span class="muted">Seat branches link to trails when the Almanac join exists.</span>
+      </p>
+    </div>
+"""
+
+    @staticmethod
+    def _replay_static_watermark(state: str) -> str:
+        """Build-time REPLAY chrome when live.json was projected with view=replay."""
+        if state != "replay":
+            return ""
+        return """
+    <div class="floor-watermark" id="floor-watermark-static">
+      <span class="wm-badge" aria-label="Replay mode">REPLAY</span>
+      <span class="wm-copy">Build-time historical snapshot — not a live dispatch.</span>
+    </div>
+"""
 
     def _live_shell_body(self) -> str:
         """Phase A teach shell — no live.json in this build, nothing faked."""
@@ -974,8 +1052,10 @@ class Renderer:
       Run a dispatch (<span class="mono">logs/fleet-events/</span>) and
       <code>make desk-live</code> to light it up; this page polls
       <span class="mono">data/live.json</span> and repaints itself when a projection appears.
+      Settled runs open the Phase C <strong>REPLAY</strong> scrubber (never a green LIVE LED).
       Law: <span class="mono">docs/proposals/fleet-desk-v2-SYNTHESIS.md</span>.</p>
     </div>
+    {self._floor_chrome_regions()}
 
     <div class="ambient">
       <span class="led off" id="floor-led" aria-hidden="true"></span>
@@ -1030,7 +1110,7 @@ class Renderer:
         Staleness is derived from last_event_ts at build time (see _live_state),
         so a stale snapshot never rebuilds as a green LED."""
         state, age = self._live_state(live)
-        led_cls = {"live": "led live", "stale": "led stale"}.get(state, "led off")
+        led_cls = {"live": "led live", "stale": "led stale", "replay": "led replay"}.get(state, "led off")
         repo = live.get("repo")
         plan = live.get("plan")
         wave = live.get("wave") or {}
@@ -1078,6 +1158,9 @@ class Renderer:
             mode_title = "Wave — parallel seat lanes"
             mode_sub = "Ghost lanes are plan seats not yet started. Rate-cap and failover ride the lane as honest chrome."
             mode_body = self._live_lanes(live)
+        led_html = "led replay" if state == "replay" else led_cls
+        msg_extra = ' · <strong class="wm-inline">REPLAY</strong>' if state == "replay" else stale_note
+        wm_static = self._replay_static_watermark(state)
         body = f"""
     {hier}
     <div class="pagehead">
@@ -1085,12 +1168,15 @@ class Renderer:
       <p class="lede">Snapshot of <span class="mono">data/live.json</span> (schema <span class="mono">live/1</span>,
       generated {esc(live.get("generated_at") or "—")}). Served via <code>make desk-live</code> this page
       re-reads the projection every few seconds and repaints itself. Only facts from the dispatch event
-      stream are shown — live state never enters <span class="mono">index.json</span>.</p>
+      stream are shown — live state never enters <span class="mono">index.json</span>.
+      Settled runs: enter <strong>REPLAY</strong> to scrub history with an honesty watermark.</p>
     </div>
+    {self._floor_chrome_regions()}
+    {wm_static}
 
     <div class="ambient">
-      <span class="{led_cls}" id="floor-led" aria-hidden="true"></span>
-      <span class="msg" id="floor-msg"><strong>{esc(status)}</strong> — dispatch <span class="mono">{esc(live.get("dispatch_id") or "—")}</span>{stale_note}</span>
+      <span class="{led_html}" id="floor-led" aria-hidden="true"></span>
+      <span class="msg" id="floor-msg"><strong>{esc(status)}</strong> — dispatch <span class="mono">{esc(live.get("dispatch_id") or "—")}</span>{msg_extra}</span>
       <span class="meta" id="floor-meta">{esc(live.get("source") or "live.json")} · last event {esc(age_txt)} · snapshot {esc(live.get("generated_at") or "—")}</span>
     </div>
 
@@ -1393,6 +1479,10 @@ class Renderer:
         <div><dt>Branch</dt><dd class="mono">{esc(t["branch"] or "—")}</dd></div>
         {pr_row}
         {mission_row}
+        <div><dt>Ops Floor</dt><dd><a href="../../live/index.html">Live Floor</a>
+        <span class="faint">·</span>
+        <a href="../../live/index.html#replay">REPLAY scrubber</a>
+        <span class="muted"> (needs <code>make desk-live</code> + a stream)</span></dd></div>
         <div><dt>Base → head</dt><dd class="mono">{esc(t["base_sha"])}→{esc(t["head_sha"])}</dd></div>
         <div><dt>Exit</dt><dd class="mono">{esc(t["agent_exit"])}</dd></div>
         <div><dt>When</dt><dd class="mono">{esc(t["ts"])}</dd></div>

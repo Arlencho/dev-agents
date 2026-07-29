@@ -462,10 +462,53 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 /* ── Ops Floor live states (Phase B: real live/1 projection) ────────── */
 .led.live { background: var(--ok); box-shadow: 0 0 10px var(--ok); animation: ledpulse 2s ease-in-out infinite; }
 .led.stale { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+/* Phase C: replay is violet, never green — honesty watermark companion */
+.led.replay { background: var(--violet); box-shadow: 0 0 10px var(--violet-soft); }
 @keyframes ledpulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
 }
+
+/* ── Phase C REPLAY chrome ──────────────────────────────────────────── */
+.floor-watermark {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: 12px;
+  background: var(--violet-soft); border: 1px solid var(--violet);
+  border-radius: var(--radius);
+}
+.floor-watermark[hidden] { display: none !important; }
+.wm-badge {
+  display: inline-block; font-size: 11px; font-weight: 800; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--bg); background: var(--violet);
+  border-radius: 4px; padding: 3px 8px;
+}
+.wm-copy { font-size: 12.5px; color: var(--ink); }
+.wm-inline { color: var(--violet); letter-spacing: 0.06em; }
+
+.floor-scrubber {
+  padding: 12px 14px; margin-bottom: 14px;
+  background: var(--bg2); border: 1px dashed var(--violet);
+  border-radius: var(--radius);
+}
+.floor-scrubber[hidden] { display: none !important; }
+.scrub-head { margin-bottom: 8px; font-size: 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scrub-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.floor-scrubber input[type="range"] { width: 100%; max-width: 480px; accent-color: var(--violet); }
+.scrub-actions { margin-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.btn-replay {
+  font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
+  color: var(--ink); background: var(--violet-soft); border: 1px solid var(--violet);
+  border-radius: var(--radius-sm); padding: 6px 12px;
+}
+.btn-replay:hover { background: var(--violet); color: var(--bg); }
+.run-picker { margin-top: 10px; font-size: 12px; }
+.run-picker select {
+  font: inherit; font-family: var(--mono); font-size: 11px;
+  background: var(--bg3); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 8px; max-width: 100%;
+}
+.floor-cross p { font-size: 12.5px; }
+.floor-cross a { margin-right: 2px; }
 
 .st-run { color: var(--accent); background: var(--accent-soft); }
 

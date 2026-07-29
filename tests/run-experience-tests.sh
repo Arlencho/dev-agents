@@ -81,7 +81,11 @@ for f in sorted(root.rglob("*.html")):
         u = m.group(1)
         if u.startswith(("http", "mailto:", "#")):
             continue
-        p = (f.parent / u.split("#")[0]).resolve()
+        # Strip fragment and query so #replay / ?as_of_seq= links resolve to the page.
+        path_part = u.split("#")[0].split("?")[0]
+        if not path_part:
+            continue
+        p = (f.parent / path_part).resolve()
         if p.is_dir():
             p = p / "index.html"
         if not p.exists():
@@ -513,6 +517,45 @@ grep -q 'st st-unk">offline</span> dispatch' "$FIXOUT/index.html" \
 grep -q 'stale_after_s' "$FIXOUT/assets/floor.js" \
   && ok "poller recomputes staleness from projection thresholds" || bad "poller recomputes staleness from projection thresholds"
 
+# ── Phase C: REPLAY watermark + cross-links (static shell + replay snapshot) ──
+grep -q 'id="floor-watermark"' "$FL" \
+  && ok "floor has REPLAY watermark region" || bad "floor has REPLAY watermark region"
+grep -q 'id="floor-scrubber"' "$FL" \
+  && ok "floor has scrubber region" || bad "floor has scrubber region"
+grep -q 'id="floor-cross-links"' "$FL" \
+  && ok "floor has trail·mission·floor cross-links region" || bad "floor has trail·mission·floor cross-links region"
+grep -q 'id="floor-almanac-links"' "$FL" \
+  && ok "floor embeds almanac branch→trail map for seat links" || bad "floor embeds almanac branch→trail map for seat links"
+grep -q 'data-replay-url="/api/replay"' "$FL" \
+  && ok "floor wires /api/replay for scrubber" || bad "floor wires /api/replay for scrubber"
+grep -q 'watermark.*REPLAY\|REPLAY' "$FIXOUT/assets/floor.js" \
+  && ok "floor.js never paints live LED in replay (REPLAY path present)" \
+  || bad "floor.js never paints live LED in replay (REPLAY path present)"
+grep -q 'led.replay\|\.led\.replay' "$FIXOUT/assets/site.css" \
+  && ok "stylesheet has violet REPLAY LED class" || bad "stylesheet has violet REPLAY LED class"
+
+# Build-time REPLAY snapshot: view=replay forces watermark + never green LED
+python3 -c '
+import json, sys
+from pathlib import Path
+live = json.loads(Path(sys.argv[1]).read_text())
+live["view"] = "replay"
+live["staleness"] = dict(live.get("staleness") or {}, state="replay")
+live["replay"] = {"as_of_seq": 5, "total_events": 16, "max_seq": 5, "watermark": "REPLAY", "settled_run": True}
+Path(sys.argv[2]).write_text(json.dumps(live, indent=2) + "\n")
+' "$LIVEFIX/wave.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with view=replay live.json" || bad "renderer succeeds with view=replay live.json"
+grep -q 'wm-badge' "$FL" && grep -q 'REPLAY' "$FL" \
+  && ok "build-time REPLAY watermark renders" || bad "build-time REPLAY watermark renders"
+if grep -q 'class="led live"' "$FL"; then
+  bad "replay snapshot never paints green LIVE LED"
+else
+  ok "replay snapshot never paints green LIVE LED"
+fi
+grep -q 'class="led replay"' "$FL" \
+  && ok "replay snapshot uses violet replay LED" || bad "replay snapshot uses violet replay LED"
+
 cp "$LIVEFIX/conductor.json" "$FIXOUT/data/live.json"
 python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
   && ok "renderer succeeds with conductor live.json" || bad "renderer succeeds with conductor live.json"
@@ -576,6 +619,16 @@ grep -q 'Example/acme-app#9' "$MS/missions/index.html" \
   && ok "missions index shows URL-keyed mission" || bad "missions index shows URL-keyed mission"
 [ "$(grep -o 'class="wave-card"' "$MS/mission/acme-12/index.html" | wc -l | tr -d ' ')" = "3" ] \
   && ok "multi-wave mission renders one card per wave" || bad "multi-wave mission renders one card per wave"
+grep -q 'Ops Floor' "$MS/mission/example-acme-app-9/index.html" \
+  && grep -q 'live/index.html' "$MS/mission/example-acme-app-9/index.html" \
+  && ok "simple mission links to Ops Floor" || bad "simple mission links to Ops Floor"
+grep -q 'REPLAY' "$MS/mission/acme-12/index.html" \
+  && grep -q 'live/index.html#replay' "$MS/mission/acme-12/index.html" \
+  && ok "complex mission offers REPLAY link" || bad "complex mission offers REPLAY link"
+# Trail → Floor links (any trail page)
+T1=$(find "$MS/trail" -name index.html | head -1)
+grep -q 'live/index.html' "$T1" && grep -q 'live/index.html#replay' "$T1" \
+  && ok "trail detail links Floor + REPLAY scrubber" || bad "trail detail links Floor + REPLAY scrubber"
 grep -q 'Single task' "$MS/mission/example-acme-app-9/index.html" \
   && ok "simple 1:1 mission collapses to a single task" || bad "simple 1:1 mission collapses to a single task"
 if grep -q 'class="wave-card"' "$MS/mission/example-acme-app-9/index.html"; then
