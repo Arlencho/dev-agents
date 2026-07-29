@@ -13,10 +13,13 @@ and writes static pages plus a copied stylesheet next to it:
 No repo scanning happens here — if a field is missing from the JSON it does not
 belong on the page. Missions are a pure derivation over schema v2 fields
 (issue_links, company_id, wave, status) — see docs/experience-data.md
-§ Derived views; the schema itself is unchanged. The /live/ Ops Floor is a
-static shell: no live state is invented (Phase B wires real events).
+§ Derived views; the schema itself is unchanged. The /live/ Ops Floor renders a
+labeled snapshot of data/live.json (schema live/1, written by
+scripts/desk_live.py) when present, and the honest empty shell otherwise;
+assets/floor.js re-reads the projection over http so the page refreshes under
+`make desk-live`. Live state is never merged into index.json.
 Law: docs/proposals/experience-console-SYNTHESIS.md
-     docs/proposals/fleet-desk-v2-SYNTHESIS.md (Phase A)
+     docs/proposals/fleet-desk-v2-SYNTHESIS.md (Phases A+B)
 """
 from __future__ import annotations
 
@@ -32,6 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import experience_data
 
 CSS_SOURCE = Path(__file__).resolve().parents[1] / "templates" / "experience" / "site.css"
+JS_SOURCE = Path(__file__).resolve().parents[1] / "templates" / "experience" / "floor.js"
 
 
 def esc(s: Any) -> str:
@@ -68,9 +72,12 @@ def clean_html(out: Path) -> None:
 def write_assets(out: Path) -> None:
     if not CSS_SOURCE.is_file():
         raise SystemExit(f"missing stylesheet template: {CSS_SOURCE}")
+    if not JS_SOURCE.is_file():
+        raise SystemExit(f"missing floor script template: {JS_SOURCE}")
     target = out / "assets" / "site.css"
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(CSS_SOURCE, target)
+    shutil.copyfile(JS_SOURCE, out / "assets" / "floor.js")
 
 
 NAV = [
@@ -231,6 +238,25 @@ class Renderer:
         self.generated = data["generated_at"]
         self.missions, self.trail_mission = derive_missions(self.trails, self.companies)
         self.mission_by_slug = {m["slug"]: m for m in self.missions}
+        self.live = self._load_live()
+
+    def _load_live(self) -> Optional[Dict[str, Any]]:
+        """Ops Floor projection written by scripts/desk_live.py, when present.
+
+        live.json is a runtime artifact (never in git, never merged into
+        index.json). The floor renders a labeled snapshot of it at build time;
+        assets/floor.js re-reads it over http so a `make desk-live` session
+        updates without a rebuild. Anything unreadable or off-schema degrades
+        to the honest empty shell — never to invented live state.
+        """
+        path = self.out / "data" / "live.json"
+        try:
+            proj = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(proj, dict) or proj.get("schema") != "live/1":
+            return None
+        return proj
 
     # ── shell ─────────────────────────────────────────────────────────
     @staticmethod
@@ -246,6 +272,7 @@ class Renderer:
         section: Optional[str] = None,
         mode: str = "almanac",
         hier: Optional[str] = None,
+        script: Optional[str] = None,
     ) -> str:
         pre = self.pre(depth)
         nav_bits = []
@@ -317,6 +344,7 @@ class Renderer:
       <span>law: <span class="mono">{esc(self.d["law"])}</span></span>
     </footer>
   </div>
+{script or ""}
 </body>
 </html>
 """
@@ -743,8 +771,151 @@ class Renderer:
                 self.page(f"Mission {m['ref']}", body, 2, company_id or "global", "missions"),
             )
 
-    # ── live shell (Ops Floor — Phase A static empty states) ──────────
+    # ── Ops Floor (Phase B: live/1 projection when present) ───────────
+    # One page skeleton, two honest fill states:
+    #   * no data/live.json → the Phase A teach shell (nothing faked)
+    #   * live.json present → a labeled snapshot of the projection
+    # assets/floor.js re-reads the projection over http and repaints the same
+    # regions, so a `make desk-live` session updates without a rebuild.
+    @staticmethod
+    def _fmt_dur(secs: Any) -> str:
+        if not isinstance(secs, (int, float)) or isinstance(secs, bool) or secs < 0:
+            return "—"
+        s = int(secs)
+        if s < 60:
+            return f"{s}s"
+        m = s // 60
+        if m < 60:
+            return f"{m}m{s % 60:02d}s"
+        return f"{m // 60}h{m % 60:02d}m"
+
+    @staticmethod
+    def _time_of(ts: Any) -> str:
+        """HH:MM:SS of a naive-UTC ISO event timestamp (never raises)."""
+        if isinstance(ts, str) and len(ts) >= 19 and ts[10] == "T":
+            return ts[11:19] + "Z"
+        return str(ts or "—")
+
+    @staticmethod
+    def _seat_pill(seat: Dict[str, Any]) -> str:
+        """Pipeline pill for a seat — text AND color (mirrored in floor.js)."""
+        st = seat.get("status") or "queued"
+        if st in ("success", "done"):
+            return '<span class="st st-done">settled</span>'
+        if st == "running":
+            return '<span class="st st-run">in flight</span>'
+        if st == "ratecap":
+            return '<span class="st st-warn">rate-capped</span>'
+        if st in ("failed", "blocked", "unavailable"):
+            return '<span class="st st-fail">blocked</span>'
+        if st == "queued":
+            return '<span class="st st-unk">queued</span>'
+        return f'<span class="st st-unk">{esc(st)}</span>'
+
+    def _seat_timer(self, seat: Dict[str, Any]) -> str:
+        if seat.get("status") == "running":
+            return self._fmt_dur(seat.get("elapsed_s"))
+        return self._fmt_dur(seat.get("duration_s"))
+
+    def _seat_lane(self, seat: Dict[str, Any]) -> str:
+        chips = ""
+        if seat.get("ratecapped"):
+            chips += '<span class="vendor warn">rate-cap</span>'
+        for f in seat.get("failovers") or []:
+            chips += f'<span class="vendor warn">failover {esc(f.get("from"))} → {esc(f.get("to"))}</span>'
+        vendor = " · ".join(str(x) for x in (seat.get("provider"), seat.get("model")) if x)
+        run = " run" if seat.get("status") == "running" else ""
+        return f"""
+        <div class="lane{run}">
+          <div class="lane-top"><span class="role">{esc(seat.get("agent") or seat.get("task_id"))}</span>{self._seat_pill(seat)}<span class="timer">{self._seat_timer(seat)}</span></div>
+          <div class="branch">{esc(seat.get("branch") or "branch not yet reported")}</div>
+          <span class="vendor">{esc(vendor or "provider —")}</span>{chips}
+        </div>"""
+
+    @staticmethod
+    def _ghost_lane() -> str:
+        return """
+        <div class="lane ghost">
+          <div class="lane-top"><span class="role">plan seat</span><span class="st st-unk">queued</span><span class="timer">—</span></div>
+          <div class="branch">seat planned by the dispatch, not yet started</div>
+          <span class="vendor">provider —</span>
+        </div>"""
+
+    def _live_lanes(self, live: Dict[str, Any]) -> str:
+        """Wave mode: parallel seat lanes grouped by wave + ghost plan seats."""
+        seats = live.get("seats") or []
+        ghosts = 0
+        planned = live.get("seats_planned")
+        if isinstance(planned, int) and planned > len(seats):
+            ghosts = planned - len(seats)
+        by_wave: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+        for s in seats:
+            w = s.get("wave")
+            by_wave[w if isinstance(w, int) else 0].append(s)
+        out = []
+        current = (live.get("wave") or {}).get("current")
+        for w in sorted(by_wave):
+            cur = " · current" if current == w else ""
+            out.append(f'<h3 class="wavehead2">Wave {esc(w)}{cur}</h3>')
+            out.append('<div class="lanes">' + "".join(self._seat_lane(s) for s in by_wave[w]) + "</div>")
+        if ghosts:
+            out.append('<h3 class="wavehead2">Planned, not started</h3>')
+            out.append('<div class="lanes">' + "".join(self._ghost_lane() for _ in range(ghosts)) + "</div>")
+        if not out:
+            out.append('<p class="empty">Dispatch reported no seats yet — the stream is the only source of lanes.</p>')
+        return "\n".join(out)
+
+    def _live_spine(self, live: Dict[str, Any]) -> str:
+        """Conductor mode: serial spine — settled fills, hot pin on the live seat."""
+        seats = live.get("seats") or []
+        if not seats:
+            return '<p class="empty">Conductor run reported no seats yet.</p>'
+        nodes = []
+        for i, s in enumerate(seats):
+            st = s.get("status") or "queued"
+            cls = " hot" if st == "running" else (" done" if st in ("success", "done") else "")
+            nodes.append(
+                f'<div class="spine-node{cls}"><div class="orb">{i + 1}</div>'
+                f'<div class="nm">{esc(s.get("agent") or s.get("task_id"))}</div>'
+                f'<div class="meta">{esc(st)} · {self._seat_timer(s)}</div></div>'
+            )
+        return '<div class="spine">' + '<span class="spine-link"></span>'.join(nodes) + "</div>"
+
+    def _live_events(self, live: Dict[str, Any]) -> str:
+        """Event tail — the projection's redaction-safe recent events, newest first."""
+        evs = list(reversed((live.get("recent_events") or [])[-12:]))
+        if not evs:
+            return '<li class="muted">No events in the projection tail.</li>'
+        rows = []
+        for ev in evs:
+            det = ""
+            if ev.get("task_id") is not None:
+                det += f"task {ev['task_id']}"
+            if ev.get("agent"):
+                det += f" {ev['agent']}"
+            if ev.get("provider"):
+                det += f" · {ev['provider']}"
+            det_html = f' <span class="edet muted">{esc(det.strip())}</span>' if det.strip() else ""
+            rows.append(
+                f'<li><span class="ets mono">{esc(self._time_of(ev.get("ts")))}</span> '
+                f'<span class="ekind">{esc(ev.get("event"))}</span>{det_html}</li>'
+            )
+        return "".join(rows)
+
     def live_page(self) -> None:
+        live = self.live
+        script = '<script src="../assets/floor.js" data-live-json="../data/live.json" defer></script>'
+        if live is None:
+            body = self._live_shell_body()
+        else:
+            body = self._live_floor_body(live)
+        write(
+            self.out / "live" / "index.html",
+            self.page("Ops Floor", body, 1, "global", "floor", mode="floor", script=script),
+        )
+
+    def _live_shell_body(self) -> str:
+        """Phase A teach shell — no live.json in this build, nothing faked."""
         hier = self.hier(
             [
                 ("Global", "Fleet Desk", "../index.html", False),
@@ -772,30 +943,33 @@ class Renderer:
     {hier}
     <div class="pagehead">
       <h1>Ops Floor</h1>
-      <p class="lede">The live radar. <strong>This is the Phase A shell</strong> — structure without a live run.
-      No agents are faked here: lanes and spine light up only when the Phase B event stream
-      (<span class="mono">logs/fleet-events/</span> + <code>make desk-live</code>) lands.
+      <p class="lede">The live radar. <strong>This is the empty shell</strong> — no
+      <span class="mono">live.json</span> in this build, so no agents are shown or faked.
+      Run a dispatch (<span class="mono">logs/fleet-events/</span>) and
+      <code>make desk-live</code> to light it up; this page polls
+      <span class="mono">data/live.json</span> and repaints itself when a projection appears.
       Law: <span class="mono">docs/proposals/fleet-desk-v2-SYNTHESIS.md</span>.</p>
     </div>
 
     <div class="ambient">
-      <span class="led off" aria-hidden="true"></span>
-      <span class="msg"><strong>offline</strong> — no live run in this build</span>
-      <span class="meta">fleet-events: none · age —</span>
+      <span class="led off" id="floor-led" aria-hidden="true"></span>
+      <span class="msg" id="floor-msg"><strong>offline</strong> — no live run in this build</span>
+      <span class="meta" id="floor-meta">fleet-events: none · age —</span>
     </div>
 
     <div class="waiting">
       <div class="label">Waiting on</div>
-      <p class="muted flush">Nothing waiting — there is no live dispatch to wait on.</p>
+      <div id="floor-waiting-items"><p class="muted flush">Nothing waiting — there is no live dispatch to wait on.</p></div>
     </div>
 
     <div class="pipeline" role="group" aria-label="Pipeline">
-      <div class="pipe todo"><div class="ph">Queued <span class="n">—</span></div><div class="desc">no plan armed</div></div>
-      <div class="pipe wip"><div class="ph">Running <span class="n">—</span></div><div class="desc">no seat live</div></div>
-      <div class="pipe blocked"><div class="ph">Blocked <span class="n">—</span></div><div class="desc">—</div></div>
-      <div class="pipe done"><div class="ph">Done <span class="n">—</span></div><div class="desc">settled work lives in the <a href="../work/index.html">Almanac</a></div></div>
+      <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">—</span></div><div class="desc">no plan armed</div></div>
+      <div class="pipe wip"><div class="ph">Running <span class="n" id="pipe-inflight">—</span></div><div class="desc">no seat live</div></div>
+      <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">—</span></div><div class="desc">—</div></div>
+      <div class="pipe done"><div class="ph">Done <span class="n" id="pipe-settled">—</span></div><div class="desc">settled work lives in the <a href="../work/index.html">Almanac</a></div></div>
     </div>
 
+    <div id="floor-mode-body">
     <div class="card">
       <div class="cardhead"><h2>Wave layout — parallel seat lanes</h2><span class="more faint">structure preview</span></div>
       <p class="muted">Ghost lanes show where plan seats will sit. Rate-cap and failover ride the lane as honest chrome.</p>
@@ -816,8 +990,110 @@ class Renderer:
       Until then the Almanac — <a href="../index.html">Global</a>, <a href="../missions/index.html">Missions</a>,
       <a href="../work/index.html">Work</a> — is the honest record.</p>
     </div>
+    </div>
+
+    <div class="card mt">
+      <div class="cardhead"><h2>Event tail</h2><span class="more faint">redaction-safe</span></div>
+      <ol class="events" id="floor-events"><li class="muted">No live run — no events to show.</li></ol>
+    </div>
 """
-        write(self.out / "live" / "index.html", self.page("Ops Floor", body, 1, "global", "floor", mode="floor"))
+        return body
+
+    def _live_floor_body(self, live: Dict[str, Any]) -> str:
+        """Snapshot of the live/1 projection — only stream facts, labeled as such."""
+        staleness = live.get("staleness") or {}
+        state = staleness.get("state") or "none"
+        led_cls = {"live": "led live", "stale": "led stale"}.get(state, "led off")
+        repo = live.get("repo")
+        plan = live.get("plan")
+        wave = live.get("wave") or {}
+        wave_txt = "wave"
+        if wave.get("current") is not None:
+            wave_txt = f"wave {wave['current']}"
+            if wave.get("total") is not None:
+                wave_txt += f" of {wave['total']}"
+        mode = live.get("mode") or "wave"
+        hier = self.hier(
+            [
+                ("Global", "Fleet Desk", "../index.html", False),
+                ("Company", "—", None, False),
+                ("Repo", repo or "—", None, False),
+                ("Mission", plan or "—", None, False),
+                ("Wave", f"{wave_txt} · {mode}", None, True),
+            ],
+            hint=f"Ops Floor · live/1 · {state}",
+        )
+        status = live.get("status") or "unknown"
+        stale_note = "" if state == "live" else f" · stream {esc(state)}"
+        age = staleness.get("seconds")
+        age_txt = "—" if not isinstance(age, int) else f"{self._fmt_dur(age)} ago"
+        waiting = live.get("waiting_on") or []
+        if waiting:
+            wait_items = "".join(
+                f'<p class="witem flush"><span class="pill accent">{esc(w.get("kind") or "wait")}</span> '
+                f'{esc(w.get("label") or "waiting")}'
+                + (f' <span class="muted">since {esc(self._time_of(w.get("since")))}</span>' if w.get("since") else "")
+                + "</p>"
+                for w in waiting
+            )
+        else:
+            wait_items = '<p class="muted flush">Nothing waiting — no open gates, no rate-caps.</p>'
+        counts = live.get("counts") or {}
+
+        def cn(key: str) -> Any:
+            v = counts.get(key)
+            return v if isinstance(v, int) else "—"
+
+        if mode == "conductor":
+            mode_title = "Conductor — serial spine"
+            mode_sub = "Settled nodes fill, the hot pin marks the live seat, dashed nodes stay ahead of it."
+            mode_body = self._live_spine(live)
+        else:
+            mode_title = "Wave — parallel seat lanes"
+            mode_sub = "Ghost lanes are plan seats not yet started. Rate-cap and failover ride the lane as honest chrome."
+            mode_body = self._live_lanes(live)
+        body = f"""
+    {hier}
+    <div class="pagehead">
+      <h1>Ops Floor</h1>
+      <p class="lede">Snapshot of <span class="mono">data/live.json</span> (schema <span class="mono">live/1</span>,
+      generated {esc(live.get("generated_at") or "—")}). Served via <code>make desk-live</code> this page
+      re-reads the projection every few seconds and repaints itself. Only facts from the dispatch event
+      stream are shown — live state never enters <span class="mono">index.json</span>.</p>
+    </div>
+
+    <div class="ambient">
+      <span class="{led_cls}" id="floor-led" aria-hidden="true"></span>
+      <span class="msg" id="floor-msg"><strong>{esc(status)}</strong> — dispatch <span class="mono">{esc(live.get("dispatch_id") or "—")}</span>{stale_note}</span>
+      <span class="meta" id="floor-meta">{esc(live.get("source") or "live.json")} · last event {esc(age_txt)} · snapshot {esc(live.get("generated_at") or "—")}</span>
+    </div>
+
+    <div class="waiting">
+      <div class="label">Waiting on</div>
+      <div id="floor-waiting-items">{wait_items}</div>
+    </div>
+
+    <div class="pipeline" role="group" aria-label="Pipeline">
+      <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">{cn("queued")}</span></div><div class="desc">plan seats not started</div></div>
+      <div class="pipe wip"><div class="ph">In flight <span class="n" id="pipe-inflight">{cn("in_flight")}</span></div><div class="desc">seats reporting running</div></div>
+      <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">{cn("blocked")}</span></div><div class="desc">failed · rate-capped · unknown</div></div>
+      <div class="pipe done"><div class="ph">Settled <span class="n" id="pipe-settled">{cn("settled")}</span></div><div class="desc">record lands in the <a href="../work/index.html">Almanac</a></div></div>
+    </div>
+
+    <div id="floor-mode-body">
+    <div class="card">
+      <div class="cardhead"><h2>{esc(mode_title)}</h2><span class="more faint">{esc(mode)} mode</span></div>
+      <p class="muted">{esc(mode_sub)}</p>
+      {mode_body}
+    </div>
+    </div>
+
+    <div class="card mt">
+      <div class="cardhead"><h2>Event tail</h2><span class="more faint">redaction-safe · newest first</span></div>
+      <ol class="events" id="floor-events">{self._live_events(live)}</ol>
+    </div>
+"""
+        return body
 
 
     # ── pages ─────────────────────────────────────────────────────────
@@ -899,12 +1175,33 @@ class Renderer:
         <p><a href="learnings/index.html">Index →</a></p>"""
 
     def _home_live_teaser(self) -> str:
-        return """
+        live = self.live
+        if live is None:
+            return """
       <div class="card teaser">
         <div class="cardhead"><h2>Live · Ops Floor</h2><a class="more" href="live/index.html">Open Floor →</a></div>
         <p class="empty">No live run in this build. The Ops Floor is a static shell until the Phase B
         event stream lands (<code>make desk-live</code>) — agent motion is never faked here.
         Settled work below is the honest record.</p>
+      </div>
+"""
+        staleness = live.get("staleness") or {}
+        state = staleness.get("state") or "none"
+        state_cls = {"live": "st-run", "stale": "st-warn"}.get(state, "st-unk")
+        counts = live.get("counts") or {}
+
+        def cn(key: str) -> Any:
+            v = counts.get(key)
+            return v if isinstance(v, int) else "—"
+
+        return f"""
+      <div class="card teaser">
+        <div class="cardhead"><h2>Live · Ops Floor</h2><a class="more" href="live/index.html">Open Floor →</a></div>
+        <p><span class="st {state_cls}">{esc(state)}</span> dispatch
+        <span class="mono">{esc(live.get("dispatch_id") or "—")}</span> —
+        in flight {cn("in_flight")} · blocked {cn("blocked")} · settled {cn("settled")}.
+        Snapshot of <span class="mono">data/live.json</span> at build time
+        ({esc(live.get("generated_at") or "—")}); the Floor refreshes itself under <code>make desk-live</code>.</p>
       </div>
 """
 
@@ -1466,8 +1763,9 @@ class Renderer:
       <p><strong>Pipeline language</strong> — Queued · In flight · Blocked · Settled — maps honestly:
       <span class="mono">done</span> → settled, <span class="mono">failed/unavailable</span> → blocked.
       Queued and In flight are not derivable from settled handoffs, so the Almanac renders them as
-      <strong>—</strong> and points at the <a href="../live/index.html">Ops Floor</a> (a static shell
-      until Phase B wires dispatch events; live state is never stored in <span class="mono">index.json</span>).</p>
+      <strong>—</strong> and points at the <a href="../live/index.html">Ops Floor</a> (which reads the
+      <span class="mono">live/1</span> projection from the dispatch event stream when one is running;
+      live state is never stored in <span class="mono">index.json</span>).</p>
       <h2 class="sec">Sources</h2>
       <ul class="tight mono">
         <li>companies/*.md</li>

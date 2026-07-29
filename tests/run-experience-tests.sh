@@ -410,6 +410,73 @@ grep -q '\.st-warn' "$FIXOUT/assets/site.css" \
   && ok "mixed/blocked pipeline state styled" || bad "mixed/blocked pipeline state styled"
 assert_absent_html "live shell invents no live-state chrome" "$FIXOUT/live" 'lane run|spine-node hot|led live'
 
+# ── v2 Phase B: Ops Floor wired to live.json (synthetic projections) ──
+# Synthetic live/1 projections (tests/fixtures/live/*.json) stand in for
+# scripts/desk_live.py output; the renderer must light up with real stream
+# facts and degrade back to the honest shell when the projection is gone.
+LIVEFIX="$SCRIPT_DIR/fixtures/live"
+FL="$FIXOUT/live/index.html"
+cp "$LIVEFIX/wave.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with live.json present" || bad "renderer succeeds with live.json present"
+grep -q 'class="led live" id="floor-led"' "$FL" \
+  && ok "floor LED reads live from the projection" || bad "floor LED reads live from the projection"
+grep -q 'code-critic working on feat/fleet-desk-v2-phase-b-data' "$FL" \
+  && ok "waiting-on strip carries the projection label" || bad "waiting-on strip carries the projection label"
+grep -q 'id="pipe-inflight">1<' "$FL" && grep -q 'id="pipe-settled">2<' "$FL" \
+  && ok "pipeline counts come from the projection" || bad "pipeline counts come from the projection"
+grep -q 'class="lane run"' "$FL" && grep -q 'feat/fleet-desk-v2-floor' "$FL" \
+  && ok "wave lanes render real seats" || bad "wave lanes render real seats"
+grep -q 'vendor warn">rate-cap' "$FL" && grep -q 'failover claude → kimi' "$FL" \
+  && ok "rate-cap + failover ride the lane as chrome" || bad "rate-cap + failover ride the lane as chrome"
+grep -q 'Planned, not started' "$FL" && grep -q 'class="lane ghost"' "$FL" \
+  && ok "ghost lane covers the planned-but-unstarted seat" || bad "ghost lane covers the planned-but-unstarted seat"
+grep -q '<h3 class="wavehead2">Wave 2 · current' "$FL" \
+  && ok "wave groups mark the current wave" || bad "wave groups mark the current wave"
+grep -q '<b>Repo</b> <em>dev-agents</em>' "$FL" && grep -q '<b>Mission</b> <em>phase-b.plan</em>' "$FL" \
+  && ok "floor hierarchy carries repo + plan context" || bad "floor hierarchy carries repo + plan context"
+grep -q 'class="ekind">seat_dispatch' "$FL" \
+  && ok "event tail renders projection events" || bad "event tail renders projection events"
+grep -q 'assets/floor.js' "$FL" && grep -q 'data-live-json="../data/live.json"' "$FL" \
+  && ok "floor loads the live.json poller" || bad "floor loads the live.json poller"
+exists "poller script shipped to assets" "$FIXOUT/assets/floor.js"
+grep -q 'Snapshot of' "$FL" \
+  && ok "floor labels itself a snapshot of live.json" || bad "floor labels itself a snapshot of live.json"
+grep -q 'st st-run">live</span> dispatch' "$FIXOUT/index.html" \
+  && grep -q '20260729-100000-dev-agents' "$FIXOUT/index.html" \
+  && ok "home teaser reflects live.json when present" || bad "home teaser reflects live.json when present"
+grep -q 'stale_after_s' "$FIXOUT/assets/floor.js" \
+  && ok "poller recomputes staleness from projection thresholds" || bad "poller recomputes staleness from projection thresholds"
+
+cp "$LIVEFIX/conductor.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with conductor live.json" || bad "renderer succeeds with conductor live.json"
+grep -q 'spine-node hot' "$FL" && grep -q 'spine-node done' "$FL" \
+  && ok "conductor spine: settled fills + hot pin" || bad "conductor spine: settled fills + hot pin"
+grep -q 'class="led stale" id="floor-led"' "$FL" \
+  && ok "conductor floor reads STALE chrome" || bad "conductor floor reads STALE chrome"
+grep -q 'critic verdict review' "$FL" \
+  && ok "human gate sits in the waiting-on strip" || bad "human gate sits in the waiting-on strip"
+if grep -q 'class="lane run"' "$FL"; then
+  bad "conductor mode does not render wave lanes"
+else
+  ok "conductor mode does not render wave lanes"
+fi
+
+# Degradation honesty: a broken projection and a missing one both fall back
+# to the teach shell — never to half-rendered live chrome.
+echo 'this is not json' > "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer survives a malformed live.json" || bad "renderer survives a malformed live.json"
+grep -q 'class="led off" id="floor-led"' "$FL" \
+  && ok "malformed live.json degrades to the shell" || bad "malformed live.json degrades to the shell"
+rm "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1
+grep -q 'class="led off" id="floor-led"' "$FL" \
+  && grep -q 'make desk-live' "$FL" \
+  && ok "removing live.json restores the teach shell" || bad "removing live.json restores the teach shell"
+assert_absent_html "post-degrade floor invents no live chrome" "$FIXOUT/live" 'lane run|spine-node hot|led live'
+
 # ── v2: mission derivation from issue_links (injected contract) ───────
 # Offline: enrich the fixture JSON with issue refs the way handoffs would,
 # then check the renderer groups trails into missions — multi-wave grouping,
