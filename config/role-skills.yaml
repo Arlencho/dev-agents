@@ -27,7 +27,7 @@ roles:
   plan-critic: evidence-first untrusted-prior git-ship
   security-reviewer: evidence-first untrusted-prior git-ship
   cto: evidence-first untrusted-prior git-ship
-  orchestrator: evidence-first untrusted-prior git-ship
+  orchestrator: evidence-first untrusted-prior git-ship session-modes
   pr-sentinel: evidence-first untrusted-prior git-ship
   retro: evidence-first untrusted-prior handoff-intent git-ship
   default: evidence-first untrusted-prior git-ship
