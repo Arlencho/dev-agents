@@ -181,3 +181,197 @@ Both defects sit in `experience_build.py` staleness derivation and one trap line
 nothing in the data contract or the event schema needs to move.
 
 Loop 1 of 2. One more batch after the revision, then CTO.
+
+
+---
+
+# CRITIC VERDICT - Fleet Desk v2 Phase B (loop 2)
+
+**VERDICT: REVISE** - 1 blocking defect confirmed and still uncommitted, 1 new blocking regression
+introduced by the in-flight fix, 3 surviving mutations. Loop-1 defect **D2 is withdrawn as a false
+positive** (proof below); its follow-on comment in `dispatch.sh` now asserts something untrue about
+bash and should be corrected.
+
+Repro (both states measured):
+
+```
+bash tests/critic/phase-b-honesty-repro.sh
+  committed tip ffb6c38          -> 2 passed, 4 failed     (R1 real)
+  working tree (revision applied) -> 6 passed, 0 failed
+```
+
+## State of the branch when this review ran
+
+`origin/feat/fleet-desk-v2-phase-b` = `ffb6c38`. The working tree carried **uncommitted** edits to
+`scripts/dispatch.sh` and `scripts/experience_build.py` (the loop-1 revision, in flight). Nothing
+below is a style opinion; every item is a measured failure or a surviving mutation.
+
+## B1 - D1 confirmed, and the fix is not on the PR (blocking)
+
+Loop-1 D1 is correct. Verified independently against the committed tip in a clean clone:
+
+```
+live.json written by desk_live.py during a run 3 days ago:
+  staleness.state = live   staleness.seconds = 4   last_event_ts = 2026-07-26T21:29:12Z
+rebuilt today at ffb6c38:
+  <span class="led live" id="floor-led">      green LED
+  last event 4s ago                            the last event was 3 days ago
+  home teaser: <span class="st st-run">live</span> dispatch 20260726-...
+```
+
+The fix in the working tree (`_live_state()`, `experience_build.py:794-816`, deriving live/stale/
+offline from `last_event_ts` against the projection's own published thresholds, stored state used
+only as fallback when the timestamp is missing or unparseable) is the right shape: it mirrors
+`floor.js:45-56` and it makes the teaser honest, which matters because the teaser has no poller.
+Rebuilt with it, the same 3-day-old projection renders `led off` / `71h59m ago` / teaser `offline`.
+
+**Blocking because it is uncommitted and unpushed.** A reviewer or merger of `ffb6c38` gets the
+lying page. Commit it.
+
+## B2 - The fix as written turns `make test` red (blocking, new)
+
+Requirement "make test green including desk-live suite" fails once B1 lands. Measured in clean
+clones of the same commit, differing only by the uncommitted files:
+
+```
+committed ffb6c38                      -> 290 passed, 0 failed
+ffb6c38 + working-tree experience_build.py -> 287 passed, 3 failed
+```
+
+The three:
+
+```
+FAIL floor LED reads live from the projection
+FAIL home teaser reflects live.json when present
+FAIL conductor floor reads STALE chrome
+```
+
+Root cause: `tests/fixtures/live/wave.json` and `conductor.json` carry absolute `last_event_ts`
+values plus a baked `staleness.state`, and the suite asserts the LED from that stored state. Once
+the renderer derives state from wall-clock, every fixture ages into `offline`.
+
+Do not resolve this by reverting the derivation. The producer's stated blocker in "Decisions"
+("re-deriving staleness at build would make the fixtures wall-clock-nondeterministic") is a false
+dichotomy: give `_live_state` an injectable `now` (default `datetime.now(timezone.utc)`) and have
+the build honor a pinned value in tests, or generate the fixtures relative to now the way
+`tests/run-desk-live-tests.sh:249-267` already does. Determinism and honesty are both available.
+Mechanism is the producer's call.
+
+## D2 withdrawn - Ctrl-C already closed the stream (false positive)
+
+Loop-1 D2 claimed `dispatch.sh:554` (EXIT-only trap) never closes the stream on Ctrl-C. That is
+wrong, and the loop-1 evidence table contains the tell: SIGTERM closed out while SIGINT did not. If
+bash really skipped EXIT traps on signal death, SIGTERM would have failed too.
+
+The real cause is the harness, not `dispatch.sh`. The loop-1 repro backgrounded the harness with `&`.
+An async command in a non-interactive shell inherits SIGINT as `SIG_IGN` (POSIX 2.11), and bash
+cannot trap a signal ignored at entry, so no handler can ever fire:
+
+```
+bash child started with &, then `trap ... INT`:
+  trap -p INT  => trap -- '' SIGINT        <- ignored, untrappable
+  trap -p TERM => trap -- 'echo ...' SIGTERM  <- real handler (hence the asymmetry)
+```
+
+Under real Ctrl-C conditions (foreground child, SIGINT at default disposition), replaying
+`dispatch.sh`'s own trap lines:
+
+```
+                                  SIGINT during `read` gate   SIGINT during `wait`
+  99e9fee (EXIT trap only)        EXIT trap RUNS, exit 130    EXIT trap RUNS, exit 130
+  working tree (EXIT+INT+TERM)    EXIT trap RUNS, exit 130    EXIT trap RUNS, exit 130
+```
+
+Consequences to action:
+
+1. `tests/critic/phase-b-honesty-repro.sh` R2 was structurally incapable of passing. **Fixed in this
+   commit** (harness now runs in the foreground, with the measurement recorded inline). It passes on
+   `99e9fee` and on the revision, so it is now a real regression guard rather than a permanent red
+   landmine. It was never wired into `make test`; wire it once B1 and B2 are green.
+2. `scripts/dispatch.sh:554-558` (working tree) now carries the comment *"A non-interactive bash
+   killed by SIGINT/SIGTERM dies from the signal without running its EXIT trap"*. That is false on
+   both counts, as measured above. Keep the `INT`/`TERM` traps if you want the close-out ordering
+   explicit (they are harmless and make `exit 130/143` deliberate), but correct the comment. A false
+   claim in a load-bearing script is worse than no comment: the next reader will build on it.
+3. Loop-1's surviving mutation M1 still stands: deleting the close-out trap leaves the suite green,
+   because Part C of `run-desk-live-tests.sh` is grep-only. The new `INT`/`TERM` traps are likewise
+   unasserted. The corrected R2 block above is one executing assertion for that path.
+
+## Surviving mutations (new this loop)
+
+Ran against the committed tip; `desk_live.py` and `fleet-events.sh` are identical in both states.
+
+| # | Mutation | Suite result |
+|---|----------|--------------|
+| M5 | Fabricate a seat when the stream has events but no seat events (`desk_live.py:334`) | **81/81 green - survives** |
+| M8 | Drop `os.path.basename` on `seat_log` (`desk_live.py:302`) so an absolute path reaches `live.json` | **81/81 green - survives** |
+| M9 | Remove the `latest`-pointer containment guard `"/" not in name` (`desk_live.py:110`) | **81/81 green - survives** |
+
+All three are correct code with no test holding them down. M5 matters most: "no fake agents when no
+stream" is an acceptance criterion, and the only assertion covering it (`no live seats invented`)
+runs on a fixture that already has seats, so the events-without-seats path is unpinned. The honest
+behavior does exist today (measured: a stream with `dispatch_start` + `wave_start` and no seats
+projects `seats=0` and renders "Dispatch reported no seats yet"); it is simply unguarded.
+
+Load-bearing controls verified by contrast (each turns the suite RED): staleness thresholds,
+the `unknown` downgrade for a seat that never reported, the `FLEET_EVENTS=0` opt-out, the `latest`
+pointer write, numeric-key typing, and leaking task text into a `fleet_event` call.
+
+## Non-blocking
+
+- **Offline snapshot still shows an in-flight seat.** With B1 applied, the 3-day-old projection
+  renders ambient `stream offline` next to `<span class="st st-run">in flight</span>` and
+  `timer 4s` in the same page. The page contradicts itself. `desk_live.py:337-341` already has the
+  right idea (a `running` seat downgrades to `unknown` when the dispatch is not running); the
+  build-time renderer could apply the same neutralization when `_live_state` returns `offline`.
+- **Mirror drift is the root cause of B1, and it is structural.** The floor is rendered twice, once
+  in Python for the build snapshot and once in JS for the poller: `_fmt_dur`/`fmtDur`,
+  `_live_state`/`liveState`, `_time_of`/`timeOf`, `_seat_pill`/`seatPill`, `_seat_timer`/`seatTimer`,
+  `_seat_lane`/`seatLane`, `_ghost_lane`/`ghostLane`, `_live_lanes`/`renderLanes`,
+  `_live_spine`/`renderSpine`, `_live_events`/`renderEvents` (`experience_build.py:782-941` vs
+  `templates/experience/floor.js:29-215`). Ten mirrored pairs, and the code admits it in comments at
+  `experience_build.py:802,827`. D1 was exactly this drift: the JS derived staleness, the Python
+  copied it. Two of the ten have now diverged and been re-synced by hand. Worth a follow-up task to
+  pick one source of truth (either let `floor.js` own lanes/spine/tail and keep the build snapshot to
+  ambient plus counts, or generate both from one description). Not a Phase B blocker, and explicitly
+  not a redesign demand here.
+- **`_live_shell_body` is 85 lines** (`experience_build.py:943-1027`), mostly one HTML literal, over
+  the ~50-line guideline. Low priority while it stays a single flat template.
+
+## Verified good (no action)
+
+- **Event stream and opt-out.** Default run writes `logs/fleet-events/<id>.jsonl` plus a `latest`
+  pointer holding the basename; `FLEET_EVENTS=0` produces no directory, no file, no pointer, and
+  leaves `FLEET_EVENTS_FILE` empty so every later call is a silent no-op. Numeric keys typed, values
+  capped and control-char stripped, non-snake keys dropped, empty values omitted, plan and logs as
+  basenames only. No transcript or task text: injecting `task="..."` into the `seat_dispatch` call
+  turns the suite RED.
+- **`live/1` schema.** Both fixtures carry `schema`, `seats`, `mode`, `staleness` (with published
+  `stale_after_s`/`offline_after_s`), `waiting_on`, `counts`, `status`, `last_event_ts`,
+  `dispatch_id`. `waiting_on` orders human gates first, then rate-caps, then the slowest running
+  seat. Written atomically via `os.replace`.
+- **`/live/` honesty without a projection.** No `live.json` restores the Phase A shell verbatim:
+  `led off`, "no live run in this build", "This is the empty shell", all four pipeline counts as
+  em-dashes, zero occurrences of any agent or provider name, and the poller still attached so it
+  lights up when a run starts. Malformed or off-schema `live.json` degrades to the same shell.
+- **`make desk-live`** (`Makefile:37`), `experience-live` (`:40`), `desk-live-once` (`:42`) all exist
+  and run; `desk-live-once` emitted a valid `live/1` projection end to end. The desk-live suite is
+  wired into `make test` (`Makefile:105-107`).
+- **`index.json` uncontaminated.** `scripts/experience_data.py` is not in the diff. The built
+  contract contains none of `live/1`, `staleness`, `in_flight`, `waiting_on`, `fleet-events`, or
+  `dispatch_id`, and `join_rules`, `pmi_policy`, `critic_pairs`, `companies`, `trails` are intact.
+- **Background-subshell safety.** Measured: bash resets traps in `( ) &`, so the seat subshells emit
+  no spurious `dispatch_end`. Exactly one close-out line per run.
+- **Escaping.** Both renderers route interpolated stream values through `esc()`, and the event tail
+  whitelists `ts`/`event`/`task_id`/`agent`/`provider` rather than dumping raw event objects.
+
+## What acceptance looks like
+
+1. Commit and push the `_live_state` derivation (B1).
+2. Make `make test` green with the derivation in place, without weakening the honesty assertions:
+   inject `now` or generate fixtures relative to now (B2).
+3. Correct the `dispatch.sh` signal comment (D2 item 2).
+4. Optional but cheap, and the reason the mutations survived: one assertion each for M5, M8, M9,
+   then wire `tests/critic/phase-b-honesty-repro.sh` into `make test`.
+
+Loop 2 of 2. The next pass goes to CTO for ship / redesign / kill, not to another critique round.

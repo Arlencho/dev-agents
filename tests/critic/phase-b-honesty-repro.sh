@@ -7,10 +7,13 @@
 #       staleness.state out of live.json instead of deriving it, so a run that
 #       ended days ago renders a green LED, "last event 4s ago", and an
 #       in-flight seat timer.  (experience_build.py:1006,1027,1029,1190)
-#   R2  scripts/dispatch.sh:543  "Honest close-out even on Ctrl-C".  The
-#       close-out is wired to EXIT only; a non-interactive bash script killed by
-#       SIGINT dies without running its EXIT trap, so dispatch_end is never
-#       emitted and the Floor keeps the run at status=running. (dispatch.sh:554)
+#   R2  scripts/dispatch.sh:543  "Honest close-out even on Ctrl-C".  Regression
+#       guard on the close-out path, which had no executing assertion (deleting
+#       the trap left `make test` green).  NOTE (loop 2): the loop-1 form of this
+#       test was invalid -- it backgrounded the harness, where SIGINT is SIG_IGN
+#       and untrappable, so it reported a defect that does not exist.  Under real
+#       Ctrl-C conditions (foreground child) bash DOES run the EXIT trap and the
+#       stream is closed -- verified on both 99e9fee and the revision.
 #
 # Run:  bash tests/critic/phase-b-honesty-repro.sh
 # Wire into `make test` once green.
@@ -103,15 +106,30 @@ fleet_close_dispatch() {
     echo "dispatch_end status=\${1:-aborted}" >> "$TMP/closeout.txt"
 }
 $TRAPS
-echo ready > "$TMP/ready"
+echo \$\$ > "$TMP/harness.pid"
 read -r answer
 HARNESS
 
-rm -f "$TMP/closeout.txt" "$TMP/ready"
-bash "$TMP/harness.sh" <> "$FIFO" >/dev/null 2>&1 &
-HPID=$!
-( sleep 1; kill -INT "$HPID" 2>/dev/null; sleep 2; kill -KILL "$HPID" 2>/dev/null ) >/dev/null 2>&1 &
-wait "$HPID" 2>/dev/null
+# The harness MUST run in the FOREGROUND (loop-2 correction).
+# An async (&) command in a non-interactive shell inherits SIGINT/SIGQUIT as
+# SIG_IGN (POSIX 2.11), and bash cannot trap a signal that was ignored at
+# entry: `trap -p INT` in such a child reports `trap -- '' SIGINT`. Measured:
+#
+#   bash child started with &   -> trap -p INT => trap -- '' SIGINT   (INT never fires)
+#   bash child in foreground    -> SIGINT during `read`/`wait` => EXIT trap RUNS, exit 130
+#
+# So backgrounding this harness measures the harness, not dispatch.sh, and the
+# assertion below can never pass regardless of the producer's trap wiring.
+cat > "$TMP/outer.sh" <<OUTER
+#!/usr/bin/env bash
+( for _ in \$(seq 1 60); do [ -f "$TMP/harness.pid" ] && break; sleep 0.1; done
+  sleep 0.3; kill -INT "\$(cat "$TMP/harness.pid")" 2>/dev/null
+  sleep 2;   kill -KILL "\$(cat "$TMP/harness.pid")" 2>/dev/null ) &
+bash "$TMP/harness.sh" <> "$FIFO" >/dev/null 2>&1
+OUTER
+
+rm -f "$TMP/closeout.txt" "$TMP/harness.pid"
+bash "$TMP/outer.sh" >/dev/null 2>&1
 
 if grep -q 'dispatch_end' "$TMP/closeout.txt" 2>/dev/null; then
   ok  "SIGINT (Ctrl-C) emits dispatch_end — the Floor stops showing 'running'"
