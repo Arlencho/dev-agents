@@ -1,89 +1,142 @@
-# Handoff — feat/fleet-desk-data-contract (PR #46) REVISE pass
+# Handoff — critic loop 2, PR #46 `feat/fleet-desk-data-contract`
 
-Scope: critic findings F1 and F2 only. No UI redesign, no scope expansion.
+Seat: critic / verify-only. No production code modified, no UI redesign, no
+re-implementation. Reviewed `f41484c` (= `origin/feat/fleet-desk-data-contract`).
+
+## VERDICT: APPROVE
+
+Both blocking findings (F1, F2) are fixed, and the fixes are proven by
+executable mutation evidence rather than by green-suite assertion. 11 mutants
+applied on a clean tree and reverted: **9 killed, 2 verified equivalent, 0
+surviving defects.**
 
 ## Built
 
-- `scripts/experience_data.py` — `write_dataset()` cleans only `<out>/data`,
-  not the whole out dir. `--no-clean` help updated to match.
-- `scripts/experience_build.py` — new `clean_html(out)`: removes rendered
-  `*.html` and the dirs they leave empty, skipping `<out>/data`. Called at the
-  top of `Renderer.render()`, so full-rebuild hygiene survives F1's fix.
-- `scripts/experience-build.sh` — step comments describe the new split.
-- `docs/experience.md` — table of what each command rewrites vs leaves alone,
-  plus a note under "Machine-readable view".
-- `tests/fixtures/experience-mini/logs/` (new) — realistic agent transcript
-  with marker `FIXTURE_TRANSCRIPT_BODY_MUST_NOT_BE_INGESTED`, token shapes,
-  home paths, fake private key. `README.md` explains why it exists.
-- 4 fixture `.jsonl` handoffs now carry absolute `orchestrator_fields.log`
-  paths (3× `/Users/fixtureop/...`, 1× `/home/fixtureop/...`).
-- `tests/run-experience-tests.sh` — 77 → 97 checks. New Part C (F1 regression)
-  and a real transcript/log-path block with vacuity guards (F2).
-
-## Decisions
-
-- **Split cleaning by ownership** rather than just deleting the rmtree. If the
-  data step stops wiping and nobody else cleans, `make experience` starts
-  leaving pages for deleted trails forever. Moving HTML cleanup into the HTML
-  renderer fixes F1 without trading it for a stale-page bug. `data/` is
-  excluded explicitly on both sides.
-- **Attached log paths to existing fixture handoffs** instead of adding new
-  ones. Trail count (22) and per-role PMI inputs stay untouched, so no
-  unrelated assertions needed editing.
-- **Added not-vacuous guards** (fixture log exists, has the marker, has secret
-  shapes, ≥4 trails carry log names). F2 existed because a fixture silently
-  went empty; the guards make that failure mode loud next time.
-- Kept the fake private-key block in the fixture log: it is the only coverage
-  for the `BEGIN … PRIVATE KEY` redaction shape. Push was not blocked by
-  secret scanning.
+Nothing. Verification only. `handoff.md` is the sole file written.
 
 ## Evidence
 
+Baseline, clean tree:
+
 ```
+$ git rev-parse HEAD; git rev-parse origin/feat/fleet-desk-data-contract
+f41484c9745ef687bb0b0f421d9ba972b4aec1da
+f41484c9745ef687bb0b0f421d9ba972b4aec1da
 $ bash tests/run-experience-tests.sh | tail -1
 == 97 passed, 0 failed ==
 ```
 
-Mutation testing — each mutant applied to a clean tree, suite re-run, then reverted:
+### F1 — `make experience-data` must not wipe the rendered site — FIXED
 
-| Mutant | Failures |
-| --- | --- |
-| `if clean and out_dir.exists(): shutil.rmtree(out_dir)` restored | 5 (Part C: index/work/about/sub-tree/unrelated HTML) |
-| `log_body` read from `logs/<name>` into the trail | 4 (transcript body, agent-log dir, secret shapes, home paths) |
-| `"log_name": str(orch.get("log") or "")` (no `.name`) | 3 (filename-only, agent-log dir, home paths) |
-
-F1 spot check before writing the test:
+Reproduced the original failure path end to end:
 
 ```
-$ make experience && make experience-data && test -f site/experience/index.html
-HTML index SURVIVED
+$ rm -rf site/experience && make experience
+html count: 48   data/index.json md5 904e9d52496d7c77b13a3d458d74d6fb
+$ make experience-data
+index.html exists: YES
+html count: 48
+data/index.json exists: YES   md5 982c9bd78aedf90abe46e61ca6636aa0
 ```
 
-Stale-page hygiene still works:
+HTML survives (48 → 48) and the JSON genuinely changed. The fix was **not**
+traded for a stale-page regression — hygiene moved to the HTML owner and still
+works:
 
 ```
-$ mkdir -p site/experience/trail/ghost-trail && touch .../index.html && make experience
-stale page pruned (good)
-data/index.json intact
+$ mkdir -p site/experience/trail/ghost-trail && echo … > …/index.html
+$ echo GHOSTDATA > site/experience/data/stray-asset.txt && make experience
+ghost page pruned: YES
+ghost dir pruned:  YES
+data/index.json intact: YES
 ```
 
-Commit `1823655`, pushed to `feat/fleet-desk-data-contract`.
-PR comment: https://github.com/Arlencho/dev-agents/pull/46#issuecomment-5117307666
+Part C is non-vacuous by construction: it stamps `generated_at='STALE-STAMP'`
+and asserts the stamp is gone, so it proves a real refresh rather than mere
+file existence (confirmed by mutant M8b below).
+
+### F2 — no-dump assertions are non-vacuous — FIXED
+
+Fixtures now carry 4 absolute operator log paths (3× `/Users/fixtureop/…`,
+1× `/home/fixtureop/…`; 18 remain empty) plus a real transcript on disk with
+marker, token shapes and home paths. The guards at
+`tests/run-experience-tests.sh:126-139` make fixture rot loud — verified by
+mutating the fixtures, not just the code (M4, M5).
+
+### Mutation results
+
+| # | Mutant | Result |
+| --- | --- | --- |
+| M1 | `rmtree(out_dir)` restored in `write_dataset` | **killed** — 5 fails (Part C) |
+| M2 | log body read into `trails[].source.log_body` | **killed** — 4 fails |
+| M3 | `log_name` keeps full path (`str` not `.name`) | **killed** — 3 fails |
+| M4 | fixture rot: all `"log"` back to `""` (the original F2 cause) | **killed** — 2 fails |
+| M5 | fixture transcript deleted from disk | **killed** — 3 fails |
+| M6 | `clean_html()` made a no-op | **killed** — 1 fail |
+| M7 | `data/` exclusion removed from `clean_html` | survived — **equivalent** |
+| M8 | `write_dataset` early-returns when `index.json` exists | survived — **equivalent** |
+| M8b | data step rewrites stale content (true no-op refresh) | **killed** — 1 fail |
+| M9 | PMI P2 gate `and` → `or` | **killed** — 3 fails |
+| M10 | Phase 0 cap `P2` → `P3` | **killed** — 2 fails |
+| M11 | join company-id validation bypassed | **killed** — 1 fail |
+
+M1–M3 independently reproduce the producer's claimed table exactly. M4–M11 are
+mine; the producer did not test them.
+
+**Equivalence proven, not assumed:**
+
+- **M7** — `data/` holds only `index.json`: verified `0` `*.html` files under
+  `data/` (nothing for the unlink loop to take) and the dir is never empty
+  (nothing for the prune loop to take). The exclusion is defensive, correct to
+  keep, unobservable today.
+- **M8** — `rmtree(data_dir)` runs *before* the mutated guard, so `index.json`
+  never exists at that point and the early return is unreachable. Replaced with
+  M8b, which forces a genuine stale refresh and **is** caught — so the "stale
+  stamp gone" assertion is real.
+
+### SYNTHESIS contract, PMI P2 gate, joins — re-checked
+
+The revise diff touches only cleaning logic:
+
+```
+$ git diff 3682027..1823655 --stat -- scripts/
+ scripts/experience-build.sh |  4 ++--
+ scripts/experience_build.py | 22 ++++++++++++++++++++++
+ scripts/experience_data.py  | 15 +++++++++++----
+```
+
+`experience_data.py` changes are confined to `write_dataset()` and the
+`--no-clean` help string. Projection, PMI and join logic are byte-identical to
+the reviewed commit, so loop-1's verification carries. Spot-checked anyway with
+live mutants M9/M10 (PMI P2 gate + Phase 0 cap) and M11 (joins cannot invent a
+company) — all killed. `docs/experience.md:40-43` documents the ownership split
+and matches observed behavior.
+
+## Decisions
+
+- Re-derived F1/F2 from the failing behavior rather than trusting the
+  producer's evidence block; the three claimed mutants were re-run from scratch.
+- Added fixture-level mutants (M4, M5). F2 was a *fixture* defect, so mutating
+  only code would have left the new guards themselves unverified.
+- Reported M7/M8 as equivalent with proof instead of filing them as coverage
+  gaps — matching loop-1's handling of M11/M12.
+
+## Open questions / follow-ups (non-blocking, do not hold the merge)
+
+- **F3** still open: `counts.unlinked_trails` is documented but unasserted
+  (`grep -c unlinked_trails tests/run-experience-tests.sh` → `0`).
+- **F4** still open: `handoff_truncated` remains undocumented
+  (`grep -c handoff_truncated docs/experience-data.md` → `0`).
+- Both were explicitly non-blocking and out of scope for an F1/F2-only revise.
+  Worth a small follow-up PR.
+- Producer's own note stands: if a future phase ships real non-HTML assets,
+  `clean_html()`'s empty-dir prune should be revisited (M7 stops being
+  equivalent at that point).
 
 ## Do not repeat
 
-- Do not "fix" F1 by simply deleting the rmtree — that regresses stale pages.
-  The two-sided ownership split is the working shape.
-- Do not add new fixture handoffs to test log handling: it shifts PMI counts
-  and breaks the `22 trails` / `n_done` assertions.
-- Multi-line Python expressions passed to `assert_json` must be parenthesised;
-  `eval` in eval-mode rejects a bare newline before `and`.
-- `logs/*.log` in `.gitignore` is root-anchored, so the fixture logs under
-  `tests/fixtures/.../logs/` do commit. Verified with `git check-ignore -v`.
-
-## Open questions
-
-- `clean_html()` prunes any empty directory under the site except `data/`. If a
-  future phase ships non-HTML assets (real CSS/JS files), they survive, but
-  their directory would be pruned if it ever went empty. Worth revisiting when
-  assets land; not a Phase 0 concern.
+- Do not "simplify" the two-sided clean split back into one rmtree — M1 and M6
+  fail in opposite directions and both are now guarded.
+- Do not set fixture `"log"` fields back to `""` to quiet anything; M4 shows
+  the vacuity guards fire immediately.
+- Do not re-file M7/M8 as bugs. They are equivalent mutants with proof above.
