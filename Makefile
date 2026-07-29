@@ -105,6 +105,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, autoplan fail-cl
 	@echo "== fleet desk live (events + Ops Floor projection) =="
 	@./tests/run-desk-live-tests.sh
 	@echo ""
+	@echo "== fleet desk Phase B honesty (critic repro) =="
+	@bash tests/critic/phase-b-honesty-repro.sh
+	@echo ""
 	@echo "All test suites passed."
 
 paperclip-up: ## Start local Paperclip (idempotent — installs first run, starts subsequently)

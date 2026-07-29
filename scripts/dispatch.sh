@@ -551,7 +551,16 @@ fleet_close_dispatch() {
         total="${TOTAL_TASKS:-0}" succeeded="${TOTAL_SUCCESS:-0}" failed="${TOTAL_FAIL:-0}" \
         duration_s="$(( $(date +%s) - ${OVERALL_START:-$(date +%s)} ))"
 }
+# EXIT covers normal and error exits; the INT/TERM traps make the close-out
+# ordering explicit on Ctrl-C / kill and pin the conventional 130/143 exit
+# codes instead of relying on the shell's signal-death behavior (whether an
+# EXIT trap runs on fatal signals varies by shell and version — measured here:
+# bash 3.2 and 5.3 both run it, but nothing guarantees it). The
+# FLEET_DISPATCH_CLOSED guard keeps the later EXIT trap a no-op after a
+# signal close-out.
 trap 'fleet_close_dispatch aborted' EXIT
+trap 'fleet_close_dispatch aborted; exit 130' INT
+trap 'fleet_close_dispatch aborted; exit 143' TERM
 
 # --------------------------------------------------
 # Vendor auth preflight (session validity before any launch)
@@ -1168,7 +1177,7 @@ for i in "${!TASK_AGENT[@]}"; do
 done
 
 fleet_close_dispatch completed
-trap - EXIT
+trap - EXIT INT TERM
 
 echo ""
 echo -e "Total duration: ${OVERALL_DURATION}s"

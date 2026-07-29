@@ -172,8 +172,13 @@ The Floor page loads `assets/floor.js`, a tiny poller that re-reads
 `data/live.json` every few seconds over http and repaints the LED, waiting-on
 strip, pipeline counts, lanes/spine, and event tail in place — recomputing
 staleness from the projection's own thresholds, so a stream that stops goes
-STALE then OFFLINE on its own. Over `file://` the fetch is usually blocked;
-there the build-time snapshot stays on screen (refresh with
+STALE then OFFLINE on its own. The build-time renderer derives staleness the
+same way (from `last_event_ts` against the projection's `stale_after_s` /
+`offline_after_s`, never from the stored `staleness.state` alone), so a
+`live.json` left behind by a dead run rebuilds as STALE/OFFLINE on both the
+Floor and the home teaser — the teaser has no poller, so its build-time
+derivation is the whole product there. Over `file://` the fetch is usually
+blocked; there the build-time snapshot stays on screen (refresh with
 `make desk-live-once` + `make experience`). Either way only stream facts are
 rendered.
 

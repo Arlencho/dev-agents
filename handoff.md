@@ -375,3 +375,66 @@ pointer write, numeric-key typing, and leaking task text into a `fleet_event` ca
    then wire `tests/critic/phase-b-honesty-repro.sh` into `make test`.
 
 Loop 2 of 2. The next pass goes to CTO for ship / redesign / kill, not to another critique round.
+
+
+---
+
+# PRODUCER REVISION — Fleet Desk v2 Phase B (loop 2, web-frontend seat)
+
+Answers loop-2 acceptance B1–B2, D2-item-2, M1, and the optional M5/M8/M9 pins. Repro green,
+`make test` green, critic repro now wired into `make test`.
+
+## Built
+
+| File | What |
+|------|------|
+| `scripts/experience_build.py` | **B1**: new `Renderer._live_state()` derives live/stale/offline from `last_event_ts` at build time against the projection's own `stale_after_s`/`offline_after_s` (default 120/900) — mirrors `floor.js liveState` and `desk_live.py`; stored `staleness.state` is only the fallback when the timestamp is missing/unparseable. `_live_floor_body` uses it for LED, `· stream <state>` note, and the `last event … ago` age (no longer `staleness.seconds`). `_home_live_teaser` uses it too (teaser has no poller — derivation is the whole product there). |
+| `scripts/dispatch.sh` | **D2**: `fleet_close_dispatch` now wired to EXIT + INT + TERM (`exit 130`/`143` in the signal handlers; guard makes double-fire a no-op); success path clears all three. Comment corrected per loop-2 — it no longer claims bash skips EXIT traps on signal death (measured false on bash 3.2 and 5.3); the traps exist to make close-out ordering and exit codes explicit, not to fix a bash defect. |
+| `tests/run-experience-tests.sh` | **B2**: Phase B block reworked. Fixtures keep their old absolute timestamps and now assert OFFLINE (`led off`, `· stream offline`, teaser `st-unk">offline`) — never `led live`. Live/stale chrome is pinned on wall-clock-shifted copies of the wave fixture generated at test time (last_event at now → `led live` + teaser live; now−200s → `led stale`), stored state deliberately left claiming `live` so green can only come from derivation. |
+| `tests/run-desk-live-tests.sh` | **M1**: executing close-out tests in Part C — dispatch.sh's real trap lines replayed into a harness: (a) plain `exit 3` → exactly one `dispatch_end status=aborted` (kills "delete the EXIT trap": measured, suite goes 87/1 RED); (b) SIGINT at a `read` gate → exactly one close-out (foreground launch, see below); plus an explicit INT/TERM wiring grep pin. **M5/M8/M9**: stream with no seat events → `seats==[]`; `seat_log` with an absolute path → basename only in live.json; `latest` pointer containing `/` → not followed outside the events dir. |
+| `Makefile` | `tests/critic/phase-b-honesty-repro.sh` wired into `make test` after the desk-live suite. |
+| `docs/experience.md` | Documents that the build-time renderer derives staleness from `last_event_ts` (floor + teaser), same thresholds as the poller. |
+
+## Decisions (+why)
+
+- **Relative-time shifted fixtures over injectable `now`** (loop-2 offered either). The shift
+  rewrites every ISO timestamp in a fixture copy at test time; the renderer keeps one code path
+  with no test-only parameters, and the pins exercise the real wall-clock derivation end to end.
+- **Kept the INT/TERM traps** after D2's withdrawal: they make the close-out explicit and pin
+  130/143, and the corrected R2 repro + Part C (b) now guard the path as a regression, not a defect.
+- **SIGINT harnesses run in the FOREGROUND.** Independent measurement matched the loop-2
+  correction: an async child of a non-interactive shell gets SIGINT as SIG_IGN and bash refuses to
+  trap it (`trap -p INT` → `trap -- '' SIGINT`); a backgrounded harness measures itself, not
+  dispatch.sh. Part C (b) uses the pid-file pattern (harness writes `$$`; `$BASHPID` is empty under
+  /bin/bash 3.2, so a subshell cannot name itself).
+- **Offline snapshot still shows an in-flight seat pill** (loop-2 non-blocking note): accepted
+  as-is for Phase B — floor.js mirrors the same stored-`elapsed_s` behavior, so changing it would
+  create new mirror drift. Candidate for the mirror-drift follow-up task.
+
+## Do not repeat
+
+- Don't background a signal-test harness (`harness &`) under `make test`/CI — SIGINT is SIG_IGN
+  there and untrappable; the test becomes a permanent red landmine or a false defect. Foreground
+  launch + pid-file (or the repro's outer.sh) is the working shape.
+- Don't trust `staleness.state` or `staleness.seconds` from live.json for age display anywhere —
+  derive from `last_event_ts`. That drift (JS derived, Python copied) was D1's root cause.
+- Don't assert LED state from the committed fixtures' baked timestamps — they only get older.
+  Shift timestamps relative to now at test time.
+
+## Evidence
+
+- `bash tests/critic/phase-b-honesty-repro.sh` → `passed: 6   failed: 0`.
+- `make test` → `All test suites passed.` (experience 300/300, desk-live 88/88, repro 6/6 wired in).
+- M1 mutation proof: with the EXIT trap line deleted, desk-live suite → `FAIL early exit runs the
+  close-out exactly once` (87 passed, 1 failed); restored after.
+- `bash -n` clean on dispatch.sh + all three touched test scripts; `py_compile` clean.
+- Signal behavior measurements (this machine, bash 5.3.12 + /bin/bash 3.2.57): backgrounded child →
+  `trap -- '' SIGINT` (untrappable); foreground child SIGINT'd during `read`/`wait` → EXIT trap
+  runs, exit 130, with and without an INT trap. Matches the loop-2 withdrawal of D2.
+
+## Next hint (CTO)
+
+- Loop-2 acceptance items are all addressed: B1 committed, B2 green without weakening assertions,
+  D2 comment corrected, M1 executed + repro wired, M5/M8/M9 pinned.
+- Open follow-ups the critic already flagged (non-blocking): Python/JS mirror drift (10 mirrored
+  pairs — pick one source of truth), offline-snapshot in-flight pill, `_live_shell_body` length.

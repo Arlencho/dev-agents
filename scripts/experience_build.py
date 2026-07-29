@@ -29,6 +29,7 @@ import json
 import re
 import shutil
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -790,6 +791,31 @@ class Renderer:
         return f"{m // 60}h{m % 60:02d}m"
 
     @staticmethod
+    def _live_state(live: Dict[str, Any]) -> Tuple[str, Optional[int]]:
+        """live/stale/offline derived from last_event_ts at BUILD time — the same
+        thresholds desk_live.py publishes in the projection and floor.js derives
+        from in the browser (`staleness.stale_after_s` / `offline_after_s`,
+        default 120/900). The stored staleness.state is a claim from projection
+        time and is never trusted on its own for the age display: a live.json
+        left behind from a dead run must rebuild as STALE/OFFLINE, never green.
+        Stored state is only the fallback when last_event_ts is absent or
+        unparseable (mirrors floor.js liveState)."""
+        staleness = live.get("staleness") or {}
+        stale_after = staleness.get("stale_after_s") or 120
+        offline_after = staleness.get("offline_after_s") or 900
+        ts = live.get("last_event_ts")
+        if isinstance(ts, str):
+            try:
+                last = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            except ValueError:
+                last = None
+            if last is not None:
+                age = max(0, int((datetime.now(timezone.utc) - last).total_seconds()))
+                state = "offline" if age >= offline_after else "stale" if age >= stale_after else "live"
+                return state, age
+        return staleness.get("state") or "none", None
+
+    @staticmethod
     def _time_of(ts: Any) -> str:
         """HH:MM:SS of a naive-UTC ISO event timestamp (never raises)."""
         if isinstance(ts, str) and len(ts) >= 19 and ts[10] == "T":
@@ -1000,9 +1026,10 @@ class Renderer:
         return body
 
     def _live_floor_body(self, live: Dict[str, Any]) -> str:
-        """Snapshot of the live/1 projection — only stream facts, labeled as such."""
-        staleness = live.get("staleness") or {}
-        state = staleness.get("state") or "none"
+        """Snapshot of the live/1 projection — only stream facts, labeled as such.
+        Staleness is derived from last_event_ts at build time (see _live_state),
+        so a stale snapshot never rebuilds as a green LED."""
+        state, age = self._live_state(live)
         led_cls = {"live": "led live", "stale": "led stale"}.get(state, "led off")
         repo = live.get("repo")
         plan = live.get("plan")
@@ -1025,8 +1052,7 @@ class Renderer:
         )
         status = live.get("status") or "unknown"
         stale_note = "" if state == "live" else f" · stream {esc(state)}"
-        age = staleness.get("seconds")
-        age_txt = "—" if not isinstance(age, int) else f"{self._fmt_dur(age)} ago"
+        age_txt = "—" if age is None else f"{self._fmt_dur(age)} ago"
         waiting = live.get("waiting_on") or []
         if waiting:
             wait_items = "".join(
@@ -1185,8 +1211,10 @@ class Renderer:
         Settled work below is the honest record.</p>
       </div>
 """
-        staleness = live.get("staleness") or {}
-        state = staleness.get("state") or "none"
+        # The teaser has no poller (floor.js loads on /live/ only), so the
+        # build-time derivation is the whole product here — never the stored
+        # staleness.state from projection time.
+        state, _age = self._live_state(live)
         state_cls = {"live": "st-run", "stale": "st-warn"}.get(state, "st-unk")
         counts = live.get("counts") or {}
 

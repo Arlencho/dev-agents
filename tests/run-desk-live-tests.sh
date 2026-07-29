@@ -286,6 +286,74 @@ else
   ok "no absolute paths or token-shaped strings in live.json"
 fi
 
+# ── Mutation pins (critic loop 2: M5, M8, M9 survived the suite) ────────────
+
+# M5: a stream with dispatch events but no seat events must project zero
+# seats — never a fabricated one.
+M5_DIR="$TMP/events-noseats"
+mkdir -p "$M5_DIR"
+python3 - "$M5_DIR/noseats.jsonl" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+now = datetime.now(timezone.utc).replace(tzinfo=None)
+def ts(delta):
+    return (now - timedelta(seconds=delta)).strftime("%Y-%m-%dT%H:%M:%SZ")
+rows = [
+    {"schema":"fleet-events/1","seq":1,"ts":ts(10),"dispatch_id":"noseats","event":"dispatch_start",
+     "mode":"wave","repo":"dev-agents","plan":"p.plan"},
+    {"schema":"fleet-events/1","seq":2,"ts":ts(9),"dispatch_id":"noseats","event":"wave_start",
+     "wave":1,"seats":2,"mode":"wave"},
+]
+with open(sys.argv[1], "w") as fh:
+    for r in rows:
+        fh.write(json.dumps(r) + "\n")
+PY
+OUT_M5="$TMP/out/live-noseats.json"
+python3 "$DESK_LIVE" --once --events-dir "$M5_DIR" --out "$OUT_M5" >/dev/null 2>&1
+assert_py "events without seat events project zero seats — none fabricated" "$OUT_M5" \
+  'd["seats"]==[] and d["status"]=="running" and d["wave"]["current"]==1'
+
+# M8: a seat_log path is stripped to its basename — an absolute path never
+# reaches live.json.
+M8_DIR="$TMP/events-seatlog"
+mkdir -p "$M8_DIR"
+python3 - "$M8_DIR/seatlog.jsonl" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+now = datetime.now(timezone.utc).replace(tzinfo=None)
+def ts(delta):
+    return (now - timedelta(seconds=delta)).strftime("%Y-%m-%dT%H:%M:%SZ")
+rows = [
+    {"schema":"fleet-events/1","seq":1,"ts":ts(10),"dispatch_id":"seatlog","event":"dispatch_start",
+     "mode":"wave","repo":"dev-agents","plan":"p.plan"},
+    {"schema":"fleet-events/1","seq":2,"ts":ts(9),"dispatch_id":"seatlog","event":"seat_dispatch",
+     "task_id":"0","agent":"devops","branch":"feat/x","wave":1,"provider":"claude","worker":"mac-mini-1"},
+    {"schema":"fleet-events/1","seq":3,"ts":ts(8),"dispatch_id":"seatlog","event":"seat_log",
+     "task_id":"0","agent":"devops","log":"/Users/operator/logs/seat-0.log"},
+]
+with open(sys.argv[1], "w") as fh:
+    for r in rows:
+        fh.write(json.dumps(r) + "\n")
+PY
+OUT_M8="$TMP/out/live-seatlog.json"
+python3 "$DESK_LIVE" --once --events-dir "$M8_DIR" --out "$OUT_M8" >/dev/null 2>&1
+assert_py "seat_log projects as a basename, never an absolute path" "$OUT_M8" \
+  'S["0"]["log"]=="seat-0.log"'
+
+# M9: the latest pointer must stay inside the events dir — a pointer naming a
+# path outside is ignored in favor of the newest in-dir stream.
+M9_DIR="$TMP/events-m9"
+mkdir -p "$M9_DIR"
+printf '%s\n' '{"schema":"fleet-events/1","seq":1,"ts":"2026-07-29T10:00:00Z","dispatch_id":"real-dispatch","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"p.plan"}' \
+  > "$M9_DIR/real.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":1,"ts":"2026-07-29T10:00:00Z","dispatch_id":"outside-dispatch","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"p.plan"}' \
+  > "$TMP/outside.jsonl"
+printf '../outside.jsonl\n' > "$M9_DIR/latest"
+OUT_M9="$TMP/out/live-m9.json"
+python3 "$DESK_LIVE" --once --events-dir "$M9_DIR" --out "$OUT_M9" >/dev/null 2>&1
+assert_py "latest pointer with a path separator is not followed outside the events dir" "$OUT_M9" \
+  'd["dispatch_id"]=="real-dispatch"'
+
 echo ""
 echo "== Part C: dispatch.sh wiring =="
 
@@ -307,6 +375,71 @@ if grep -n 'fleet_event' "$REPO_DIR/scripts/dispatch.sh" | grep -qE 'TASK_DESC|\
 else
   ok "no task text is ever emitted"
 fi
+
+# M1: the close-out must EXECUTE, not just grep. Replay every trap line
+# dispatch.sh installs for fleet_close_dispatch into a harness shaped like the
+# inter-wave gate (dispatch.sh `read -r answer`), then prove dispatch_end is
+# written on (a) plain early exit and (b) Ctrl-C (SIGINT). Deleting any one of
+# the trap lines turns this block RED.
+CLOSE_TRAPS="$(grep -E '^trap .*fleet_close_dispatch' "$REPO_DIR/scripts/dispatch.sh" || true)"
+[ -n "$CLOSE_TRAPS" ] \
+  && ok "dispatch.sh installs close-out traps" \
+  || bad "dispatch.sh installs close-out traps"
+
+mk_closeout_harness() {  # $1 = harness body, run after the traps are installed
+  cat > "$TMP/closeout-harness.sh" <<HARNESS
+#!/usr/bin/env bash
+set -uo pipefail
+FLEET_DISPATCH_CLOSED=false
+fleet_close_dispatch() {
+    [ "\$FLEET_DISPATCH_CLOSED" = true ] && return 0
+    FLEET_DISPATCH_CLOSED=true
+    echo "dispatch_end status=\${1:-aborted}" >> "$TMP/closeout.log"
+}
+$CLOSE_TRAPS
+$1
+HARNESS
+}
+
+# (a) plain exit — kills the "delete the EXIT trap" mutation.
+rm -f "$TMP/closeout.log"
+mk_closeout_harness 'exit 3'
+bash "$TMP/closeout-harness.sh" >/dev/null 2>&1 || true
+if [ "$(grep -c 'dispatch_end status=aborted' "$TMP/closeout.log" 2>/dev/null)" = "1" ]; then
+  ok "early exit runs the close-out exactly once (EXIT trap executes)"
+else
+  bad "early exit runs the close-out exactly once (EXIT trap executes)"
+fi
+
+# (b) SIGINT at the wave gate — the ordinary operator abort. The harness runs
+# in the FOREGROUND on purpose: an async (&) child of a non-interactive shell
+# inherits SIGINT as SIG_IGN and bash refuses to trap a signal that was
+# ignored at entry (measured: `trap -p INT` -> `trap -- '' SIGINT`), so a
+# backgrounded harness can never exercise an INT trap under make test/CI.
+# The harness writes its own pid for the async killer ($BASHPID is empty
+# under /bin/bash 3.2, so the subshell cannot name itself).
+CLOSE_FIFO="$TMP/gate.fifo"; mkfifo "$CLOSE_FIFO"
+rm -f "$TMP/closeout.log" "$TMP/closeout-harness.pid"
+mk_closeout_harness "echo \$\$ > \"$TMP/closeout-harness.pid\"; read -r answer"
+( for _ in $(seq 1 60); do [ -f "$TMP/closeout-harness.pid" ] && break; sleep 0.1; done
+  sleep 0.3; kill -INT "$(cat "$TMP/closeout-harness.pid")" 2>/dev/null
+  sleep 2;   kill -KILL "$(cat "$TMP/closeout-harness.pid")" 2>/dev/null ) >/dev/null 2>&1 &
+bash "$TMP/closeout-harness.sh" <> "$CLOSE_FIFO" >/dev/null 2>&1 || true
+if [ "$(grep -c 'dispatch_end status=aborted' "$TMP/closeout.log" 2>/dev/null)" = "1" ]; then
+  ok "Ctrl-C (SIGINT) runs the close-out exactly once — the Floor stops showing running"
+else
+  bad "Ctrl-C (SIGINT) runs the close-out exactly once — the Floor stops showing running"
+fi
+rm -f "$CLOSE_FIFO"
+
+# Wiring pin for the signal traps (execution above proves the close-out path;
+# on macOS bash the EXIT trap also fires on fatal SIGINT, so execution alone
+# cannot distinguish EXIT-only from EXIT+INT+TERM — this grep locks the
+# deliberate wiring and its documented exit codes).
+printf '%s\n' "$CLOSE_TRAPS" | grep -q 'INT' && printf '%s\n' "$CLOSE_TRAPS" | grep -q 'TERM' \
+  && ok "dispatch.sh closes out on INT/TERM explicitly, not EXIT alone" \
+  || bad "dispatch.sh closes out on INT/TERM explicitly, not EXIT alone"
+
 grep -q 'FLEET_EVENTS' "$REPO_DIR/docs/experience-data.md" \
   && ok "event schema documented in docs/experience-data.md" \
   || bad "event schema documented in docs/experience-data.md"
