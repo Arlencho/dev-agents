@@ -523,6 +523,8 @@ Specialty / niche roles live in [`roles/_archived/`](roles/_archived/README.md) 
 | [`docs/operator-guide.md`](docs/operator-guide.md) | **Start here for ops** — dispatch, handoffs, skills inject, failures, cookbook |
 | [`docs/plan-file-format.md`](docs/plan-file-format.md) | Canonical WAVE plan grammar (matches `dispatch.sh`) |
 | [`docs/session-modes.md`](docs/session-modes.md) | Co-pilot session modes: Conductor / Wave / Auto (Phase 0) |
+| [`docs/experience.md`](docs/experience.md) | **Fleet Desk** — start/view experience overview (`make experience`) |
+| [`docs/proposals/experience-console-SYNTHESIS.md`](docs/proposals/experience-console-SYNTHESIS.md) | Fleet Desk Phase 0 freeze |
 | [`docs/architecture.md`](docs/architecture.md) | Fleet topology: launchers, failover, L1/L2/L3, Paperclip coexistence |
 | [`docs/org-chart.md`](docs/org-chart.md) | Pairing + reporting (vendor-aware) |
 | [`docs/paperclip-architecture.md`](docs/paperclip-architecture.md) | Paperclip companies / agents / issues |
@@ -537,7 +539,7 @@ Specialty / niche roles live in [`roles/_archived/`](roles/_archived/README.md) 
 | [`providers/kimi/README.md`](providers/kimi/README.md) | Kimi launcher |
 | [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic Pass 4 |
 
-Ops: `make test` (unit), `make evidence` (quality scorecard), `make scorecard` (rate-caps), `make fleet-status` (when configured).
+Ops: `make test` (unit), `make experience` / `make experience-open` (Fleet Desk UI), `make evidence` (quality scorecard), `make scorecard` (rate-caps), `make fleet-status` (when configured).
 | [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic and judgment-seat launcher |
 | [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md) | Weekly Paperclip release scan log |
 

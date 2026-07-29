@@ -25,3 +25,6 @@ logs/provider-state/
 # Evidence scorecard outputs (aggregates; no secrets expected)
 logs/evidence.csv
 logs/evidence-latest.txt
+
+# Fleet Desk Phase 0 generated static site
+site/experience/
