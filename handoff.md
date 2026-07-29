@@ -1,104 +1,136 @@
-# Handoff — PR #48 revision after critic REVISE (B1–B4)
+# Critic loop 2 — PR #48 `feat/fleet-desk-phase1-data`
 
-Branch `feat/fleet-desk-phase1-data` @ `abd6736`. Scope: **fixtures and
-assertions only**. `scripts/experience_data.py` is byte-identical to the
-reviewed commit — the critic found no production defect and mutation confirmed
-none, so none was invented.
+**VERDICT: APPROVE.**
+
+Verify-only pass over `abd6736` (producer REVISE) + `59b7bff` (handoff), branch
+tip `59b7bff`. Every blocking item B1–B4 was re-killed by re-introducing the
+original mutant against the **committed** tree. All four are load-bearing. No
+production logic moved. Nothing was redesigned or re-implemented.
 
 ## Built
 
-All four blocking items were the same defect in the *tests*: every existing P3
-assertion was satisfied by a role that passed or failed the gate for some
-**other** reason, so no single clause of the gate was load-bearing. The fix is
-one fixture per clause, each shaped to clear the P2 outcome bar independently,
-so only the clause under test holds its band.
-
-| Item | Fixture added | Pins |
-| --- | --- | --- |
-| **B1** | `skills/evidence-first/SKILL.md` → `version: 2` + cites new `learnings/lesson-default.md`. It is a **shared default** pack held by `fixture-veteran` (5/5 done). | Default packs are excluded from P3 evidence. The pack qualifies on **both** proofs, so `specialized` → `packs` cannot survive. |
-| **B2** | `fixture-runner` now holds the evidence-bearing `fixture-pack` (config only; it already had `n_done=4`, `success=0.8`). | P3 requires the P2 **outcome** bar, not just evidence. Only `n_done` keeps this role down. |
-| **B3** | New pack `skills/fixture-solo-pack/SKILL.md` (v2, promotes nothing, never revised) + new role `fixture-solo` with 5 done trails (`wave-plans/8/`). | `revisions ≥ 2`, i.e. "actually revised, not merely born at v2". |
-| **B4** | Throwaway git repo grows `fixture-deep-pack` with **23 real commits**; the shell asserts from `git log` that >20 exist, then the projection must publish exactly `history_depth`. | The `-n{depth}` cap is *enforced*, not merely declared. |
-
-Also: `assert_json` gained `S` (skills by id) and `L` (learnings by slug)
-bindings; trail-count assertions 27 → 32; two doc rows for `handoff_truncated`
-and `role_stats.role` (the critic's non-blocking nit — both verified against
-real output before documenting).
+Nothing. This is a review. `git status` is empty, `scripts/experience_data.py`
+was never edited in the working tree — all mutation ran in throwaway copies
+under `/tmp/mut/` (`cp -R` of the repo incl. `.git`, so git-derived facts stay
+real). The only file this pass writes is this `handoff.md`.
 
 ## Evidence
 
-Baseline green, then each of the critic's four mutations applied to a clean copy
-of the **committed** tree (`cp -R`, `sed`, verified non-no-op by `diff`):
+Control first: the isolated copy reproduces the committed baseline, so a RED
+result below is attributable to the mutant and not to the harness.
 
 ```
-=== BASELINE (committed, unmutated) ===   == 188 passed, 0 failed ==
-
-=== B1  evidence = proven_loop_evidence(packs, skill_index) ===
-  FAIL PMI: shared default pack never grants P3
-  FAIL PMI: no role cites a default pack as evidence
-  FAIL no git: default pack promotion still grants no P3
-  FAIL git: over-qualified default pack still grants no P3
-  (+5 more)                               == 179 passed, 9 failed ==
-
-=== B2  `if p2_ok and evidence:` -> `if evidence:` ===
-  FAIL PMI: evidence without the P2 outcome bar stays below P3
-  FAIL PMI: P3 needs the P2 outcome bar too      <- was vacuous, now bites
-  (+2 more)                               == 184 passed, 4 failed ==
-
-=== B3  drop `and s["revisions"] >= p3_min_pack_revisions` ===
-  FAIL PMI: pack born at v2 but never revised is not a proven loop
-  FAIL git: v2 pack with exactly 1 commit is not a proven loop
-                                          == 186 passed, 2 failed ==
-
-=== B4  remove `f"-n{int(depth)}"` from git_file_history ===
-  FAIL git: history is truncated AT the published depth
-                                          == 187 passed, 1 failed ==
+make test              (working tree)  == 188 passed, 0 failed ==  All test suites passed.
+tests/run-experience-tests.sh (/tmp/mut/base, pristine copy)
+                                       == 188 passed, 0 failed ==
 ```
 
-`make test` → `188 passed, 0 failed` / `All test suites passed.` (was 178; +11
-assertions, −1 superseded). `git diff 7cb1bd6..HEAD -- scripts/` is empty.
+Each mutant re-applied to a fresh copy of the committed tree, each proven
+non-no-op by `git diff` before running:
+
+| # | Mutation (anchor verified unique) | Result | Killing assertions |
+| --- | --- | --- | --- |
+| **B1** | `proven_loop_evidence(specialized, …)` → `(packs, …)` | **179 / 9 RED** | `shared default pack never grants P3`, `no role cites a default pack as evidence`, `no git: default pack promotion still grants no P3`, `git: over-qualified default pack still grants no P3` (+5) |
+| **B2** | `if p2_ok and evidence:` → `if evidence:` | **184 / 4 RED** | `evidence without the P2 outcome bar stays below P3`, `P3 needs the P2 outcome bar too`, `n_done<5 stays P1 even at 80%`, `specialized pack alone never grants P2` |
+| **B3** | drop `and s["revisions"] >= PMI_GATES["p3_min_pack_revisions"]` | **186 / 2 RED** | `pack born at v2 but never revised is not a proven loop`, `git: v2 pack with exactly 1 commit is not a proven loop` |
+| **B4** | remove `f"-n{int(depth)}"` from `git_file_history` | **187 / 1 RED** | `git: history is truncated AT the published depth` |
+
+Every count matches the producer's reported figures exactly (188/0, 179/9,
+184/4, 186/2, 187/1). The claimed evidence is reproducible, not narrated.
+
+**B1 and B3 are each killed in more than one environment** (fixture build,
+`--no-git` projection, throwaway git repo), so a single weak environment cannot
+hide either mutant — the producer's multi-environment claim holds.
+
+### No silent production change (P3 path intact)
+
+```
+git diff 7cb1bd6..HEAD -- scripts/     -> empty
+git diff 3f6669d..HEAD -- scripts/experience_data.py -> empty
+git diff --name-only 3f6669d..HEAD | grep -vE '^(tests/|docs/|handoff.md)'  -> no matches
+```
+
+`scripts/experience_data.py` is byte-identical to the originally reviewed
+commit. The P3 gate (`compute_pmi` ll. 946–955, `proven_loop_evidence` ll.
+912–937) is unchanged. The REVISE fixed *tests*, which is exactly what the
+REVISE asked for — no defect was invented to justify a production edit.
+
+### Independent mutants (not in the producer's set)
+
+I did not simply re-run the producer's script. Four extra mutants on the areas
+flagged for re-check, all **RED**:
+
+| Area | Mutation | Result |
+| --- | --- | --- |
+| pairing | `p["reviewed_by"] = [...]` → `[]` | 185 / 3 RED |
+| schema v2 | `SCHEMA_VERSION = 2` → `3` | 184 / 4 RED |
+| snapshot privacy | leak `handoff_sections` into snapshot trails | 187 / 1 RED |
+| git-history | hardcode `history_truncated: True` | 187 / 1 RED |
+
+The last one confirms the "asserts the cap from both sides" claim: the flag
+cannot be hardcoded, `git: an untruncated pack is not falsely flagged` catches it.
+
+### Schema v2 honesty
+
+Docs match code, checked against constants rather than prose:
+`MARKDOWN_CAP = 12000` (l. 72) vs doc "≤ 12000 chars"; `GIT_LOG_DEPTH = 20`
+(l. 61) vs doc "≤ `history_depth` (20)". The two newly documented rows are real,
+verified against built output, not just declared:
+
+```
+trail has handoff_truncated: True
+role_stats has role:         True
+```
+
+### gh soft-fail (the producer's own open question) — verified by hand
+
+Exercised with a poisoned `PATH`, since the suite does not cover it:
+
+```
+PATH=/usr/bin:/bin            -> BUILD OK, gh_enrichment: unavailable | gh not on PATH
+gh stub exiting 1             -> BUILD OK, gh_enrichment: unauthenticated | gh auth status failed
+gh stub: junk stdout, exit 0  -> BUILD OK, gh_enrichment: ok, 0 PRs / 0 issues resolved
+```
+
+The contract "gh enrichment never fails the build" **holds in all three**, and
+no links are invented in any of them (`trails with pr_url: 0`). `gh_index`
+returns a status/reason on every failure path and never raises.
 
 ## Decisions
 
-- **Each clause is pinned in more than one environment.** B1 is asserted in the
-  fixture build (promotion + version), in the **no-git** projection (promotion
-  only, since it reads files not git), and in the throwaway git repo (default
-  pack at v2 with 2 real commits). A single mutant therefore cannot slip through
-  one weak environment.
-- **B3 is asserted twice on purpose.** The fixture build's revision count comes
-  from *this* repo's real history, so it is asserted as `revisions < 2` (a
-  precondition that fails loudly if the fixture rots). The throwaway git repo
-  pins the exact deterministic case, `revisions == 1`.
-- **B4 asserts the cap from both sides**: `len(git_history) == history_depth ==
-  20` with `history_truncated: true` for the deep pack, and
-  `history_truncated: false` for a shallow pack, so the flag cannot be hardcoded.
-  The ">20 commits actually exist" precondition is read from `git log` itself,
-  not assumed.
-- **Deleted** the old `git: a single-commit pack is not a proven loop`
-  assertion. It keyed on `evidence-first`, which is now excluded as a *default*
-  pack for a different reason, making it doubly vacuous; the new
-  `v2 pack with exactly 1 commit` assertion is the honest version of it.
-- Did not touch production logic, the renderer, CSS, or any UI.
+- **Approving with the gh gap open.** B1–B4 were the blocking set; all four are
+  now pinned and independently re-killed. The untested gh degradation paths are
+  a coverage gap, not a defect — I verified the actual behavior by hand and it
+  is correct. Blocking a green, reproducible fix on a follow-up test would be
+  scope creep.
+- **Accepted the deleted assertion.** `git: a single-commit pack is not a proven
+  loop` was removed as doubly vacuous. Its replacement, `git: v2 pack with
+  exactly 1 commit is not a proven loop`, is confirmed load-bearing by the B3
+  mutant, so coverage went up, not down.
+- **Did not sign off on counts alone.** 188 green assertions prove nothing by
+  themselves; the eight mutants above are the actual basis for this APPROVE.
 
 ## Do not repeat
 
-- Don't "simplify" the fixtures by removing the version bump or the
-  `[ev: learnings/lesson-default.md]` cite from `skills/evidence-first/SKILL.md`.
-  A default pack that does **not** qualify as evidence makes B1 vacuous again —
-  that is exactly the hole that shipped.
-- Don't edit `skills/fixture-solo-pack/SKILL.md`. A second commit touching it
-  makes it a genuine proven loop and `fixture-solo` legitimately goes P3. Both
-  the file header and the fixture README say so.
-- Don't attach the never-revised pack to `fixture-builder` (already P3) or the
-  qualifying default pack to a sub-P2 role — either makes the mutant invisible
-  again. The fixture must clear P2 for *other* reasons.
-- Don't assert `skill_history.depth == 20` alone; it echoes a constant. That
-  assertion is kept, but only alongside the measured length.
+- Don't re-run the producer's mutation script and call that verification. It
+  proves the script works, not that the tests bite. Mutate the **committed**
+  tree yourself and diff before running.
+- Don't mutate in the working tree. Use `cp -R` including `.git` — B1's revision
+  counts and B4's depth cap are read from real git history, so a copy without
+  `.git` silently changes what is being tested.
+- Don't treat `== N passed, 0 failed ==` as the control. Run the pristine copy
+  first; without that, a RED could be the harness rather than the mutant.
 
-## Open questions
+## Open questions (non-blocking, for follow-up)
 
-- The `make experience-snapshot` output path still isn't gitignored (critic's
-  nit, deliberate per SYNTHESIS §10). Left as an owner call, untouched.
-- `gh` missing/erroring paths and `role_name_fallback` remain unexercised by the
-  suite (verified by hand in review). Out of scope for B1–B4; would be a cheap
-  follow-up with a `PATH=/usr/bin:/bin` build.
+1. **Cosmetic honesty nit, new observation.** A `gh` that exits 0 while emitting
+   non-JSON gets `status: "ok"` with the garbage echoed into
+   `gh_enrichment.repo` (observed: `"repo": "not json <<<"`). No links are
+   invented and the build is fine, so this is not a defect — but `repo` is
+   currently whatever `gh repo view -q .nameWithOwner` prints, unvalidated. A
+   one-line slug shape check (`owner/name`) would close it. Contrived scenario;
+   filed, not blocked.
+2. `role_name_fallback` remains unexercised by the suite (producer's note, still
+   true).
+3. `make experience-snapshot` output path still not gitignored — deliberate per
+   SYNTHESIS §10, owner call, untouched.
