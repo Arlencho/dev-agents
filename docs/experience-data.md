@@ -243,8 +243,11 @@ Rules:
 
 - **Never fails the build.** Missing binary, missing auth, timeout, non-zero exit
   or unparseable JSON all degrade to empty fields plus `gh_enrichment.status`
-  (`ok` · `skipped` · `disabled` · `unavailable` · `unauthenticated` · `error`)
-  and a `reason`. Non-ok, non-skipped statuses also append a `warnings[]` line.
+  (`ok` · `skipped` · `disabled` · `unavailable` · `unauthenticated` · `error` ·
+  `bad_payload`) and a `reason`. `bad_payload` covers exit-0 responses that are
+  not the expected shape (a non-`owner/repo` slug, or a list call that did not
+  return a JSON array) — exit 0 is never reported as `ok` with garbage.
+  Non-ok, non-skipped statuses also append a `warnings[]` line.
 - Fields **always exist** on every trail (empty when the enrichment did not run),
   so a page never has to guess why they are missing.
 - **Titles only** — no issue/PR bodies, no comments, no reviews. Titles pass the
