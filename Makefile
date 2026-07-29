@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-open desk
+.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-open desk
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -18,8 +18,11 @@ vendor-auth: ## Preflight vendor CLI sessions (usage: make vendor-auth [VENDORS=
 		./scripts/vendor-auth-check.sh; \
 	fi
 
-experience: ## Build Fleet Desk static site → site/experience/ (read-only overview)
+experience: ## Build Fleet Desk: data contract JSON then static site → site/experience/
 	@./scripts/experience-build.sh
+
+experience-data: ## Build only the Fleet Desk data contract → site/experience/data/index.json
+	@python3 ./scripts/experience_data.py
 
 experience-open: ## Build Fleet Desk and open in browser
 	@./scripts/experience-build.sh

@@ -26,5 +26,9 @@ logs/provider-state/
 logs/evidence.csv
 logs/evidence-latest.txt
 
-# Fleet Desk Phase 0 generated static site
+# Fleet Desk Phase 0 generated static site (incl. data/index.json contract)
 site/experience/
+
+# Python bytecode from the Fleet Desk generator
+__pycache__/
+*.pyc
