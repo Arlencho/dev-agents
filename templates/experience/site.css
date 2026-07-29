@@ -459,6 +459,44 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 .spine-node .meta { font-family: var(--mono); font-size: 10px; color: var(--faint); margin-top: 2px; }
 .spine-link { flex: 1 1 28px; height: 2px; min-width: 20px; background: var(--line); position: relative; top: -16px; }
 
+/* ── Ops Floor live states (Phase B: real live/1 projection) ────────── */
+.led.live { background: var(--ok); box-shadow: 0 0 10px var(--ok); animation: ledpulse 2s ease-in-out infinite; }
+.led.stale { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+@keyframes ledpulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.st-run { color: var(--accent); background: var(--accent-soft); }
+
+.lane.run { border-color: var(--accent); }
+.vendor.warn { color: var(--warn); border-color: var(--warn); }
+
+.spine-node.done .orb { border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }
+.spine-node.hot .orb {
+  border-color: var(--accent); background: var(--accent-soft); color: var(--accent);
+  box-shadow: 0 0 14px var(--accent-soft);
+}
+.spine-node.hot .nm { color: var(--accent); }
+
+.wavehead2 {
+  margin: 12px 0 8px; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted);
+}
+.wavehead2:first-of-type { margin-top: 0; }
+
+.waiting .witem { margin: 0 0 4px; font-size: 12.5px; }
+.waiting .witem:last-child { margin-bottom: 0; }
+
+ol.events {
+  margin: 0; padding-left: 0; list-style: none;
+  font-size: 12px; max-height: 320px; overflow: auto;
+}
+ol.events li { padding: 3px 0; border-bottom: 1px solid var(--line); }
+ol.events li:last-child { border-bottom: none; }
+ol.events .ets { color: var(--faint); margin-right: 8px; }
+ol.events .ekind { font-weight: 600; }
+
 /* ── segmented control (Group: by wave | flat) ──────────────────────── */
 .seg {
   display: inline-flex; border: 1px solid var(--line);

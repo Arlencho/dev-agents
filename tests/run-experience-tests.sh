@@ -410,6 +410,141 @@ grep -q '\.st-warn' "$FIXOUT/assets/site.css" \
   && ok "mixed/blocked pipeline state styled" || bad "mixed/blocked pipeline state styled"
 assert_absent_html "live shell invents no live-state chrome" "$FIXOUT/live" 'lane run|spine-node hot|led live'
 
+# ── v2 Phase B: Ops Floor wired to live.json (synthetic projections) ──
+# Synthetic live/1 projections (tests/fixtures/live/*.json) stand in for
+# scripts/desk_live.py output; the renderer must light up with real stream
+# facts and degrade back to the honest shell when the projection is gone.
+# Staleness law (desk_live.py: a stopped stream reads STALE, then OFFLINE —
+# never "live"): the builder derives live/stale/offline from last_event_ts at
+# build time, so the on-disk fixtures — whose timestamps are now old — must
+# render OFFLINE even though their stored staleness.state claims live/stale.
+# Fresh/stale chrome is pinned on wall-clock-shifted copies generated here.
+LIVEFIX="$SCRIPT_DIR/fixtures/live"
+FL="$FIXOUT/live/index.html"
+
+# Shift every ISO timestamp in the wave fixture so last_event_ts lands at
+# now (fresh) and now-200s (stale — inside [stale_after_s, offline_after_s)).
+# Stored staleness.state stays "live" in both, so a green LED can only come
+# from derivation, never from trusting the stored snapshot claim.
+python3 - "$LIVEFIX/wave.json" "$TMP/live-fresh.json" "$TMP/live-stale.json" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+src, fresh, stale = sys.argv[1], sys.argv[2], sys.argv[3]
+ISO = "%Y-%m-%dT%H:%M:%SZ"
+d = json.load(open(src))
+last = datetime.strptime(d["last_event_ts"], ISO).replace(tzinfo=timezone.utc)
+now = datetime.now(timezone.utc)
+def shift(node, delta):
+    if isinstance(node, dict):
+        return {k: shift(v, delta) for k, v in node.items()}
+    if isinstance(node, list):
+        return [shift(v, delta) for v in node]
+    if isinstance(node, str) and len(node) == 20 and node.endswith("Z") and node[10] == "T":
+        try:
+            return (datetime.strptime(node, ISO).replace(tzinfo=timezone.utc) + delta).strftime(ISO)
+        except ValueError:
+            return node
+    return node
+json.dump(shift(d, now - last), open(fresh, "w"), indent=2)
+json.dump(shift(d, now - timedelta(seconds=200) - last), open(stale, "w"), indent=2)
+PY
+
+# Fresh stream → live chrome, derived at build time.
+cp "$TMP/live-fresh.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with a fresh live.json" || bad "renderer succeeds with a fresh live.json"
+grep -q 'class="led live" id="floor-led"' "$FL" \
+  && ok "floor LED derives live for a fresh stream" || bad "floor LED derives live for a fresh stream"
+grep -qE 'last event [0-9]{1,2}s ago' "$FL" \
+  && ok "ambient age derives from last_event_ts" || bad "ambient age derives from last_event_ts"
+if grep -qE 'stream (stale|offline)' "$FL"; then
+  bad "fresh stream carries no stale/offline note"
+else
+  ok "fresh stream carries no stale/offline note"
+fi
+grep -q 'st st-run">live</span> dispatch' "$FIXOUT/index.html" \
+  && grep -q '20260729-100000-dev-agents' "$FIXOUT/index.html" \
+  && ok "home teaser reflects a fresh stream as live" || bad "home teaser reflects a fresh stream as live"
+
+# 200-second-old stream → STALE chrome even though stored state says "live".
+cp "$TMP/live-stale.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with a stale live.json" || bad "renderer succeeds with a stale live.json"
+grep -q 'class="led stale" id="floor-led"' "$FL" \
+  && ok "floor derives STALE from last_event_ts (stored state claims live)" \
+  || bad "floor derives STALE from last_event_ts (stored state claims live)"
+grep -q ' · stream stale' "$FL" \
+  && ok "floor labels the stale stream" || bad "floor labels the stale stream"
+
+# The on-disk fixtures are old — they must render OFFLINE, never led live.
+cp "$LIVEFIX/wave.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with live.json present" || bad "renderer succeeds with live.json present"
+grep -q 'class="led off" id="floor-led"' "$FL" \
+  && ok "old projection renders OFFLINE — stored live state is not trusted" \
+  || bad "old projection renders OFFLINE — stored live state is not trusted"
+grep -q ' · stream offline' "$FL" \
+  && ok "floor labels the dead stream offline" || bad "floor labels the dead stream offline"
+grep -q 'code-critic working on feat/fleet-desk-v2-phase-b-data' "$FL" \
+  && ok "waiting-on strip carries the projection label" || bad "waiting-on strip carries the projection label"
+grep -q 'id="pipe-inflight">1<' "$FL" && grep -q 'id="pipe-settled">2<' "$FL" \
+  && ok "pipeline counts come from the projection" || bad "pipeline counts come from the projection"
+grep -q 'class="lane run"' "$FL" && grep -q 'feat/fleet-desk-v2-floor' "$FL" \
+  && ok "wave lanes render real seats" || bad "wave lanes render real seats"
+grep -q 'vendor warn">rate-cap' "$FL" && grep -q 'failover claude → kimi' "$FL" \
+  && ok "rate-cap + failover ride the lane as chrome" || bad "rate-cap + failover ride the lane as chrome"
+grep -q 'Planned, not started' "$FL" && grep -q 'class="lane ghost"' "$FL" \
+  && ok "ghost lane covers the planned-but-unstarted seat" || bad "ghost lane covers the planned-but-unstarted seat"
+grep -q '<h3 class="wavehead2">Wave 2 · current' "$FL" \
+  && ok "wave groups mark the current wave" || bad "wave groups mark the current wave"
+grep -q '<b>Repo</b> <em>dev-agents</em>' "$FL" && grep -q '<b>Mission</b> <em>phase-b.plan</em>' "$FL" \
+  && ok "floor hierarchy carries repo + plan context" || bad "floor hierarchy carries repo + plan context"
+grep -q 'class="ekind">seat_dispatch' "$FL" \
+  && ok "event tail renders projection events" || bad "event tail renders projection events"
+grep -q 'assets/floor.js' "$FL" && grep -q 'data-live-json="../data/live.json"' "$FL" \
+  && ok "floor loads the live.json poller" || bad "floor loads the live.json poller"
+exists "poller script shipped to assets" "$FIXOUT/assets/floor.js"
+grep -q 'Snapshot of' "$FL" \
+  && ok "floor labels itself a snapshot of live.json" || bad "floor labels itself a snapshot of live.json"
+grep -q 'st st-unk">offline</span> dispatch' "$FIXOUT/index.html" \
+  && grep -q '20260729-100000-dev-agents' "$FIXOUT/index.html" \
+  && ok "home teaser marks the old stream offline (home has no poller to self-correct)" \
+  || bad "home teaser marks the old stream offline (home has no poller to self-correct)"
+grep -q 'stale_after_s' "$FIXOUT/assets/floor.js" \
+  && ok "poller recomputes staleness from projection thresholds" || bad "poller recomputes staleness from projection thresholds"
+
+cp "$LIVEFIX/conductor.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with conductor live.json" || bad "renderer succeeds with conductor live.json"
+grep -q 'spine-node hot' "$FL" && grep -q 'spine-node done' "$FL" \
+  && ok "conductor spine: settled fills + hot pin" || bad "conductor spine: settled fills + hot pin"
+grep -q 'class="led off" id="floor-led"' "$FL" \
+  && ok "conductor floor derives OFFLINE for an old stream (stored state claims stale)" \
+  || bad "conductor floor derives OFFLINE for an old stream (stored state claims stale)"
+grep -q ' · stream offline' "$FL" \
+  && ok "conductor floor labels the dead stream offline" || bad "conductor floor labels the dead stream offline"
+grep -q 'critic verdict review' "$FL" \
+  && ok "human gate sits in the waiting-on strip" || bad "human gate sits in the waiting-on strip"
+if grep -q 'class="lane run"' "$FL"; then
+  bad "conductor mode does not render wave lanes"
+else
+  ok "conductor mode does not render wave lanes"
+fi
+
+# Degradation honesty: a broken projection and a missing one both fall back
+# to the teach shell — never to half-rendered live chrome.
+echo 'this is not json' > "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer survives a malformed live.json" || bad "renderer survives a malformed live.json"
+grep -q 'class="led off" id="floor-led"' "$FL" \
+  && ok "malformed live.json degrades to the shell" || bad "malformed live.json degrades to the shell"
+rm "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1
+grep -q 'class="led off" id="floor-led"' "$FL" \
+  && grep -q 'make desk-live' "$FL" \
+  && ok "removing live.json restores the teach shell" || bad "removing live.json restores the teach shell"
+assert_absent_html "post-degrade floor invents no live chrome" "$FIXOUT/live" 'lane run|spine-node hot|led live'
+
 # ── v2: mission derivation from issue_links (injected contract) ───────
 # Offline: enrich the fixture JSON with issue refs the way handoffs would,
 # then check the renderer groups trails into missions — multi-wave grouping,
@@ -447,6 +582,13 @@ if grep -q 'class="wave-card"' "$MS/mission/example-acme-app-9/index.html"; then
   bad "simple 1:1 hides the wave chrome"
 else
   ok "simple 1:1 hides the wave chrome"
+fi
+# Phase A critic residual R1: the mission task table pill must carry text, not
+# color alone (a11y). The missions-index pin does not cover this renderer.
+if grep -qE '<span class="st st-[a-z]+"></span>' "$MS/mission/acme-12/index.html"; then
+  bad "mission task-table pill carries text, not color alone"
+else
+  ok "mission task-table pill carries text, not color alone"
 fi
 grep -q 'href="../mission/acme-12/index.html"' "$MS/work/index.html" \
   && ok "work table links trails up to their mission" || bad "work table links trails up to their mission"

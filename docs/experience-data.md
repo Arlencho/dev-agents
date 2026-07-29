@@ -331,6 +331,131 @@ replaces token shapes (`ghp_…`, `github_pat_…`, `sk-…`, `xox…`, `AKIA…
 `tests/run-experience-tests.sh` fails the build if secret shapes or home paths
 appear in the JSON or HTML.
 
+## Live event stream (Phase B) — `logs/fleet-events/*.jsonl`
+
+The Almanac contract above is **settled history**. Live motion is a separate,
+append-only stream so live state never enters `index.json`
+([SYNTHESIS §3 Phase B](proposals/fleet-desk-v2-SYNTHESIS.md)).
+
+```text
+scripts/dispatch.sh ──► logs/fleet-events/<dispatch_id>.jsonl  (schema fleet-events/1)
+                        logs/fleet-events/latest               (pointer: basename)
+                                   │
+                        scripts/desk_live.py  (make desk-live)
+                                   ▼
+                        site/experience/data/live.json          (schema live/1)
+```
+
+| Piece | File |
+|-------|------|
+| Writer | `scripts/fleet-events.sh` (sourced by `scripts/dispatch.sh`) |
+| Reader / projector | `scripts/desk_live.py` (`make desk-live`, `make desk-live-once`) |
+| Tests | `tests/run-desk-live-tests.sh`, fixtures in `tests/fixtures/fleet-events/` |
+
+`logs/fleet-events/` is gitignored — it is per-machine runtime truth, rebuilt by
+the next dispatch.
+
+### Event envelope (`fleet-events/1`)
+
+One JSON object per line, appended, never rewritten. Every line carries:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `schema` | string | `fleet-events/1` |
+| `seq` | int | 1-based, monotonic within one dispatch |
+| `ts` | string | UTC ISO-8601 `YYYY-MM-DDTHH:MM:SSZ` |
+| `dispatch_id` | string | `<UTC timestamp>-<repo slug>`, also the filename stem |
+| `event` | string | Event type (below) |
+
+### Event types
+
+| `event` | Emitted when | Payload beyond the envelope |
+|---------|--------------|-----------------------------|
+| `dispatch_start` | run opens | `mode` (`wave`\|`conductor`), `repo`, `plan` (**basename only**) |
+| `dispatch_plan` | right after start | `waves`, `seats`, `format` |
+| `wave_start` | a wave begins | `wave`, `seats`, `mode` |
+| `seat_dispatch` | a seat goes out (first try or retry) | `task_id`, `agent`, `branch`, `wave`, `provider`, `model`, `worker`, `attempt` |
+| `seat_exit` | a seat finishes | `task_id`, `agent`, `branch`, `wave`, `provider`, `worker`, `status`, `exit`, `duration_s`, `attempt`, optional `reason` |
+| `ratecap` | vendor returned exit 75 | `task_id`, `agent`, `wave`, `provider`, `worker`, `cooldown_minutes` |
+| `failover` | a retry landed on a different vendor | `task_id`, `agent`, `branch`, `from_provider`, `to_provider`, `attempt` |
+| `human_wait` | dispatcher blocks on the operator | `kind` (`wave_gate`\|`failure_gate`), `wave`, `next_wave`, `waiting_on` (short label) |
+| `human_resume` | the operator answered | `kind`, `wave`, `answer` (`continue`\|`abort`) |
+| `wave_end` | a wave closes | `wave`, `seats`, `succeeded`, `failed` |
+| `seat_log` | log collected | `task_id`, `agent`, `log` (**filename only**) |
+| `dispatch_end` | run closes (also on Ctrl-C, via trap) | `status` (`completed`\|`aborted`), `total`, `succeeded`, `failed`, `duration_s` |
+
+`seat_exit.status` ∈ `success` · `failed` · `blocked` (guardrails, exit 77) ·
+`ratecap` (exit 75) · `unavailable` (exit 69).
+
+### Redaction law (writer-enforced)
+
+* **No transcript bodies, prompts, task descriptions, or handoff prose.** The
+  dispatcher never passes `TASK_DESC` to an event; `tests/run-desk-live-tests.sh`
+  greps for that regression.
+* Plans and logs travel as **basenames**, never absolute paths.
+* Values are control-char stripped, newline-flattened, and truncated to 200
+  chars; keys must be `lower_snake` or they are dropped; empty values are
+  omitted instead of being emitted as `""`.
+* Numbers (`exit`, `wave`, `duration_s`, `attempt`, counts) are JSON numbers;
+  `task_id` stays a string so a branch or id that looks numeric never changes type.
+
+### Opt-out and overrides
+
+| Variable | Effect |
+|----------|--------|
+| `FLEET_EVENTS=0` | writes nothing at all (dispatch behaves exactly as before) |
+| `FLEET_EVENTS_DIR=/path` | write the stream somewhere else (default `logs/fleet-events`) |
+
+An unwritable directory disables the stream with a warning — a dispatch is never
+failed by its own telemetry.
+
+### Projection (`live/1`) — `site/experience/data/live.json`
+
+`scripts/desk_live.py` folds the stream (resolved via `--dispatch-id`, else the
+`latest` pointer, else the newest `*.jsonl`) into:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `schema` | string | `live/1` |
+| `generated_at` | string | UTC build time |
+| `dispatch_id` / `source` | string | run id and the repo-relative stream path |
+| `repo` / `plan` | string | from `dispatch_start` |
+| `mode` | string | `wave` (parallel lanes) or `conductor` (serial spine) |
+| `status` | string | `idle` · `running` · `settled` · `aborted` |
+| `reason` | string | why it is idle (teaches the next command) |
+| `wave` | object | `{current, total}` |
+| `seats[]` | array | one per `task_id`: `agent`, `branch`, `wave`, `provider`, `worker`, `model`, `status`, `pipeline`, `exit`, `attempt`, `started_at`, `ended_at`, `duration_s`, `elapsed_s` (running), `providers_tried[]`, `failovers[]`, `ratecapped`, `log` |
+| `counts` | object | pipeline counts: `queued`, `in_flight`, `blocked`, `settled`, `total` |
+| `waiting_on[]` | array | first-class strip: open human gates, then rate-capped seats, else the longest-running seat. Each entry has `kind` (`human_gate`\|`ratecap`\|`seat`), `label`, `since` |
+| `last_event_ts` | string | newest event timestamp seen |
+| `staleness` | object | `{seconds, state, stale_after_s: 120, offline_after_s: 900}`; `state` ∈ `live` · `stale` · `offline` · `none` |
+| `events_seen` | int | lines folded |
+| `recent_events[]` | array | last 50 raw events (already redaction-safe) |
+| `warnings[]` | array | malformed lines, unknown event schema |
+
+Honesty rules the projector enforces:
+
+* a seat still marked `running` after `dispatch_end` becomes **`unknown`**, never
+  an eternal spinner;
+* an old stream reads `stale` then `offline` — never `live`;
+* an empty events dir projects `idle` with a reason, not an empty "running" desk;
+* malformed lines are skipped and counted in `warnings`, never guessed at.
+
+### Running it
+
+```bash
+make desk-live                     # watch + serve http://127.0.0.1:8777/live/ (SSE at /events)
+make desk-live PORT=9000           # different port
+make desk-live-once                # write live.json once, no server (file:// desks)
+python3 scripts/desk_live.py --watch          # rewrite live.json on a timer, no server
+python3 scripts/desk_live.py --once --dispatch-id 20260729-100000-dev-agents --print
+```
+
+The server binds loopback only, serves `site/experience/`, and adds two routes:
+`/live.json` (always fresh) and `/events` (SSE, one `event: live` frame per
+projection change plus keep-alives). Pages that cannot use SSE poll
+`data/live.json`; `file://` desks use `--watch` / `--once`.
+
 ## Migration v1 → v2
 
 `schema_version` went to `2` because two published keys changed meaning or name.

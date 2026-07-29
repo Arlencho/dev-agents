@@ -140,14 +140,52 @@ company-scoped pipeline strip, its **missions**, then joined work trails →
 **Open Work for &lt;company&gt;** for that product’s joined trails only.  
 Unlinked work (e.g. black-aces without a company join) stays on **Global** with an honest label.
 
-### The Ops Floor (Phase A shell)
+### The Ops Floor
 
-**Floor** (`site/experience/live/index.html`) is the live radar's structure
-without a live run: ghost Wave lanes, a dashed Conductor spine, an empty
-waiting-on strip, and an offline LED. It teaches the Phase B path
-(`make desk-live`, `logs/fleet-events/*.jsonl`) and never renders fake agents,
-fake timers, or invented live state. Live state will **never** be stored in
-`index.json` — see the v2 SYNTHESIS §3 Phase B.
+**Floor** (`site/experience/live/index.html`) is the live radar. With no
+`live.json` in the build it is the honest teach shell: ghost Wave lanes, a
+dashed Conductor spine, an empty waiting-on strip, and an offline LED — never
+fake agents, fake timers, or invented live state. When
+`site/experience/data/live.json` (schema `live/1`) exists, the Floor renders a
+labeled snapshot of it: ambient LED (live / STALE / offline), the waiting-on
+strip, pipeline counts, Wave seat lanes grouped by wave (ghost lanes for plan
+seats not yet started), a Conductor serial spine when `mode=conductor`, repo +
+plan hierarchy context when the stream carries them, and a redaction-safe
+event tail. Live state will **never** be stored in `index.json` — see the v2
+SYNTHESIS §3 Phase B.
+
+### The live data path (Phase B)
+
+`scripts/dispatch.sh` appends redaction-safe JSONL events to
+`logs/fleet-events/<dispatch_id>.jsonl` (+ a `latest` pointer), and
+`make desk-live` folds them into `site/experience/data/live.json`
+(schema `live/1`: `waiting_on`, `seats`, `mode`, `staleness`, `last_event_ts`)
+while serving the desk on `http://127.0.0.1:8777/live/` with SSE at `/events`.
+
+```bash
+make desk-live          # watch + serve (Ctrl-C to stop) — run it beside a dispatch
+make desk-live-once     # write live.json once, no server (file:// desks)
+FLEET_EVENTS=0 ./scripts/dispatch.sh ...   # opt out of the stream entirely
+```
+
+The Floor page loads `assets/floor.js`, a tiny poller that re-reads
+`data/live.json` every few seconds over http and repaints the LED, waiting-on
+strip, pipeline counts, lanes/spine, and event tail in place — recomputing
+staleness from the projection's own thresholds, so a stream that stops goes
+STALE then OFFLINE on its own. The build-time renderer derives staleness the
+same way (from `last_event_ts` against the projection's `stale_after_s` /
+`offline_after_s`, never from the stored `staleness.state` alone), so a
+`live.json` left behind by a dead run rebuilds as STALE/OFFLINE on both the
+Floor and the home teaser — the teaser has no poller, so its build-time
+derivation is the whole product there. Over `file://` the fetch is usually
+blocked; there the build-time snapshot stays on screen (refresh with
+`make desk-live-once` + `make experience`). Either way only stream facts are
+rendered.
+
+Never in the stream: task descriptions, prompts, transcripts, absolute paths.
+Logs and plans travel as **filenames**. Full schema:
+[`experience-data.md` § Live event stream](experience-data.md#live-event-stream-phase-b--logsfleet-eventsjsonl).
+The home page's Live teaser mirrors the same projection snapshot when present.
 
 ---
 
