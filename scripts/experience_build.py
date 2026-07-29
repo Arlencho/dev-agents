@@ -114,7 +114,10 @@ class Renderer:
             status = esc(c["status"])
             # Placeholder status must not ride on opacity alone (a11y): a dim
             # chip also carries the status as visible text, not just a tooltip.
-            mark = f'<span class="chipmark">{status}</span>' if dim else ""
+            # Leading space inside the span keeps a word boundary in the
+            # accessible name (screen readers must hear "id status", not the
+            # glued "idstatus"); visible spacing still comes from CSS margin.
+            mark = f'<span class="chipmark"> {status}</span>' if dim else ""
             chips.append(
                 f'<a class="chip{" dim" if dim else ""}" href="{pre}company/{esc(c["id"])}/index.html"'
                 f' title="{esc(c["id"])} · {status}"{current}>{esc(c["id"])}{mark}</a>'
