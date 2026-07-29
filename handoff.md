@@ -1,126 +1,136 @@
-# Handoff — CRITIC batch 2 of 2 (verify only), Fleet Desk Wave 2 UI craft (PR #47, `feat/fleet-desk-ui`)
+# Critic loop 2 — PR #48 `feat/fleet-desk-phase1-data`
 
-Seat: frontend-critic (Opus). Verifying producer REVISE `53ccdc6` against critic batch 1 (`0e77687`).
-Verify only — no redesign, no re-implementation, no production code written.
+**VERDICT: APPROVE.**
 
-## VERDICT: APPROVE
+Verify-only pass over `abd6736` (producer REVISE) + `59b7bff` (handoff), branch
+tip `59b7bff`. Every blocking item B1–B4 was re-killed by re-introducing the
+original mutant against the **committed** tree. All four are load-bearing. No
+production logic moved. Nothing was redesigned or re-implemented.
 
-Both blocking items are resolved **and the guard that protects them is load-bearing** (proven by
-mutation, not by reading the diff). One new non-blocking a11y nit (N5) is filed below; it must
-**not** trigger a third round — fold it into any later commit or ship as-is.
+## Built
 
-| Item | Status | Proof |
-|------|--------|-------|
-| B1 crumb 404s | **RESOLVED** | crumbs resolve on real site + fixture |
-| B1b link-integrity gate | **RESOLVED, load-bearing** | mutation → exit 1, 7 broken links named |
-| N1 chip status not opacity-only | **RESOLVED** (see N5) | mutation-guarded |
-| N2 inline-style invariant | **RESOLVED** | mutation → 2 FAILs |
-| N3 `home()` helpers | **RESOLVED, zero output drift** | full-site diff classified |
-| N4 About copy | **RESOLVED, contract intact** | join/PMI/schema identical to `main` |
+Nothing. This is a review. `git status` is empty, `scripts/experience_data.py`
+was never edited in the working tree — all mutation ran in throwaway copies
+under `/tmp/mut/` (`cp -R` of the repo incl. `.git`, so git-derived facts stay
+real). The only file this pass writes is this `handoff.md`.
 
-## Verification (executable)
+## Evidence
 
-**Baseline + final, clean tree, `53ccdc6`:**
+Control first: the isolated copy reproduces the committed baseline, so a RED
+result below is attributable to the mutant and not to the harness.
+
 ```
-$ bash tests/run-experience-tests.sh
-== 124 passed, 0 failed ==   EXIT=0
-  ok   fixture: every relative href resolves (BROKEN: 0)
-  ok   site: every relative href resolves (BROKEN: 0)
-  ok   dim chip marks placeholder status as visible text
+make test              (working tree)  == 188 passed, 0 failed ==  All test suites passed.
+tests/run-experience-tests.sh (/tmp/mut/base, pristine copy)
+                                       == 188 passed, 0 failed ==
 ```
 
-**B1 — crumbs resolve (real site, not fixture-only):**
+Each mutant re-applied to a fresh copy of the committed tree, each proven
+non-no-op by `git diff` before running:
+
+| # | Mutation (anchor verified unique) | Result | Killing assertions |
+| --- | --- | --- | --- |
+| **B1** | `proven_loop_evidence(specialized, …)` → `(packs, …)` | **179 / 9 RED** | `shared default pack never grants P3`, `no role cites a default pack as evidence`, `no git: default pack promotion still grants no P3`, `git: over-qualified default pack still grants no P3` (+5) |
+| **B2** | `if p2_ok and evidence:` → `if evidence:` | **184 / 4 RED** | `evidence without the P2 outcome bar stays below P3`, `P3 needs the P2 outcome bar too`, `n_done<5 stays P1 even at 80%`, `specialized pack alone never grants P2` |
+| **B3** | drop `and s["revisions"] >= PMI_GATES["p3_min_pack_revisions"]` | **186 / 2 RED** | `pack born at v2 but never revised is not a proven loop`, `git: v2 pack with exactly 1 commit is not a proven loop` |
+| **B4** | remove `f"-n{int(depth)}"` from `git_file_history` | **187 / 1 RED** | `git: history is truncated AT the published depth` |
+
+Every count matches the producer's reported figures exactly (188/0, 179/9,
+184/4, 186/2, 187/1). The claimed evidence is reproducible, not narrated.
+
+**B1 and B3 are each killed in more than one environment** (fixture build,
+`--no-git` projection, throwaway git repo), so a single weak environment cannot
+hide either mutant — the producer's multi-environment claim holds.
+
+### No silent production change (P3 path intact)
+
 ```
-role/frontend-critic     -> ../../roles/index.html     => EXISTS
-skill/docs-no-hallucinate-> ../../skills/index.html    => EXISTS
-learning/olympus-...     -> ../../learnings/index.html => EXISTS
+git diff 7cb1bd6..HEAD -- scripts/     -> empty
+git diff 3f6669d..HEAD -- scripts/experience_data.py -> empty
+git diff --name-only 3f6669d..HEAD | grep -vE '^(tests/|docs/|handoff.md)'  -> no matches
 ```
 
-**B1b — the gate genuinely goes RED.** Reintroduced the exact original bug
-(`scripts/experience_build.py:539` → `("← Roles", "../index.html")`):
-```
-$ bash tests/run-experience-tests.sh   # EXIT=1
-BROKEN: 5
-   role/fixture-builder/index.html -> ../index.html      (+4 more)
-  FAIL fixture: every relative href resolves (BROKEN: 0)
-BROKEN: 2
-   role/frontend-critic/index.html -> ../index.html
-   role/web-frontend/index.html -> ../index.html
-  FAIL site: every relative href resolves (BROKEN: 0)
-== 122 passed, 2 failed ==
-```
-A `class="crumb"` grep is satisfied by a 404; this crawl is not. It names the offending
-`file -> href`, so the next regression is diagnosable, not just red. Crawler coverage checked
-against the current renderer's output shape: no query-string hrefs, no single-quoted hrefs, no
-`src=`/`srcset=` attributes, and no link resolving outside the site root — no live blind spot.
+`scripts/experience_data.py` is byte-identical to the originally reviewed
+commit. The P3 gate (`compute_pmi` ll. 946–955, `proven_loop_evidence` ll.
+912–937) is unchanged. The REVISE fixed *tests*, which is exactly what the
+REVISE asked for — no defect was invented to justify a production edit.
 
-**N2 — invariant is real.** Injected `style="color:red"` on the home pagehead:
-```
-FAIL no inline style= attributes in fixture HTML
-FAIL no inline styles in site HTML          == 122 passed, 1 failed ==
-```
-No false positive on `rel="stylesheet"` (baseline green).
+### Independent mutants (not in the producer's set)
 
-**N1 — guard is real.** Removed the `chipmark` span:
+I did not simply re-run the producer's script. Four extra mutants on the areas
+flagged for re-check, all **RED**:
+
+| Area | Mutation | Result |
+| --- | --- | --- |
+| pairing | `p["reviewed_by"] = [...]` → `[]` | 185 / 3 RED |
+| schema v2 | `SCHEMA_VERSION = 2` → `3` | 184 / 4 RED |
+| snapshot privacy | leak `handoff_sections` into snapshot trails | 187 / 1 RED |
+| git-history | hardcode `history_truncated: True` | 187 / 1 RED |
+
+The last one confirms the "asserts the cap from both sides" claim: the flag
+cannot be hardcoded, `git: an untruncated pack is not falsely flagged` catches it.
+
+### Schema v2 honesty
+
+Docs match code, checked against constants rather than prose:
+`MARKDOWN_CAP = 12000` (l. 72) vs doc "≤ 12000 chars"; `GIT_LOG_DEPTH = 20`
+(l. 61) vs doc "≤ `history_depth` (20)". The two newly documented rows are real,
+verified against built output, not just declared:
+
 ```
-FAIL dim chip marks placeholder status as visible text   == 123 passed, 1 failed ==
+trail has handoff_truncated: True
+role_stats has role:         True
 ```
 
-**N3 — "byte-identical" claim verified, not taken on trust.** Built the same fixture at
-`b6e3df0` (pre-refactor) and `53ccdc6`, then classified **every** differing line across all 46
-pages:
-```
- 46 > [CHIPMARK line]      (N1, intended)
- 10 < [CRUMB-OLD ../index.html] -> 5 roles + 3 skills + 2 learnings [CRUMB-FIX]  (B1, intended)
-  4 > [ABOUT-COPY]         (N4, intended)
-  0   unaccounted
-```
-The `home()` split contributed no output change. Every page differs only because the chip lives
-in the shared header.
+### gh soft-fail (the producer's own open question) — verified by hand
 
-**N4 — Wave 1 contract boundary intact.** Fixture data at `main` vs `HEAD`:
-```
-join/company/wave/status identical: True
-PMI identical: True
-schema_version: 1 -> 1
-```
-The PR does touch `scripts/experience_data.py` (7 lines), but it is the Wave 2 `phase_note`
-extraction only (`'## Active phase'` heading → `'| Wave plan | fixture |'`, the actual note),
-landed in `b6e3df0` and outside batch 1's blocking scope. No join rule, no PMI, no schema change.
-About copy present on the real site.
+Exercised with a poisoned `PATH`, since the suite does not cover it:
 
-**SYNTHESIS §4–§6:** §4.1 routes all present and now all reachable (the crumb fix restores the
-back-edge). §6.5 static-is-a-feature — no JS added. §6.7 "status not color-only" — satisfied by
-N1. §6.8 green/red only with text labels — unchanged.
+```
+PATH=/usr/bin:/bin            -> BUILD OK, gh_enrichment: unavailable | gh not on PATH
+gh stub exiting 1             -> BUILD OK, gh_enrichment: unauthenticated | gh auth status failed
+gh stub: junk stdout, exit 0  -> BUILD OK, gh_enrichment: ok, 0 PRs / 0 issues resolved
+```
 
-## N5 — NON-BLOCKING, do not open a third round
+The contract "gh enrichment never fails the build" **holds in all three**, and
+no links are invented in any of them (`trails with pr_url: 0`). `gh_index`
+returns a status/reason on every failure path and never raises.
 
-The N1 a11y fix slightly degrades the very thing it improves: the accessible *name*. Inline
-elements contribute no implicit whitespace (accname §4.3.1 step 2F), so the chip is announced as
-one glued word. `scripts/experience_build.py:117`:
-```
-$ bash /tmp/n5-accname.sh site/experience     # EXIT=1
-GLUED ACCESSIBLE NAMES: 3
-   'aegisplaceholder'   'rios-operatorplaceholder'   'wearforrunplaceholder'
-```
-Sighted users are fine (CSS `margin-left: 5px`); screen-reader users hear `aegisplaceholder`.
-Before N1 the name was `aegis`, so this is a small net regression on that one axis.
+## Decisions
 
-One-character fix — a leading space inside the span (visually identical, margin already owns the gap):
-```
-'<span class="chipmark"> {status}</span>'   ->   accname 'aegis placeholder'
-```
+- **Approving with the gh gap open.** B1–B4 were the blocking set; all four are
+  now pinned and independently re-killed. The untested gh degradation paths are
+  a coverage gap, not a defect — I verified the actual behavior by hand and it
+  is correct. Blocking a green, reproducible fix on a follow-up test would be
+  scope creep.
+- **Accepted the deleted assertion.** `git: a single-commit pack is not a proven
+  loop` was removed as doubly vacuous. Its replacement, `git: v2 pack with
+  exactly 1 commit is not a proven loop`, is confirmed load-bearing by the B3
+  mutant, so coverage went up, not down.
+- **Did not sign off on counts alone.** 188 green assertions prove nothing by
+  themselves; the eight mutants above are the actual basis for this APPROVE.
 
 ## Do not repeat
 
-- A `grep` for a class name proves markup exists, never that it *resolves*. Link-shaped
-  assertions need a crawl.
-- A new guard is worth nothing until you break the code and watch it fail. All four guards in
-  this PR were mutation-tested before approval.
-- Visible text is not the same as accessible name: adding a `<span>` next to text changes what a
-  screen reader announces (no implicit space).
+- Don't re-run the producer's mutation script and call that verification. It
+  proves the script works, not that the tests bite. Mutate the **committed**
+  tree yourself and diff before running.
+- Don't mutate in the working tree. Use `cp -R` including `.git` — B1's revision
+  counts and B4's depth cap are read from real git history, so a copy without
+  `.git` silently changes what is being tested.
+- Don't treat `== N passed, 0 failed ==` as the control. Run the pristine copy
+  first; without that, a RED could be the harness rather than the mutant.
 
-## State
+## Open questions (non-blocking, for follow-up)
 
-Tree clean at `53ccdc6`; `site/experience/` is gitignored, so the mutation builds left no dirt.
-Temporary worktrees removed. No files modified by this seat except `handoff.md`.
+1. **Cosmetic honesty nit, new observation.** A `gh` that exits 0 while emitting
+   non-JSON gets `status: "ok"` with the garbage echoed into
+   `gh_enrichment.repo` (observed: `"repo": "not json <<<"`). No links are
+   invented and the build is fine, so this is not a defect — but `repo` is
+   currently whatever `gh repo view -q .nameWithOwner` prints, unvalidated. A
+   one-line slug shape check (`owner/name`) would close it. Contrived scenario;
+   filed, not blocked.
+2. `role_name_fallback` remains unexercised by the suite (producer's note, still
+   true).
+3. `make experience-snapshot` output path still not gitignored — deliberate per
+   SYNTHESIS §10, owner call, untouched.

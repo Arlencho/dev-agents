@@ -144,7 +144,7 @@ class Renderer:
 {body}
     </main>
     <footer class="footer">
-      <span>Fleet Desk Phase 0 · read-only</span>
+      <span>Fleet Desk Phase {esc(self.d.get("phase", 0))} · read-only</span>
       <span>rebuild: <span class="mono">make experience</span></span>
       <span>data: <a href="{pre}data/index.json">data/index.json</a> (schema v{esc(self.d["schema_version"])})</span>
       <span>law: <span class="mono">{esc(self.d["law"])}</span></span>
@@ -289,7 +289,7 @@ class Renderer:
     <div class="stats" role="group" aria-label="Fleet totals">
       <div class="stat"><div class="num">{n_trails}</div><div class="lbl">trails</div></div>
       <div class="stat"><div class="num">{esc(done_pct)} <small>· n={fleet["n_done"]}</small></div><div class="lbl">done</div></div>
-      <div class="stat"><div class="num">{fleet["critic_rate"]:.0%} <small>of trails</small></div><div class="lbl">critic share</div></div>
+      <div class="stat"><div class="num">{fleet["critic_rate"]:.0%} <small>{esc(fleet.get("critic_rate_label", "of trails"))}</small></div><div class="lbl">critic share</div></div>
       <div class="stat"><div class="num">{c["waves"]}</div><div class="lbl">waves</div></div>
       <div class="stat"><div class="num">{c["companies"]}</div><div class="lbl">companies</div></div>
       <div class="stat"><div class="num fit">{esc(vendor_mix)}</div><div class="lbl">vendor mix</div></div>
@@ -517,7 +517,7 @@ class Renderer:
     <div class="card">
       <p class="muted">P2 requires outcomes: n_done ≥ {policy["p2_min_done"]} and success ≥
       {policy["p2_min_success"]:.0%} — a dedicated pack alone never grants P2.
-      Phase 0 caps display at {esc(policy["phase0_cap"])}: {esc(policy["cap_reason"])}.
+      Display caps at {esc(policy["display_cap"])}: {esc(policy["cap_reason"])}.
       Percentages always sit next to their <em>n</em>.</p>
       {('<div class="tablewrap"><table><thead><tr><th>Role</th><th class="num">n</th><th class="num">done</th><th class="num">fail</th><th>success</th><th>vendors</th><th>PMI</th></tr></thead><tbody>' + rows + "</tbody></table></div>") if rows else '<p class="empty">No role data yet — dispatch a task, then <code>make experience</code>.</p>'}
     </div>
@@ -695,7 +695,7 @@ class Renderer:
       <h2 class="sec">PMI</h2>
       <p>P0 n&lt;{policy["p1_min_n"]} · P1 n≥{policy["p1_min_n"]} ·
       P2 n_done≥{policy["p2_min_done"]} AND success≥{policy["p2_min_success"]:.0%} ·
-      P3 Phase 1 only (display capped at {esc(policy["phase0_cap"])}: {esc(policy["cap_reason"])}).</p>
+      P3 P2 plus proven-loop evidence (display capped at {esc(policy["display_cap"])}: {esc(policy["cap_reason"])}).</p>
       <h2 class="sec">Build warnings</h2>
       {warnings}
       <h2 class="sec">How to refresh</h2>
