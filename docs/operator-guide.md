@@ -121,6 +121,27 @@ Raw logs stay under `logs/` (gitignored). Promote **sanitized** lessons into `le
 
 ---
 
+## Evidence Scorecard
+
+After Ground Truth, aggregate fleet quality from existing handoffs (read-only):
+
+```bash
+make evidence
+# or: ./scripts/wave-report.sh
+# filter: ./scripts/wave-report.sh --wave 11
+# stdout only: ./scripts/wave-report.sh --no-write
+```
+
+**Reads:** `wave-plans/*/handoffs/*.jsonl` + `*.md` (do-not-repeat), `wave-plans/ab-metrics.csv`, optional provider-state.
+
+**Writes (local):** `logs/evidence.csv`, `logs/evidence-latest.txt` (gitignored).
+
+Use for: Kimi frontend seat keep/revert (n + success), quality-first routing sanity, skills rework hints. Raw agent transcripts stay out of git.
+
+Related: `make scorecard` (rate-cap / cooldown only).
+
+---
+
 ## Dispatching a Wave
 
 ### Basic Invocation

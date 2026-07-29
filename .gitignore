@@ -21,3 +21,7 @@ learnings/*.jsonl
 
 # Rate-cap sentinel runtime state (per-machine)
 logs/provider-state/
+
+# Evidence scorecard outputs (aggregates; no secrets expected)
+logs/evidence.csv
+logs/evidence-latest.txt
