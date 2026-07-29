@@ -1,56 +1,61 @@
-# Handoff — Fleet Desk polish (OPS)
+# Handoff — Fleet Desk polish N5 (chipmark a11y word boundary)
 
-Branch: `feat/fleet-desk-polish-ops`
+Branch `feat/fleet-desk-polish-n5` → PR #51 (draft). Task was a11y-only; no restyle.
 
 ## Built
 
-- **Mute test ratecap notify** — `scripts/notify.sh` skips the macOS `osascript`
-  toast (stays stdout/GitHub-only) when `FLEET_NOTIFY_SILENT=1` or
-  `NOTIFY_SILENT=1`. `tests/run-failover-tests.sh` exports the silent switch
-  around the ratecap notify path, asserts the stdout fallback line, and proves
-  via an `osascript` shim that the binary is not invoked when silenced (and is
-  invoked unsilenced on macOS). `make test` no longer pops "Provider
-  Rate-Capped" toasts.
-- **gh non-JSON honesty** — `scripts/experience_data.py` `gh_index()`: an
-  exit-0 `gh repo view` whose payload is not an `owner/repo` slug, or an exit-0
-  `gh pr list` / `gh issue list` that does not return a JSON array, now yields
-  `status: bad_payload` with a clear `reason` (never `ok` with garbage).
-  Never-fatal contract unchanged. New offline test A2.3d in
-  `tests/run-experience-tests.sh` drives a fake `gh` on PATH that exits 0 and
-  prints `not json` (plus non-array JSON and a happy-path case so the rig is
-  not vacuous). `docs/experience-data.md` status list updated.
-- **dev-agents registered as fleet product** — `companies/dev-agents.md`
-  (`status: active`, `github_repo: Arlencho/dev-agents`, `repo: .`, short
-  charter: multi-vendor fleet orchestration tooling). `load_learnings()` now
-  skips the product-learnings scan when the company repo resolves to the
-  projected repo itself, so `repo: .` does not duplicate this repo's learnings.
+- `scripts/experience_build.py:121` — dim-chip chipmark now renders
+  `<span class="chipmark"> {status}</span>` (leading space inside the span).
+  Before, `…{esc(id)}{mark}` produced `<a …>ghostco<span class="chipmark">placeholder</span></a>`,
+  so the accessible name was the glued "ghostcoplaceholder"; now it is
+  "ghostco placeholder" with a word boundary.
+- `tests/run-experience-tests.sh` — dim-chip assertion now requires
+  `chipmark"> placeholder` (with space), plus a new regression check
+  "chipmark accessible name keeps a word boundary (no glued names)" that
+  goes RED if `<span class="chipmark">placeholder` (glued form) returns.
 
-## Decisions
+## Decisions (+why)
 
-- New status value `bad_payload` (not folded into `error`) so a working-but-
-  lying `gh` is distinguishable from a failing one; added to the Part B
-  allowed-status assertion.
-- Issue-list non-zero exit remains silently tolerated (pre-existing behavior,
-  out of scope); only exit-0 garbage flips to `bad_payload`.
-- No join-map entries added — the `dev-agents` company joins via the existing
-  `github_repo`/`name_token` rules only. Verified against the real projection:
-  no existing trail's join changed (all 19 `feat-ab` trails stay `unlinked`),
-  and no company was invented.
+- Whitespace went **inside the span text**, not between `</a>` text nodes and
+  not via CSS. Text inside the element survives HTML whitespace collapsing and
+  is picked up by accessible-name computation; a space between the id text and
+  the span would also work, but keeping it inside the span makes the invariant
+  greppable as one literal string (`chipmark"> placeholder`), which is what the
+  test pins.
+- Did not use `&nbsp;` — a regular space is what screen readers treat as a word
+  break and it keeps the markup plain.
+- Visuals untouched on purpose: `.chip .chipmark` already has
+  `margin-left: 5px` (`templates/experience/site.css:110-113`), so the extra
+  collapsible space adds no meaningful layout shift. No CSS changes, no redesign.
 
 ## Do not repeat
 
-- Don't "simplify" the notify test back to `>/dev/null 2>&1` — the stdout
-  assertion and the osascript shim are the only proof the silent switch works.
-- Don't put `repo: .` on a company without the self-repo learnings guard;
-  without it every learning in this repo is duplicated as `<company>-<slug>`.
+- Don't try to fix this with `title=` or `aria-label` on the chip — the visible
+  text already carries the status (that was the earlier a11y fix); the only
+  defect was the missing word boundary in the computed name.
+- Don't assert on rendered `site/experience/` output in tests; the suite
+  renders the fixture (`$FIXOUT`) fresh each run. Real-site output is a build
+  artifact.
 
 ## Evidence
 
-- `make test` → `== 222 passed, 0 failed ==` / `All test suites passed.`
-- `./tests/run-failover-tests.sh` → `9 passed, 0 failed` incl.
-  `silent: osascript not invoked (0)` and
-  `unsilenced on macOS: osascript invoked (1)`.
-- `./tests/run-experience-tests.sh` → includes
-  `ok gh: exit-0 garbage is bad_payload, never ok (fake gh on PATH)`.
-- Real projection: `dev-agents: active Arlencho/dev-agents trails: 0`,
-  `learnings: 4 dupes: 0`, `gh: ok Arlencho/dev-agents`.
+- `make test` → `== 222 passed, 0 failed ==` then "All test suites passed."
+- New check runs and passes: `ok chipmark accessible name keeps a word boundary (no glued names)`
+- Rendered fixture HTML contains `chipmark"> placeholder` (verified in
+  `site/experience/index.html`, ×3, after the suite's `make experience` run).
+- Commit `53ab84f` on `feat/fleet-desk-polish-n5`, pushed with upstream.
+
+## Open questions
+
+- None blocking. If a critic wants byte-identical pre-fix visuals, note the
+  added space is collapsible and sits next to a 5px CSS margin — effectively
+  invisible; deliberate trade for a greppable a11y invariant.
+
+## Next hint (critic)
+
+- Mutation-check the new test: revert the space in
+  `scripts/experience_build.py` (`chipmark"> {status}` → `chipmark">{status}`)
+  and confirm both dim-chip assertions go RED and nothing else does.
+- Confirm no other renderer path emits `.chip` + `.chipmark` (only
+  `experience_build.py` builds chips; grep `chipmark` returns the renderer,
+  the test, and the CSS).

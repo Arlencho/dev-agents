@@ -331,8 +331,15 @@ grep -q 'make experience' "$FIXOUT/company/ghostco/index.html" && ok "empty comp
 grep -q 'class="pmi band-p2">P2' "$FIXOUT/role/fixture-veteran/index.html" && ok "PMI band rendered as badge" || bad "PMI band rendered as badge"
 grep -q 'PMI inputs' "$FIXOUT/role/fixture-builder/index.html" && ok "PMI disclosure present" || bad "PMI disclosure present"
 grep -q 'class="chip dim"' "$FIXOUT/index.html" \
-  && grep -q 'chipmark">placeholder' "$FIXOUT/index.html" \
+  && grep -q 'chipmark"> placeholder' "$FIXOUT/index.html" \
   && ok "dim chip marks placeholder status as visible text" || bad "dim chip marks placeholder status as visible text"
+# a11y: chipmark text must start with a space so the accessible name keeps a
+# word boundary ("ghostco placeholder", not the glued "ghostcoplaceholder").
+if grep -q '<span class="chipmark">placeholder' "$FIXOUT/index.html"; then
+  bad "chipmark accessible name keeps a word boundary (no glued names)"
+else
+  ok "chipmark accessible name keeps a word boundary (no glued names)"
+fi
 assert_links_resolve "fixture: every relative href resolves (BROKEN: 0)" "$FIXOUT"
 
 # ── Phase 1 UI bind (fixture) ───────────────────────────────────────
