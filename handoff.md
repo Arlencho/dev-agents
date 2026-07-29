@@ -1,216 +1,104 @@
-# Critic verdict — PR #48 Fleet Desk Phase 1 data contract (schema v2)
+# Handoff — PR #48 revision after critic REVISE (B1–B4)
 
-**VERDICT: REVISE** (narrow — test coverage only; **no production bug found**)
-
-Branch `feat/fleet-desk-phase1-data` @ `7cb1bd6`. Verify-only pass: no production
-file modified, working tree clean.
-
-Every claim in the PR body verifies, and all seven requested checks pass
-functionally. The revise is for four **surviving mutants** on the headline P3
-gate: the code is correct today, but the contract's central promise is not pinned
-by any test, and one mutant silently inflates the **real fleet's** published PMI
-bands while all 178 tests stay green.
-
----
+Branch `feat/fleet-desk-phase1-data` @ `abd6736`. Scope: **fixtures and
+assertions only**. `scripts/experience_data.py` is byte-identical to the
+reviewed commit — the critic found no production defect and mutation confirmed
+none, so none was invented.
 
 ## Built
 
-Adversarial verification only. Mutation harness in a throwaway clone (`/tmp/mut`);
-scratch git fixtures in `/tmp/{deep,honest,nopair}`. Nothing added to the repo
-except this handoff.
+All four blocking items were the same defect in the *tests*: every existing P3
+assertion was satisfied by a role that passed or failed the gate for some
+**other** reason, so no single clause of the gate was load-bearing. The fix is
+one fixture per clause, each shaped to clear the P2 outcome bar independently,
+so only the clause under test holds its band.
+
+| Item | Fixture added | Pins |
+| --- | --- | --- |
+| **B1** | `skills/evidence-first/SKILL.md` → `version: 2` + cites new `learnings/lesson-default.md`. It is a **shared default** pack held by `fixture-veteran` (5/5 done). | Default packs are excluded from P3 evidence. The pack qualifies on **both** proofs, so `specialized` → `packs` cannot survive. |
+| **B2** | `fixture-runner` now holds the evidence-bearing `fixture-pack` (config only; it already had `n_done=4`, `success=0.8`). | P3 requires the P2 **outcome** bar, not just evidence. Only `n_done` keeps this role down. |
+| **B3** | New pack `skills/fixture-solo-pack/SKILL.md` (v2, promotes nothing, never revised) + new role `fixture-solo` with 5 done trails (`wave-plans/8/`). | `revisions ≥ 2`, i.e. "actually revised, not merely born at v2". |
+| **B4** | Throwaway git repo grows `fixture-deep-pack` with **23 real commits**; the shell asserts from `git log` that >20 exist, then the projection must publish exactly `history_depth`. | The `-n{depth}` cap is *enforced*, not merely declared. |
+
+Also: `assert_json` gained `S` (skills by id) and `L` (learnings by slug)
+bindings; trail-count assertions 27 → 32; two doc rows for `handoff_truncated`
+and `role_stats.role` (the critic's non-blocking nit — both verified against
+real output before documenting).
 
 ## Evidence
 
-### Baseline green (item 7)
+Baseline green, then each of the critic's four mutations applied to a clean copy
+of the **committed** tree (`cp -R`, `sed`, verified non-no-op by `diff`):
 
 ```
-$ make test
-== 178 passed, 0 failed ==     |  All test suites passed.
+=== BASELINE (committed, unmutated) ===   == 188 passed, 0 failed ==
 
-$ make experience / experience-data / desk / experience-snapshot
-all resolve and run — 19 trails, 5 companies, 9 critic pairs
+=== B1  evidence = proven_loop_evidence(packs, skill_index) ===
+  FAIL PMI: shared default pack never grants P3
+  FAIL PMI: no role cites a default pack as evidence
+  FAIL no git: default pack promotion still grants no P3
+  FAIL git: over-qualified default pack still grants no P3
+  (+5 more)                               == 179 passed, 9 failed ==
 
-$ python3 scripts/experience_build.py …    # after hand-editing schema_version -> 99
-schema mismatch: … is v99, renderer expects v2 — re-run scripts/experience_data.py
-exit code = 1
+=== B2  `if p2_ok and evidence:` -> `if evidence:` ===
+  FAIL PMI: evidence without the P2 outcome bar stays below P3
+  FAIL PMI: P3 needs the P2 outcome bar too      <- was vacuous, now bites
+  (+2 more)                               == 184 passed, 4 failed ==
+
+=== B3  drop `and s["revisions"] >= p3_min_pack_revisions` ===
+  FAIL PMI: pack born at v2 but never revised is not a proven loop
+  FAIL git: v2 pack with exactly 1 commit is not a proven loop
+                                          == 186 passed, 2 failed ==
+
+=== B4  remove `f"-n{int(depth)}"` from git_file_history ===
+  FAIL git: history is truncated AT the published depth
+                                          == 187 passed, 1 failed ==
 ```
 
-PR claim "`make lint` drift is pre-existing" — **verified honest**: identical
-`FAIL: 11 file(s) out of sync` on this branch *and* on clean `main`.
-
-### (1) Schema v2 ↔ docs ↔ shipped JSON — PASS
-
-Field-level diff of `docs/experience-data.md` against the built JSON:
-
-```
-doc-only top: []            undocumented top: []
-doc-only trail: []          undocumented trail: ['handoff_truncated']
-doc-only skill/learning: [] undocumented skill: []   undocumented learning: []
-doc-only pair: []           undocumented pair: []
-undocumented role_stats: ['role']
-phase0_cap present anywhere: False
-```
-
-The two undocumented fields **pre-date this PR** (both present and equally
-undocumented on `main`, via `git show main:scripts/experience_data.py`). Not a
-regression; nit only. `phase0_cap` is genuinely removed, not aliased.
-
-### (2) Skill git history honest — PASS
-
-Proved the two states are never conflated, using real git:
-
-| Case | `skill_history.available` | per-skill | meaning |
-|------|---------------------------|-----------|---------|
-| no git work tree | `False` | `revisions=0`, `history_available=False` | git unreadable |
-| git repo, file uncommitted | `True` | `revisions=0`, `history_available=True` | no commits yet |
-
-Depth cap genuinely applied: a pack with 26 commits yields exactly 20 entries and
-`history_truncated=True`.
-
-### (3) PMI P3 gate — behavior PASS, coverage FAIL (see Blocking)
-
-P2 outcome bar preserved (`compute_pmi` requires `p2_ok` for both P2 and P3);
-`display_cap` is `P3`; `fixture-veteran` (defaults only, 5/5 done) correctly stays
-P2; the Phase 0 "capped at P2" caption is gone everywhere except the migration
-table, where it belongs.
-
-### (4) Critic pairing by branch — PASS
-
-`critic_pairs[]`, `reviewed_by`/`reviews`, and `critic_rate_method: branch_pairing`
-all correct. Forced the documented fallback (re-branched fixture critics onto
-their own branches):
-
-```
-critic_pairs = 0    method = role_name_fallback
-rate = 0.0741  == critic_trails/trails  -> match: True
-```
-
-### (5) `gh` never fatal + redaction + offline fixtures — PASS
-
-```
-gh removed from PATH  -> exit=0  status=unavailable      warnings=[…build continued…]
-gh present, exits 1   -> exit=0  status=unauthenticated  warnings=[…build continued…]
-```
-
-`pr_url` / `pr_state` / `pr_number` / `issue_links_resolved` exist on every trail
-in both cases. Disabling `redact()` is caught by 5 tests. `trails_with_pr: 0` on
-the real repo is **correct, not a bug** — all 19 trails are product-repo
-`feat/ab-T*` branches, which is the foreign-repo guard working as designed.
-
-### (6) Snapshot — PASS
-
-24.9 KiB (matches claim). `0` secret-shape matches, `0` home-path matches, and no
-key containing `body` anywhere in the payload; `git_history` blobs dropped.
-
----
-
-## Blocking — 4 surviving mutants (all fixable with fixtures, no production change)
-
-Each mutation was run through the full suite in a clean clone. "SURVIVED" = the
-mutation changed real output while `== 178 passed, 0 failed ==` still printed.
-
-**B1 — `specialized` → `packs` survives, and inflates the real fleet. (highest)**
-
-`docs/experience-data.md` promises "Shared default packs are excluded on purpose".
-Nothing tests it, because no fixture default pack qualifies as evidence. On the
-**real repo**, `git-ship` is a shared default at `v2` / `revisions=2`, so it does:
-
-```
-mutant: evidence = proven_loop_evidence(packs, skill_index)
-REAL REPO -> frontend-critic band=P3  ev=['git-ship v2 with 2 recorded revisions']
-             web-frontend    band=P3  ev=['git-ship v2 with 2 recorded revisions']
-suite: 178 passed, 0 failed
-```
-
-Fix: a fixture role clearing P2 with **defaults only**, where a *default* pack has
-`version≥2` + `revisions≥2`, asserted to stay P2. (`fixture-veteran` is the right
-role; the fixture just needs a qualifying default pack.)
-
-**B2 — dropping the P2 outcome bar from the P3 gate survives.**
-
-`if p2_ok and evidence:` → `if evidence:`. The existing assertion "P3 needs the P2
-outcome bar too" is **vacuous**: the only evidence-bearing fixture role
-(`fixture-builder`, 6/6) also clears P2 comfortably. Demonstrated by giving
-`fixture-runner` (n=5, n_done=4 → below the bar) the evidence-bearing pack:
-
-```
-correct: band=P1  ev=['fixture-pack promotes lesson-one']
-mutant : band=P3  ev=['fixture-pack promotes lesson-one']
-```
-
-Fix: keep a fixture role with proven-loop evidence but sub-P2 outcomes, asserted
-non-P3.
-
-**B3 — dropping `revisions >= 2` from the version path survives.**
-
-The docstring explicitly guards "actually revised, not merely born at v2", but
-`fixture-pack` is `v2` with `revisions=1`, so the version path never fires in Part
-A — only the promotion path is exercised:
-
-```
-fixture-pack v2 rev=1 promotes=[]
-correct: fixture-veteran band=P2  ev=[]
-mutant : fixture-veteran band=P3  ev=['fixture-pack v2 with 1 recorded revisions']
-```
-
-Fix: assert that a `v2` / `revisions=1` specialized pack with no promotion yields
-no evidence.
-
-**B4 — removing `-n{depth}` from `git_file_history` survives.**
-
-The only depth assertion is `d["skill_history"]["depth"] == 20`, which merely
-echoes the constant. With 26 commits on one SKILL.md:
-
-```
-correct: git_history entries=20  history_truncated=True   (declared depth=20)
-mutant : git_history entries=26  history_truncated=True   (declared depth=20)
-```
-
-The mutant publishes a self-contradicting contract and nothing notices. Fix:
-assert `len(git_history) <= history_depth` for every skill — cheap, and catches it
-without needing a 20-commit fixture.
-
-## Non-blocking nits
-
-- `handoff_truncated` (trails) and `role` (role_stats) undocumented — pre-existing
-  on `main`, worth one doc line while the schema table is open.
-- `gh` **missing** and **erroring** paths are never exercised by the suite (no
-  `PATH=` manipulation). Verified correct by hand; a `PATH=/usr/bin:/bin` build
-  would pin it in one line.
-- `role_name_fallback` is never exercised by a fixture. Verified correct by hand.
-- PR body says "117 before this branch"; `main` actually reports
-  `== 124 passed, 0 failed ==`. Cosmetic.
-- `make experience-snapshot` writes `docs/experience/snapshot/`, which is **not**
-  gitignored (unlike `site/experience/`), so the target leaves untracked files that
-  can be committed by accident. Deliberate per SYNTHESIS §10 ("owner call"),
-  flagged so it stays a decision rather than a surprise. I removed the copy my run
-  generated.
+`make test` → `188 passed, 0 failed` / `All test suites passed.` (was 178; +11
+assertions, −1 superseded). `git diff 7cb1bd6..HEAD -- scripts/` is empty.
 
 ## Decisions
 
-- **REVISE, not APPROVE**, despite zero production defects and a fully green
-  suite: three of the four surviving mutants sit on the P3 gate, which is this
-  PR's headline and the number the console publishes about the fleet. B1 in
-  particular means a single identifier (`specialized`) is the only thing standing
-  between the real roster and across-the-board P3 inflation, with no test to catch
-  its removal. Coverage alone is not sign-off on a risky path.
-- Every finding is a **fixture/assertion addition**. No production change is
-  requested and no UI/visual change is implied.
-- Did not re-implement, redesign, or touch production code.
+- **Each clause is pinned in more than one environment.** B1 is asserted in the
+  fixture build (promotion + version), in the **no-git** projection (promotion
+  only, since it reads files not git), and in the throwaway git repo (default
+  pack at v2 with 2 real commits). A single mutant therefore cannot slip through
+  one weak environment.
+- **B3 is asserted twice on purpose.** The fixture build's revision count comes
+  from *this* repo's real history, so it is asserted as `revisions < 2` (a
+  precondition that fails loudly if the fixture rots). The throwaway git repo
+  pins the exact deterministic case, `revisions == 1`.
+- **B4 asserts the cap from both sides**: `len(git_history) == history_depth ==
+  20` with `history_truncated: true` for the deep pack, and
+  `history_truncated: false` for a shallow pack, so the flag cannot be hardcoded.
+  The ">20 commits actually exist" precondition is read from `git log` itself,
+  not assumed.
+- **Deleted** the old `git: a single-commit pack is not a proven loop`
+  assertion. It keyed on `evidence-first`, which is now excluded as a *default*
+  pack for a different reason, making it doubly vacuous; the new
+  `v2 pack with exactly 1 commit` assertion is the honest version of it.
+- Did not touch production logic, the renderer, CSS, or any UI.
 
 ## Do not repeat
 
-- Don't "fix" B1–B4 by editing `scripts/experience_data.py` — the production logic
-  is already correct. Only the fixtures/assertions are missing.
-- Don't assert `skill_history.depth == 20`; it is a constant echo and proves
-  nothing. Assert the length of the emitted history instead.
-- Don't treat `trails_with_pr: 0` on the real repo as a gh bug — it is the
-  foreign-repo guard behaving correctly for `feat/ab-T*` product trails.
-- Don't build the P2-bar assertion off `fixture-builder`; it clears P2 anyway,
-  which is exactly what made the existing assertion vacuous.
+- Don't "simplify" the fixtures by removing the version bump or the
+  `[ev: learnings/lesson-default.md]` cite from `skills/evidence-first/SKILL.md`.
+  A default pack that does **not** qualify as evidence makes B1 vacuous again —
+  that is exactly the hole that shipped.
+- Don't edit `skills/fixture-solo-pack/SKILL.md`. A second commit touching it
+  makes it a genuine proven loop and `fixture-solo` legitimately goes P3. Both
+  the file header and the fixture README say so.
+- Don't attach the never-revised pack to `fixture-builder` (already P3) or the
+  qualifying default pack to a sub-P2 role — either makes the mutant invisible
+  again. The fixture must clear P2 for *other* reasons.
+- Don't assert `skill_history.depth == 20` alone; it echoes a constant. That
+  assertion is kept, but only alongside the measured length.
 
-## Next hint
+## Open questions
 
-B1 and B4 together are ~6 lines of fixture/assert and cover the two highest-value
-gaps. B2 and B3 each need one small fixture role. Afterwards, re-run the four
-mutations above and confirm each is caught.
+- The `make experience-snapshot` output path still isn't gitignored (critic's
+  nit, deliberate per SYNTHESIS §10). Left as an owner call, untouched.
+- `gh` missing/erroring paths and `role_name_fallback` remain unexercised by the
+  suite (verified by hand in review). Out of scope for B1–B4; would be a cheap
+  follow-up with a `PATH=/usr/bin:/bin` build.
