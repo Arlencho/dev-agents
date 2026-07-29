@@ -322,11 +322,19 @@ get_model() {
                 continue
             fi
             if [[ "$line" =~ ^[[:space:]]*${agent}:[[:space:]]*(.*) ]]; then
-                echo "${BASH_REMATCH[1]}"
+                # Strip inline comments and whitespace (Ground Truth: clean AGENT_MODEL)
+                local val="${BASH_REMATCH[1]}"
+                val="${val%%#*}"
+                val="${val// /}"
+                val="${val//$'\t'/}"
+                echo "$val"
                 return
             fi
             if [[ "$line" =~ ^[[:space:]]*default:[[:space:]]*(.*) ]]; then
                 default_model="${BASH_REMATCH[1]}"
+                default_model="${default_model%%#*}"
+                default_model="${default_model// /}"
+                default_model="${default_model//$'\t'/}"
             fi
         fi
     done < "$ROUTING_CONFIG"
@@ -880,21 +888,40 @@ for i in "${!TASK_AGENT[@]}"; do
             fi
         done
 
-        if [ -n "$whost" ] && [ "$whost" != "localhost" ] && [ "$whost" != "127.0.0.1" ]; then
+        if [ -n "$whost" ]; then
             repo_name=$(basename "$REPO_URL" .git)
             branch_safe="${TASK_BRANCH[$i]//\//-}"
-            # Find the most recent matching log on the worker
-            remote_log=$(ssh -o ConnectTimeout=5 "$whost" "ls -t ~/dev/agent-logs/${repo_name}-${branch_safe}-*.log 2>/dev/null | head -1" 2>/dev/null || echo "")
-            if [ -n "$remote_log" ]; then
-                local_log="$LOGS_DIR/$(basename "$remote_log")"
-                if scp -o ConnectTimeout=5 "$whost:$remote_log" "$local_log" 2>/dev/null; then
-                    RESULT_LOG[$i]="$local_log"
-                    echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$i]}: $(basename "$local_log")"
+            if [ "$whost" = "localhost" ] || [ "$whost" = "127.0.0.1" ]; then
+                # Ground Truth: single-host fleet still writes logs under
+                # ~/dev/agent-logs — collect them into repo logs/ (do not skip).
+                local_src=$(ls -t "$HOME/dev/agent-logs/${repo_name}-${branch_safe}-"*.log 2>/dev/null | head -1 || true)
+                if [ -n "${local_src:-}" ] && [ -f "$local_src" ]; then
+                    local_log="$LOGS_DIR/$(basename "$local_src")"
+                    if cp "$local_src" "$local_log" 2>/dev/null; then
+                        RESULT_LOG[$i]="$local_log"
+                        echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$i]}: $(basename "$local_log") (localhost)"
+                    else
+                        # Fall back to original path if copy fails
+                        RESULT_LOG[$i]="$local_src"
+                        echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$i]}: $local_src (localhost, in-place)"
+                    fi
                 else
-                    echo -e "  ${YELLOW}!${NC} ${TASK_AGENT[$i]}: failed to copy log"
+                    echo -e "  ${YELLOW}-${NC} ${TASK_AGENT[$i]}: no log found in ~/dev/agent-logs (localhost)"
                 fi
             else
-                echo -e "  ${YELLOW}-${NC} ${TASK_AGENT[$i]}: no log found on $whost"
+                # Find the most recent matching log on the remote worker
+                remote_log=$(ssh -o ConnectTimeout=5 "$whost" "ls -t ~/dev/agent-logs/${repo_name}-${branch_safe}-*.log 2>/dev/null | head -1" 2>/dev/null || echo "")
+                if [ -n "$remote_log" ]; then
+                    local_log="$LOGS_DIR/$(basename "$remote_log")"
+                    if scp -o ConnectTimeout=5 "$whost:$remote_log" "$local_log" 2>/dev/null; then
+                        RESULT_LOG[$i]="$local_log"
+                        echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$i]}: $(basename "$local_log")"
+                    else
+                        echo -e "  ${YELLOW}!${NC} ${TASK_AGENT[$i]}: failed to copy log"
+                    fi
+                else
+                    echo -e "  ${YELLOW}-${NC} ${TASK_AGENT[$i]}: no log found on $whost"
+                fi
             fi
         fi
     fi

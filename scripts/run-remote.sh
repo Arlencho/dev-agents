@@ -241,25 +241,56 @@ exit \$AGENT_EXIT
 REMOTE_SCRIPT
 
 REMOTE_EXIT=$?
-REMOTE_LOG_PATH="$LOG_DIR/$LOG_FILE"
+
+# Log path: expand on orchestrator for localhost so ledgers + collection work;
+# keep worker-side $HOME form for true remote hosts.
+# shellcheck source=../providers/lib.sh
+if [ -f "$SCRIPT_DIR/../providers/lib.sh" ]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/../providers/lib.sh"
+elif [ -f "$SCRIPT_DIR/../providers/claude/../lib.sh" ]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/../providers/lib.sh"
+fi
+EFFECTIVE_MODEL="${MODEL:-default}"
+if type effective_model >/dev/null 2>&1; then
+    EFFECTIVE_MODEL="$(effective_model "$PROVIDER" "${MODEL:-}")"
+fi
+if [ "$HOST" = "localhost" ] || [ "$HOST" = "127.0.0.1" ]; then
+    REMOTE_LOG_PATH="$HOME/dev/agent-logs/$LOG_FILE"
+else
+    REMOTE_LOG_PATH="\$HOME/dev/agent-logs/$LOG_FILE"
+fi
 
 # ── Handoff ledger (Phase 1): orchestrator-authored mechanical fields ──
 # The agent writes intent (handoff.md at repo root); everything here is git
 # truth pulled from the worker — it cannot be hallucinated downstream.
 # APPEND-ONLY: attempts for the same task-id (failover retries) accumulate as
 # JSONL lines — truncating would wipe first-vendor provenance + failover event.
+# provenance.model = effective model actually used by the launcher
+# provenance.requested_model = AGENT_MODEL from routing (may be a Claude tier
+# alias ignored by kimi/grok)
 HANDOFF_DIR="$SCRIPT_DIR/../wave-plans/$WAVE/handoffs"
 TASK_ID="${WAVE}-${AGENT}-$(echo "$BRANCH" | tr '/ ' '--')"
 mkdir -p "$HANDOFF_DIR"
-BASE_SHA=$(ssh "$HOST" "cd $WORK_DIR && git rev-parse --short origin/main" 2>/dev/null || echo "unknown")
-HEAD_SHA=$(ssh "$HOST" "cd $WORK_DIR && git rev-parse --short $BRANCH" 2>/dev/null || echo "unknown")
-FILES_TOUCHED=$(ssh "$HOST" "cd $WORK_DIR && git diff --name-only origin/main...$BRANCH" 2>/dev/null || echo "")
-DIFF_STAT=$(ssh "$HOST" "cd $WORK_DIR && git diff --shortstat origin/main...$BRANCH" 2>/dev/null || echo "")
+# Expand WORK_DIR for local host when querying git (remote still uses ssh)
+if [ "$HOST" = "localhost" ] || [ "$HOST" = "127.0.0.1" ]; then
+    LOCAL_WORK="$HOME/dev/$REPO_NAME"
+    BASE_SHA=$(cd "$LOCAL_WORK" 2>/dev/null && git rev-parse --short origin/main 2>/dev/null || echo "unknown")
+    HEAD_SHA=$(cd "$LOCAL_WORK" 2>/dev/null && git rev-parse --short "$BRANCH" 2>/dev/null || echo "unknown")
+    FILES_TOUCHED=$(cd "$LOCAL_WORK" 2>/dev/null && git diff --name-only "origin/main...$BRANCH" 2>/dev/null || echo "")
+    DIFF_STAT=$(cd "$LOCAL_WORK" 2>/dev/null && git diff --shortstat "origin/main...$BRANCH" 2>/dev/null || echo "")
+else
+    BASE_SHA=$(ssh "$HOST" "cd $WORK_DIR && git rev-parse --short origin/main" 2>/dev/null || echo "unknown")
+    HEAD_SHA=$(ssh "$HOST" "cd $WORK_DIR && git rev-parse --short $BRANCH" 2>/dev/null || echo "unknown")
+    FILES_TOUCHED=$(ssh "$HOST" "cd $WORK_DIR && git diff --name-only origin/main...$BRANCH" 2>/dev/null || echo "")
+    DIFF_STAT=$(ssh "$HOST" "cd $WORK_DIR && git diff --shortstat origin/main...$BRANCH" 2>/dev/null || echo "")
+fi
 FILES_JSON=$(printf '%s\n' "$FILES_TOUCHED" | awk 'NF { printf "%s\"%s\"", (c++ ? ", " : ""), $0 }')
 LEDGER_STATUS="failed"
 [ "$REMOTE_EXIT" -eq 0 ] && LEDGER_STATUS="done"
-printf '{"task_id":"%s","wave":%s,"agent":"%s","provenance":{"vendor":"%s","model":"%s","host":"%s"},"branch":"%s","base_sha":"%s","head_sha":"%s","ts":"%s","status":"%s","orchestrator_fields":{"files_touched":[%s],"diff_stat":"%s","agent_exit":%s,"log":"%s"}}\n' \
-    "$TASK_ID" "$WAVE" "$AGENT" "$PROVIDER" "${MODEL:-default}" "$HOST" \
+printf '{"task_id":"%s","wave":%s,"agent":"%s","provenance":{"vendor":"%s","model":"%s","requested_model":"%s","effective_model":"%s","host":"%s"},"branch":"%s","base_sha":"%s","head_sha":"%s","ts":"%s","status":"%s","orchestrator_fields":{"files_touched":[%s],"diff_stat":"%s","agent_exit":%s,"log":"%s"}}\n' \
+    "$TASK_ID" "$WAVE" "$AGENT" "$PROVIDER" "$EFFECTIVE_MODEL" "${MODEL:-}" "$EFFECTIVE_MODEL" "$HOST" \
     "$BRANCH" "$BASE_SHA" "$HEAD_SHA" "$(date -u +%FT%TZ)" "$LEDGER_STATUS" \
     "$FILES_JSON" "$DIFF_STAT" "$REMOTE_EXIT" "$REMOTE_LOG_PATH" \
     >> "$HANDOFF_DIR/$TASK_ID.jsonl"

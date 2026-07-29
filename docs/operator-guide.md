@@ -104,6 +104,23 @@ Passes 1–3 run sequentially with accumulated feedback. Pass 4 is best-effort. 
 
 ---
 
+## Ground Truth (fleet measurement)
+
+Shipped so localhost and remote fleets leave **auditable evidence**:
+
+1. **Logs** — agent transcripts under `~/dev/agent-logs/` on the worker; after a wave, `dispatch.sh` copies them into repo `logs/` for **localhost and remote** workers.
+2. **Provenance** — handoff JSONL includes `provenance.vendor`, `provenance.requested_model` (routing pin), and `provenance.effective_model` / `provenance.model` (what the launcher actually uses). Kimi/Grok ignore Claude tier aliases → `vendor-default-k3` / `vendor-default`.
+3. **Autoplan fail-closed** — CLI failure or missing `VERDICT` is **REJECT**, not silent APPROVE. REVISE also aborts by default. Re-run after fixes:
+   ```bash
+   ./scripts/autoplan.sh path/to/plan.plan
+   ```
+   Opt-in only: `./scripts/autoplan.sh path/to/plan.plan --allow-revise` (still interactive; never auto-dispatch).
+4. **Tests** — `make test` (launchers, failover, routing, autoplan fail-closed). CI: `.github/workflows/test.yml`.
+
+Raw logs stay under `logs/` (gitignored). Promote **sanitized** lessons into `learnings/` as usual.
+
+---
+
 ## Dispatching a Wave
 
 ### Basic Invocation
