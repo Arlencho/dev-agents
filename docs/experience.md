@@ -11,7 +11,7 @@
 From the `dev-agents` repo root:
 
 ```bash
-# Build site → site/experience/ (gitignored)
+# Build data contract → then site → site/experience/ (gitignored)
 make experience
 
 # Build + open in your browser
@@ -19,7 +19,19 @@ make experience-open
 
 # Alias
 make desk
+
+# Data only (JSON contract, no HTML)
+make experience-data
 ```
+
+`make experience` is two steps in a fixed order:
+
+```text
+git artifacts → site/experience/data/index.json → site/experience/**.html
+```
+
+The HTML reads **only** that JSON — see [`docs/experience-data.md`](experience-data.md)
+for the schema. If something is missing from a page, check the JSON first.
 
 Then open:
 
@@ -100,8 +112,22 @@ make vendor-auth   # CLI session preflight
 - `learnings/*` (+ product `docs/qa/learning-*.md` if that repo is on disk)
 
 Optional joins: `config/experience-joins.yaml` (`pattern: company_id`).
+Join order: explicit map → `github_repo` → repo slug → company name token → **unlinked**
+(ad-hoc work keeps a project *label*; a label is never turned into a company).
+Every trail records its `join_method` and the token that matched.
 
-**Never** embeds agent transcript logs from `~/dev/agent-logs/`.
+**Never** embeds agent transcript logs from `~/dev/agent-logs/` — only the log
+*filename* is used as a join hint. Token-shaped strings are redacted before they
+reach the JSON, and the tests fail if any survive.
+
+### Machine-readable view
+
+```bash
+make experience-data
+python3 -c "import json;d=json.load(open('site/experience/data/index.json'));print(d['counts'])"
+```
+
+Schema and stability rules: [`docs/experience-data.md`](experience-data.md).
 
 ---
 
@@ -112,12 +138,15 @@ Optional joins: `config/experience-joins.yaml` (`pattern: company_id`).
 | Empty Work | No handoffs yet, or run `make experience` after dispatch |
 | Company has 0 trails | Join failed — see join method on trail detail; add `experience-joins.yaml` or improve task/branch naming |
 | Stale page | Re-run `make experience` |
+| Page missing a field | Check `site/experience/data/index.json` — HTML can only show what the contract carries |
+| `schema mismatch` error | Data JSON is from an older build: re-run `make experience` |
 | Browser blocked file:// | Use `python3 -m http.server` under `site/experience` |
 
 ---
 
 ## Related
 
+- Data contract / schema: [`docs/experience-data.md`](experience-data.md)  
 - Operator fleet ops: [`docs/operator-guide.md`](operator-guide.md)  
 - Session modes: [`docs/session-modes.md`](session-modes.md)  
 - Skills: [`skills/README.md`](../skills/README.md)  

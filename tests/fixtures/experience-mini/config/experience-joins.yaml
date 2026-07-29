@@ -1,0 +1,3 @@
+# pattern: company_id  (pattern matched case-insensitively against task/branch/plan/handoff)
+widget-x: acme
+orphan-pattern: nosuchcompany   # unknown company id — must be ignored with a warning

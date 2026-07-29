@@ -1,0 +1,9 @@
+defaults:
+  max_packs: 4
+
+roles:
+  default: evidence-first untrusted-prior git-ship
+  fixture-builder: evidence-first untrusted-prior git-ship fixture-pack
+  fixture-critic: evidence-first untrusted-prior git-ship
+  fixture-runner: evidence-first untrusted-prior git-ship
+  fixture-flaky: evidence-first untrusted-prior git-ship
