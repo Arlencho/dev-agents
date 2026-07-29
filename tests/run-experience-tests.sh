@@ -426,6 +426,8 @@ for t in d["trails"]:
         t["issue_links"] = ["https://github.com/Example/acme-app/issues/9"]  # simple 1:1
     if t["task_id"] == "3-fixture-builder-secrets":
         t["issue_links"] = ["#050505"]                  # hex color, not an issue
+    if t["task_id"] == "2-fixture-builder-gadget":
+        t["issue_links"] = ["#77"]                      # unlinked trail, bare ref
 json.dump(d, open(p, "w"))
 PY
 python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$TMP/msite" >"$TMP/m-html.log" 2>&1 \
@@ -460,6 +462,16 @@ fi
 grep -q '(title from trail)' "$MS/missions/index.html" \
   && ok "mission title source is disclosed when gh did not resolve it" \
   || bad "mission title source is disclosed when gh did not resolve it"
+# Critic loop-1 pins (M5/M7/M8): each assertion goes RED only under its own
+# mutation — no cross-talk with the rest of the mission block.
+grep -q 'unlinked / repo — / #77' "$MS/missions/index.html" \
+  && ok "unlinked mission keeps honest path" || bad "unlinked mission keeps honest path"
+grep -qE 'class="path">[^<]*(acme|ghostco)[^<]*#77' "$MS/missions/index.html" \
+  && bad "no company invented for unlinked mission" || ok "no company invented for unlinked mission"
+grep -q 'prefers-reduced-motion' "$FIXOUT/assets/site.css" \
+  && ok "stylesheet honors prefers-reduced-motion" || bad "stylesheet honors prefers-reduced-motion"
+grep -qE '<span class="st st-[a-z]+"></span>' "$MS/missions/index.html" \
+  && bad "state pill carries text, not color alone" || ok "state pill carries text, not color alone"
 assert_links_resolve "mission site: every relative href resolves (BROKEN: 0)" "$MS"
 
 # HTML must refuse a data contract it does not understand
