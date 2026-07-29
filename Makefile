@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard
+.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -8,6 +8,15 @@ sync: ## Sync roles/ to provider directories
 
 status: ## Check worker fleet status
 	@./scripts/workers-status.sh
+
+vendor-auth: ## Preflight vendor CLI sessions (usage: make vendor-auth [VENDORS=claude,kimi] [PLAN=path.plan])
+	@if [ -n "$(PLAN)" ]; then \
+		./scripts/vendor-auth-check.sh --plan "$(PLAN)"; \
+	elif [ -n "$(VENDORS)" ]; then \
+		./scripts/vendor-auth-check.sh --vendors "$(VENDORS)"; \
+	else \
+		./scripts/vendor-auth-check.sh; \
+	fi
 
 dispatch: ## Dispatch wave plan (usage: make dispatch REPO=x PLAN=y)
 	@./scripts/dispatch.sh $(REPO) $(PLAN)
@@ -47,7 +56,7 @@ lint: ## Check sync + validate YAML
 	@echo "Validating workers.yaml structure..."
 	@grep -q "machines:" config/workers.yaml && echo "  workers.yaml: OK" || (echo "  workers.yaml: MISSING machines: key" && exit 1)
 
-test: ## Ground Truth unit tests (launchers, failover, routing, autoplan fail-closed)
+test: ## Ground Truth unit tests (launchers, failover, routing, autoplan fail-closed, vendor-auth)
 	@echo "== launcher contract =="
 	@./tests/run-launcher-tests.sh
 	@echo ""
@@ -62,6 +71,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, autoplan fail-cl
 	@echo ""
 	@echo "== evidence scorecard =="
 	@./tests/run-evidence-tests.sh
+	@echo ""
+	@echo "== vendor auth preflight =="
+	@./tests/run-vendor-auth-tests.sh
 	@echo ""
 	@echo "All test suites passed."
 

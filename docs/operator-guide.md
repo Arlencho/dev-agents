@@ -141,7 +141,7 @@ Shipped so localhost and remote fleets leave **auditable evidence**:
    ./scripts/autoplan.sh path/to/plan.plan
    ```
    Opt-in only: `./scripts/autoplan.sh path/to/plan.plan --allow-revise` (still interactive; never auto-dispatch).
-4. **Tests** — `make test` (launchers, failover, routing, autoplan fail-closed). CI: `.github/workflows/test.yml`.
+4. **Tests** — `make test` (launchers, failover, routing, autoplan fail-closed, vendor-auth). CI: `.github/workflows/test.yml`.
 
 Raw logs stay under `logs/` (gitignored). Promote **sanitized** lessons into `learnings/` as usual.
 
@@ -165,6 +165,35 @@ make evidence
 Use for: Kimi frontend seat keep/revert (n + success), quality-first routing sanity, skills rework hints. Raw agent transcripts stay out of git.
 
 Related: `make scorecard` (rate-cap / cooldown only).
+
+---
+
+## Vendor auth preflight
+
+**Validate sessions before any wave** — do not re-login every run; only when the check fails.
+
+```bash
+make vendor-auth                          # all vendors on this host
+make vendor-auth VENDORS=claude,kimi
+make vendor-auth PLAN=wave-plans/foo.plan # roles → primary + failover only
+./scripts/vendor-auth-check.sh --json
+```
+
+| Probe | What “ok” means |
+|-------|------------------|
+| **claude** | `claude auth status` → `loggedIn: true` (also catches OAuth expired) |
+| **kimi** | CLI on PATH + non-empty `~/.kimi-code` credentials/oauth + `kimi doctor` |
+| **grok** | CLI on PATH + non-empty `~/.grok/auth.json` |
+| **gh** (optional) | `gh auth status` via `--with-gh` |
+
+`dispatch.sh` runs this automatically for vendors needed by the plan (primary + failover) on each worker host. Fail-closed: bad/expired auth aborts before clone/launch.
+
+```bash
+# intentional skip only
+./scripts/dispatch.sh <repo> <plan> --skip-auth-preflight
+```
+
+On failure, re-login on the **worker** machine (`claude login` / `kimi login` / `grok login`), then re-dispatch. This is separate from rate-cap cooldown (`make scorecard`).
 
 ---
 
