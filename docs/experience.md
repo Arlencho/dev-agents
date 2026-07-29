@@ -149,6 +149,25 @@ waiting-on strip, and an offline LED. It teaches the Phase B path
 fake timers, or invented live state. Live state will **never** be stored in
 `index.json` — see the v2 SYNTHESIS §3 Phase B.
 
+### The live data path (Phase B)
+
+The data half of the Floor is live: `scripts/dispatch.sh` appends redaction-safe
+JSONL events to `logs/fleet-events/<dispatch_id>.jsonl` (+ a `latest` pointer),
+and `make desk-live` folds them into `site/experience/data/live.json`
+(schema `live/1`: `waiting_on`, `seats`, `mode`, `staleness`, `last_event_ts`)
+while serving the desk on `http://127.0.0.1:8777/live/` with SSE at `/events`.
+
+```bash
+make desk-live          # watch + serve (Ctrl-C to stop) — run it beside a dispatch
+make desk-live-once     # write live.json once, no server (file:// desks)
+FLEET_EVENTS=0 ./scripts/dispatch.sh ...   # opt out of the stream entirely
+```
+
+Never in the stream: task descriptions, prompts, transcripts, absolute paths.
+Logs and plans travel as **filenames**. Full schema:
+[`experience-data.md` § Live event stream](experience-data.md#live-event-stream-phase-b--logsfleet-eventsjsonl).
+Rendering those lanes on the Floor page is the remaining Phase B step.
+
 ---
 
 ## While using (daily loop)

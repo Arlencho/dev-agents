@@ -448,6 +448,13 @@ if grep -q 'class="wave-card"' "$MS/mission/example-acme-app-9/index.html"; then
 else
   ok "simple 1:1 hides the wave chrome"
 fi
+# Phase A critic residual R1: the mission task table pill must carry text, not
+# color alone (a11y). The missions-index pin does not cover this renderer.
+if grep -qE '<span class="st st-[a-z]+"></span>' "$MS/mission/acme-12/index.html"; then
+  bad "mission task-table pill carries text, not color alone"
+else
+  ok "mission task-table pill carries text, not color alone"
+fi
 grep -q 'href="../mission/acme-12/index.html"' "$MS/work/index.html" \
   && ok "work table links trails up to their mission" || bad "work table links trails up to their mission"
 grep -q '<dt>Mission</dt>' "$MS/trail/1-fixture-builder-widget-x/index.html" \

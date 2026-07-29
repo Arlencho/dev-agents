@@ -1,79 +1,115 @@
-# Handoff — Fleet Desk v2 Phase A, critic loop 2 (VERIFY ONLY)
+# Handoff — Fleet Desk v2 Phase B, DATA PATH (devops seat)
 
-Task: re-verify on PR #57 `feat/fleet-desk-v2-phase-a` @ `f99e42b` that the loop-1 pins M5/M7/M8 are **load-bearing** under executable mutation, that production logic is unchanged, and that Phase A SYNTHESIS gates still hold. No redesign, no re-implementation.
+Task: implement the Phase B data path only ([SYNTHESIS §3](docs/proposals/fleet-desk-v2-SYNTHESIS.md)) —
+dispatch event stream, live watcher + `live/1` projection, Makefile targets, tests, schema docs.
+**No Almanac craft was redesigned.** Wiring the `/live/` page to `live.json` is the remaining
+Phase B step (web-frontend seat).
 
-## VERDICT: APPROVE
+Branch: `feat/fleet-desk-v2-phase-b-data`
 
-All three loop-1 surviving mutations are now killed by tests. Each pin goes RED **only** under its own mutation — no cross-talk. Baseline and full `make test` are green. The revision introduced zero production-code change. One non-blocking residual is logged for Phase B.
+## Built
 
-## Mutation matrix (each applied, suite run, then `git checkout --` reverted)
+| File | What |
+|------|------|
+| `scripts/fleet-events.sh` **(new)** | Append-only JSONL writer, schema `fleet-events/1`. Sourceable library (`fleet_events_init`, `fleet_event`) + CLI (`init` / `emit`). Writes `logs/fleet-events/<dispatch_id>.jsonl` and a `latest` pointer file (plain text basename, not a symlink). |
+| `scripts/dispatch.sh` | Sources the writer and emits `dispatch_start` · `dispatch_plan` · `wave_start` · `seat_dispatch` · `seat_exit` · `ratecap` · `failover` · `human_wait` / `human_resume` · `wave_end` · `seat_log` · `dispatch_end`. EXIT trap closes an aborted run honestly. No behavior change otherwise. |
+| `scripts/desk_live.py` **(new)** | Stdlib watcher: resolves the stream (`--dispatch-id` → `latest` → newest), folds it into `site/experience/data/live.json` (schema `live/1`), serves `site/experience/` on loopback with `/live.json` and SSE `/events`. Modes: serve (default), `--watch`, `--once`. |
+| `Makefile` | `desk-live` (serve+watch, `PORT=`), `experience-live` (alias), `desk-live-once` (no server) — all with `##` help text. `make test` now runs the new suite. |
+| `tests/run-desk-live-tests.sh` **(new)** | 81 assertions: writer shape, types, redaction, opt-out; projection over fixtures; dispatch wiring guards. Fully offline. |
+| `tests/fixtures/fleet-events/{wave-run,conductor-run}.jsonl` **(new)** | Synthetic streams: parallel wave with ratecap → failover → retry, and a conductor chain blocked at a guardrail with an open human gate. |
+| `docs/experience-data.md` | New section **Live event stream (Phase B)**: envelope, every event type + payload, redaction law, opt-out, full `live/1` table, run commands. |
+| `docs/experience.md` | Short operator walkthrough of the live data path. |
+| `.gitignore` | `logs/fleet-events/` (per-machine runtime truth). |
+| `tests/run-experience-tests.sh` | Closes Phase A critic residual **R1** (mission task-table pill must carry text, not color alone). |
 
-| # | Mutation | Site | Result | RED assertions |
-|---|---|---|---|---|
-| — | baseline (unmutated) | — | `265 passed, 0 failed`, exit 0 | — |
-| — | full `make test` | — | `All test suites passed.`, exit 0 | — |
-| M5a | `m['company_id'] or companies[0]` | `scripts/experience_build.py:405` (render) | `263 passed, 2 failed` | "unlinked mission keeps honest path"; "no company invented for unlinked mission" |
-| M5b | `next(..., companies[0]["id"])` | `scripts/experience_build.py:178` (derivation — the literal loop-1 mutation) | `263 passed, 2 failed` | same two |
-| M7 | delete `@media (prefers-reduced-motion: reduce)` block | `templates/experience/site.css:80-82` | `264 passed, 1 failed` | "stylesheet honors prefers-reduced-motion" |
-| M8 | `<span class="st {cls}"></span>` (color-only) | `scripts/experience_build.py:399` `_state_pill` | `264 passed, 1 failed` | "state pill carries text, not color alone" |
+## Decisions
 
-M5 is **stronger than the producer claimed**: the pin fires at both the derivation site (`:178`, cited in the loop-1 handoff) and the render fallback (`:405`). Company invention cannot slip in at either layer.
+1. **Writer is a separate sourceable library, not inline in `dispatch.sh`.** Keeps the dispatch diff small, and the event shape is unit-testable without a fleet.
+2. **Emission never fails a dispatch.** Every function returns 0; an unwritable events dir prints a warning and disables the stream (test: `unwritable events dir …`).
+3. **Redaction is enforced at the writer, not at the reader.** Keys must be `lower_snake`; values are control-char stripped, newline-flattened, truncated to 200 chars; empty values are omitted; plans/logs travel as basenames. `TASK_DESC` is never passed to an event, and a test greps `dispatch.sh` for that regression.
+4. **Typed values by key allowlist.** `exit` / `wave` / `duration_s` / counts emit as JSON numbers; `task_id` stays a string so an id or branch that looks numeric never changes type mid-stream.
+5. **Mode is derived, then declared.** `conductor` when the plan path contains `conductor` **or** every wave holds exactly one seat in a multi-wave plan; otherwise `wave`. Written into `dispatch_start`, so the projector never has to guess.
+6. **Honesty in the projection.** A seat still `running` after `dispatch_end` becomes `unknown` (no eternal spinner); staleness is time-based `live` (<120s) → `stale` (<900s) → `offline`; an empty events dir projects `idle` with a reason that teaches the next command; malformed lines are counted in `warnings`, never guessed at.
+7. **`waiting_on` priority:** open human gates → rate-capped seats → else the longest-running seat. Never empty while something is actually blocking.
+8. **Live state stays out of `index.json`** (SYNTHESIS §3 Phase B item 5). `live.json` is a sibling file, written atomically via `os.replace`.
+9. **SSE is additive, not required.** `/events` pushes one `event: live` frame per projection change; poll `data/live.json` or use `--once` / `--watch` for `file://` desks.
 
-Producer's reported numbers reproduce **exactly** (263/2, 264/1, 264/1, 265/0). No inflated claims found.
+## Do not repeat
 
-## Coverage probes (beyond the assigned three)
+- **Don't expect `make lint` to pass.** It already fails on a clean tree (roles/ ↔ providers/ drift, `11 file(s) out of sync`, exit 2) — verified by stashing this work. Unrelated to Phase B; the fix is `./scripts/sync-providers.sh` in its own PR.
+- **Don't mutate `experience_build.py` with a naive `str.replace(..., 1)`** when checking the R1 pin: the identical pill string first appears at `:335` (`status_pill`) and that mutation is killed by an older assertion, which reads as "my pin didn't fire". Mutate **line 458** (`_static_status_pill`) explicitly — then the new pin is the only failure.
+- **Don't make `task_id` a number** for tidiness; the writer's numeric-key allowlist deliberately excludes it and a test pins the type.
+- **Don't add a `latest` symlink**: the pointer is a plain file so it survives copy/rsync/non-POSIX filesystems, and the reader refuses a pointer containing `/`.
+- **Don't smoke-test the emitter under `set -u` without `${BASH_SOURCE[0]:-}`** — sourcing from a strict shell tripped `BASH_SOURCE[0]: parameter not set` before the guard was added.
 
-There are three pill renderers. I mutated each to color-only to find unpinned WCAG 1.4.1 surface:
+## Evidence
 
-| Renderer | Site | Result |
-|---|---|---|
-| `_state_pill` (mission cards) | `:399` | RED — pinned by new M8 assertion |
-| `status_pill` (trail rows) | `:335` | RED — pinned by pre-existing "status is text AND color" |
-| `_static_status_pill` (mission-detail task tables) | `:458` | **GREEN — mutation survives** |
+```
+$ ./tests/run-desk-live-tests.sh | tail -3
+  passed: 81   failed: 0
 
-### Residual R1 (non-blocking, Phase B follow-up)
-
-`scripts/experience_build.py:458` `_static_status_pill` can be reduced to `<span class="st st-{kind}"></span>` and the entire suite stays `265 passed, 0 failed`. The M8 pin only greps `missions/index.html`; this renderer emits into `mission/<slug>/index.html` task tables (called at `:436`).
-
-**Not a defect and not a gate.** Shipped code is correct today (it renders `{esc(status)}`); this is a test-coverage gap, not a production bug. Suggested one-line fix in Phase B, mirroring the existing M8 pin against a mission detail page:
-
-```sh
-grep -qE '<span class="st st-[a-z]+"></span>' "$MS/mission/acme-12/index.html" \
-  && bad "task-table pill carries text, not color alone" \
-  || ok  "task-table pill carries text, not color alone"
+$ make test | grep -E "passed|All test"
+== 17 passed, 0 failed ==   (launcher)     == 9 passed, 0 failed ==  (failover)
+== 22 passed, 0 failed ==   (routing)      == 6 passed, 0 failed ==  (autoplan)
+== 5 passed, 0 failed ==    (evidence)     == 9 passed, 0 failed ==  (vendor-auth)
+== 266 passed, 0 failed ==  (experience — was 265, +1 R1 pin)
+  passed: 81   failed: 0    (desk-live)
+All test suites passed.
 ```
 
-Gating loop 3 on an already-correct line would burn a CTO escalation on a non-defect — precisely the diminishing-returns case the 2-loop ceiling exists to prevent.
+End-to-end through the **real** `dispatch.sh` (throwaway repo copy, one unreachable
+worker, `run-remote.sh` deliberately absent so seats fail fast — no agent was ever launched):
 
-## Production logic unchanged — verified
+```
+$ /opt/homebrew/bin/bash scripts/dispatch.sh <repo> plan.txt --auto --retries 0 --skip-auth-preflight
+$ cat logs/fleet-events/*.jsonl
+{"schema":"fleet-events/1","seq":1,...,"event":"dispatch_start","mode":"conductor","repo":"dev-agents","plan":"plan.txt"}
+{"schema":"fleet-events/1","seq":3,...,"event":"wave_start","wave":1,"seats":1,"mode":"conductor"}
+{"schema":"fleet-events/1","seq":4,...,"event":"seat_dispatch","task_id":"0","agent":"devops","branch":"feat/ghost-a","wave":1,"provider":"claude","model":"opus","worker":"ghost-worker","attempt":1}
+{"schema":"fleet-events/1","seq":5,...,"event":"seat_exit","task_id":"0",...,"status":"failed","exit":127,"duration_s":0,"attempt":1}
+{"schema":"fleet-events/1","seq":11,...,"event":"dispatch_end","status":"completed","total":2,"succeeded":0,"failed":2,"duration_s":0}
+$ cat logs/fleet-events/latest
+20260729-203420-dev-agents.jsonl
 
-- `git show --name-only f99e42b` → **`handoff.md`, `tests/run-experience-tests.sh` only.** The revision touched no production file, so `experience_build.py` / `site.css` behavior is bit-identical to the reviewed `fca45f0`.
-- `git diff 3e8d8ea..f99e42b -- scripts/experience_data.py` → **empty.** Data layer byte-identical to main.
-- `SCHEMA_VERSION = 2` on both branch and main — no schema bump, no migration debt.
-- No true bugs found; therefore no production edits were warranted or made.
+$ FLEET_EVENTS=0 … scripts/dispatch.sh … ; test -d logs/fleet-events
+OK: FLEET_EVENTS=0 wrote nothing
 
-## Phase A SYNTHESIS gates re-checked (`docs/proposals/fleet-desk-v2-SYNTHESIS.md:66-121`)
+$ python3 scripts/desk_live.py --once --events-dir <tmp>/logs/fleet-events --out <tmp>/live.json
+live.json written (status=settled, seats=2, staleness=live)
+  mode=conductor  wave={current:2,total:2}  counts={blocked:2,total:2}  last_event_ts=2026-07-29T20:34:20Z
+```
 
-| Gate | Status | Evidence |
-|---|---|---|
-| 1 Visual system, a11y text+color + reduced motion | HOLD | M7/M8 pins now enforce both |
-| 2 Hierarchy chrome all pages | HOLD | `hier` nav asserted across page loop (`:388`) |
-| 3 Global home pipeline strip + live teaser | HOLD | honest `—` for Queued/In flight (`:389-390`) |
-| 4 Company page repos + missions | HOLD | "company page lists its missions" green |
-| 5 Missions index `company / repo / #issue` | HOLD | asserted `:438`, plus new unlinked-path pin |
-| 6 Mission / issue run page | HOLD | 3 wave-cards asserted `:442` |
-| 7 Work links up to mission | HOLD | asserted `:451` |
-| 8 `/live/` shell, no fake agents | HOLD | `assert_absent_html "live shell invents no live-state chrome"` |
-| 9 Simple 1:1 collapse | HOLD | "simple 1:1 hides the wave chrome" green |
-| 10 Tests + `make test` green | HOLD | exit 0, all suites |
-| 11 `docs/experience.md` walkthrough | HOLD | updated in diff |
-| §5.5 join/PMI law intact | HOLD | `experience_data.py` untouched; schema still 2 |
+Server routes (loopback, 3s run):
 
-## Integrity
+```
+$ curl -s http://127.0.0.1:8791/live.json | head -c 60   → {"schema": "live/1", "generated_at": ...
+$ curl -s -m 2 http://127.0.0.1:8791/events | head -c 20 → event: live\ndata: {...
+$ curl -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/index.html → 200
+```
 
-- Post-run `git status --porcelain` → **empty**; `git diff HEAD -- scripts/ templates/` → **empty**. Every mutation reverted; no mutated file committed.
-- HEAD `f99e42bb87018df73707bfd777b7e0fdbf364a80` == `origin/feat/fleet-desk-v2-phase-a`.
+R1 mutation proof (the new pin is load-bearing):
 
-## Next step
+```
+$ # line 458 _static_status_pill → <span class="st st-{kind}"></span>
+$ ./tests/run-experience-tests.sh | grep -E "FAIL|passed,"
+  FAIL mission task-table pill carries text, not color alone
+== 265 passed, 1 failed ==
+$ git checkout -- scripts/experience_build.py   # reverted → 266 passed, 0 failed
+```
 
-Ship PR #57. Carry residual R1 into the Phase B test pass.
+Syntax/lint: `bash -n` clean on `dispatch.sh` + `fleet-events.sh`; `shellcheck -S error` exit 0 on both;
+`python3 -m py_compile scripts/desk_live.py` clean (3.9-compatible, stdlib only, loopback bind only).
+
+## Open questions
+
+1. **Concurrent dispatches** share `logs/fleet-events/latest` — last writer wins. Per-run files are unaffected (`--dispatch-id` selects any of them). If the fleet ever runs two dispatchers at once, the pointer should become a list; not needed today.
+2. `recent_events` is capped at 50. If the Floor wants a full replay feed, Phase C's scrubber should read the JSONL directly rather than growing the projection.
+3. Staleness thresholds (120s / 900s) are constants in `desk_live.py` and published in `live.json`. If long single-seat runs make 120s feel twitchy, raise `STALE_AFTER` rather than teaching the UI to lie.
+
+## Next hint (web-frontend seat, Phase B remainder)
+
+Render `/live/` from `data/live.json` — the file already carries everything the SYNTHESIS asks for:
+`mode` (`wave` lanes vs `conductor` spine), `seats[]` with `pipeline` + `elapsed_s` + `failovers[]` + `ratecapped`,
+the `waiting_on[]` strip, `staleness.state` for STALE/OFFLINE chrome, and `status` for the settled/aborted watermark.
+Prefer SSE `/events` when served by `make desk-live`, fall back to polling `data/live.json`, and keep the
+Phase A static empty states for the idle case (`status == "idle"` carries a `reason` string built to be shown).
