@@ -8,9 +8,10 @@
 # rate-capped (exit 75) or unavailable (exit 69).
 #
 # Owner multi-vendor seats (pair with routing.yaml model_routing):
-#   docs-writer   → claude + model claude-fable-5 (Fable 5)
-#   web-frontend  → kimi   + CLI default model (Kimi K3)
-#   plan-critic   → grok   + CLI default model
+#   docs-writer   → claude + claude-fable-5
+#   web-frontend  → kimi   + K3 (CLI default)
+#   plan-critic   → grok   + CLI default
+# Quality-first Claude tiers live in routing.yaml (2026-07-28).
 # NOTE: YAML parsers here don't strip inline comments — keep values bare.
 provider_preferences:
   # Producers

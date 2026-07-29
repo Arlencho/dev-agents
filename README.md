@@ -8,7 +8,7 @@ Run agents via **claude**, **kimi**, and **grok** CLIs with **zero API keys** �
 
 Source of truth for:
 
-1. **Agent role charters** (`roles/*.md`) — 18 active provider-agnostic roles spanning engineers, critics, ops, and meta-agents. Niche and redundant-reviewer roles are parked in `roles/_archived/` (see its README) and reactivate in minutes when the stage justifies them.
+1. **Agent role charters** (`roles/*.md`) — **19 active** provider-agnostic roles (engineers, critics, ops, meta). Niche reviewers are parked in `roles/_archived/` (see its README).
 2. **Heterogeneous producer-critic pattern** — every implementation task pairs a producer agent with an independent critic on a different model. Charter-level invariant.
 3. **Multi-vendor CLI orchestration** — agents run via `claude`, `kimi`, and `grok` subscription CLIs on owned hardware. Provider selection via `workers.yaml provider_preferences` + `routing.yaml provider_failover`. Rate-cap sentinel marks vendors cooling and fails over automatically.
 4. **Multi-product orchestration** (`companies/*.md`) — one manifest per product wiring agents, budgets, runtime config, and the source-of-truth product repo path.
@@ -30,12 +30,14 @@ Critics report to CTO for independence, but pair with their producer counterpart
 
 | Producer role | Vendor (CLI) | Model tier | Critic role | Critic vendor | Critic tier | Discipline |
 |---|---|---|---|---|---|---|
-| Frontend Engineer (`web-frontend`) | **kimi** (failover: claude) | K3 / sonnet-class | Frontend Critic | **claude** | **opus** | Next.js / React / Tailwind / a11y |
-| Backend Engineer (`go-backend`) | claude | sonnet | Backend Critic | claude | **opus** | Go / Chi / pgx / sqlc / OpenAPI |
-| Database Engineer (`db-architect`) | claude | **opus** (DB exception) | Database Critic | claude | opus | Postgres migrations / sqlc / index strategy |
-| API Designer (`api-designer`) | claude | sonnet | API Critic | claude | **opus** | `api.yaml` / generated TS client / response envelopes |
-| DevOps Engineer (`devops`) | claude | sonnet | (none — by design) | — | — | Security Engineer covers review surface |
+| Frontend Engineer (`web-frontend`) | **kimi** (failover: claude) | **K3** | Frontend Critic | **claude** | **opus** | Next.js / React / Tailwind / a11y |
+| Backend Engineer (`go-backend`) | claude | **sonnet** | Backend Critic | claude | **opus** | Go / Chi / pgx / sqlc / OpenAPI |
+| Database Engineer (`db-architect`) | claude | **opus** (irreversible) | Database Critic | claude | **opus** | Postgres migrations / sqlc / indexes |
+| API Designer (`api-designer`) | claude | **opus** | API Critic | claude | **opus** | `api.yaml` / generated TS client / envelopes |
+| DevOps Engineer (`devops`) | claude | **opus** | (none — Security) | — | — | CI / deploy / infra |
 | Plan review (autoplan Pass 4) | — | — | Plan Critic | **grok** | default | Wave-plan review (`autoplan.sh`) |
+
+> **Config wins:** live vendor + Claude tier = `config/workers.yaml` + `config/routing.yaml`. Quality-first (2026-07-28): judgment / irreversible / contract / test-first / infra seats use **opus**; code producers stay **sonnet** when paired with an **opus** critic (best quality-per-token pair).
 
 **Hard rules (charter-level invariants):**
 
@@ -78,11 +80,11 @@ The heterogeneity invariant extended across vendors — same-vendor different-ti
 
 | Example seat | Provider | Model (today) |
 |---|---|---|
-| `web-frontend` | kimi | K3 (CLI default) |
-| `docs-writer` | claude | **claude-fable-5** (Fable 5) |
+| `web-frontend` | kimi | **K3** (CLI default) |
+| `docs-writer` | claude | **claude-fable-5** |
 | `plan-critic` | grok | CLI default |
-| most critics / cto / security | claude | opus |
-| most producers | claude | sonnet |
+| critics / cto / security / DB / API design / devops / test | claude | **opus** |
+| `go-backend` / `mobile` (code producers + opus critic) | claude | **sonnet** |
 
 ### L2 skills + experience evolution (Phase 0 live)
 
@@ -135,14 +137,14 @@ WAVE | AGENT | TASK_DESCRIPTION | BRANCH_NAME
 3 | security-reviewer | audit payment code for vulnerabilities | feat/payments-audit
 ```
 
-**Critical rules:**
-- **Wave ordering**: Wave 1 runs first and in parallel. Wave 2 waits for Wave 1. Task dependencies map to wave numbers.
-- **Pipe character warning**: Raw `|` inside `TASK_DESCRIPTION` will break parsing. Escape with `\|` or rewrite the description.
-- **VERDICT lines**: Some agents (notably plan-critic) emit `VERDICT: APPROVE|REVISE|REJECT` — the parser recognizes this grammar. Use **forward slashes** (`/`) not pipes (`|`) in your prose if you need to denote alternatives.
-- **Blank lines and comments**: Lines starting with `#` and blank lines are ignored.
-- **Branch names**: Use kebab-case (e.g., `feat/payments-db`, `fix/auth-token`).
+**Critical rules** (canonical: [`docs/plan-file-format.md`](docs/plan-file-format.md) — matches `dispatch.sh`):
+- **Wave ordering**: same wave parallel; higher waves wait.
+- **Pipes in description are preserved** (middle fields re-joined). Do **not** escape with `\|`.
+- **Branch** is optional last field only if it looks like a branch (`contains /`, no spaces); else auto-generated.
+- **Producer + critic same branch → different waves.**
+- Lines starting with `#` and blank lines are ignored.
 
-See full format spec: [`docs/plan-file-format.md`](docs/plan-file-format.md).
+Full grammar: [`docs/plan-file-format.md`](docs/plan-file-format.md).
 
 ### Running dispatch.sh: git SSH, Homebrew bash, --auto, --retries
 
@@ -200,7 +202,7 @@ How it works:
 **Provider README references:**
 - Kimi (K3 producer): [`providers/kimi/README.md`](providers/kimi/README.md)
 - Grok (plan-critic + judgment seats): [`providers/grok/README.md`](providers/grok/README.md)
-- Claude (default, trust-critical roles): `providers/claude/agents/` (symlinked from roles/)
+- Claude (default, trust-critical roles): `providers/claude/agents/` (copied from roles/ via `scripts/sync-providers.sh` (roles/ is upstream))
 
 ### make scorecard
 
@@ -245,25 +247,13 @@ Login to xAI Grok via device-code OAuth against SuperGrok / X Premium+ subscript
 
 ```
 dev-agents/
-├── roles/                    # 30 role charters (provider-agnostic source of truth)
-│   ├── orchestrator.md       # Meta — plans, delegates, tracks (CEO)
-│   ├── # Engineers
-│   ├── go-backend.md  web-frontend.md  mobile.md
-│   ├── db-architect.md  api-designer.md  devops.md
-│   ├── # Critics (NEW — heterogeneous, opus-paired)
-│   ├── backend-critic.md  frontend-critic.md
-│   ├── database-critic.md  api-critic.md
-│   ├── # Cross-cutting reviewers
+├── roles/                    # 19 active role charters (source of truth; sync → providers/)
+│   ├── orchestrator.md  cto.md  plan-critic.md  pr-sentinel.md
+│   ├── go-backend.md  web-frontend.md  mobile.md  db-architect.md
+│   ├── api-designer.md  devops.md  docs-writer.md  investigate.md
+│   ├── backend-critic.md  frontend-critic.md  database-critic.md  api-critic.md
 │   ├── test-engineer.md  security-reviewer.md  retro.md
-│   ├── # Specialty reviewers
-│   ├── perf-reviewer.md  testing-reviewer.md  plan-reviewer.md
-│   ├── migration-reviewer.md  maintainability-reviewer.md
-│   ├── production-auditor.md  red-team-reviewer.md
-│   ├── # Domain
-│   ├── data-engineer.md  analytics-agent.md  performance-engineer.md
-│   ├── seo-auditor.md  release-manager.md  docs-writer.md
-│   ├── tech-scout.md  investigate.md
-│   └── api-reviewer.md
+│   └── _archived/            # Parked specialty roles — see README there
 ├── companies/                # Per-product manifests (one file per product)
 │   └── # Each manifest: charter, paperclip company id, budget cap, agent
 │       # roster (subset of roles/), KPIs, escalation rules, repo path.
@@ -443,59 +433,61 @@ The sync script resolves agent → provider file via a 3-level lookup:
 2. `providers/<role>.md` — e.g., role=`devops` → `devops.md`
 3. Frontmatter `name:` in the live file — e.g., `name: go-backend` → `go-backend.md`
 
-## Available agents (full roster)
+## Available agents (active roster — 19)
+
+> **Config wins** over this table: `config/workers.yaml` + `config/routing.yaml`.
 
 ### Engineers (write code)
 
 | Agent | Vendor (CLI) | Model tier | Scope |
 |---|---|---|---|
-| `go-backend` | claude | sonnet | Handlers, services, providers, middleware |
-| `web-frontend` | **kimi** (failover claude) | K3 / sonnet-class | Pages, components, styling, API integration |
-| `mobile` | claude | sonnet | Screens, navigation, native features |
-| `db-architect` | claude | **opus** (DB exception) | Migrations, sqlc queries, index strategy |
-| `api-designer` | claude | sonnet | OpenAPI spec, type generation, response envelopes |
-| `devops` | claude | sonnet | Docker, CI/CD, deployment, scripts |
+| `go-backend` | claude | **sonnet** | Handlers, services, providers, middleware |
+| `web-frontend` | **kimi** (failover claude) | **K3** | Pages, components, styling, API integration |
+| `mobile` | claude | **sonnet** | Screens, navigation, native features |
+| `db-architect` | claude | **opus** | Migrations, sqlc queries, index strategy |
+| `api-designer` | claude | **opus** | OpenAPI spec, type generation, response envelopes |
+| `devops` | claude | **opus** | Docker, CI/CD, deployment, scripts |
 
-### Critics (review diffs — prefer cross-tier / cross-vendor vs producer)
+### Critics (prefer cross-tier / cross-vendor vs producer)
 
-| Agent | Vendor | Pairs with | Output rule |
+| Agent | Vendor / tier | Pairs with | Output rule |
 |---|---|---|---|
-| `backend-critic` | claude opus | `go-backend` | Failing test diff + `file:line` citation only |
-| `frontend-critic` | **claude opus** | `web-frontend` (**kimi** producer) | Same — executable critique, prose rejected; flagship **cross-vendor** pair |
-| `database-critic` | claude opus | `db-architect` | Migration diff, query plan, index analysis |
-| `api-critic` | claude opus | `api-designer` | Contract violation, response-shape diff |
+| `backend-critic` | claude **opus** | `go-backend` | Failing test diff + `file:line` only |
+| `frontend-critic` | claude **opus** | `web-frontend` (**kimi**) | Flagship **cross-vendor** pair |
+| `database-critic` | claude **opus** | `db-architect` | Migration / index / query critique |
+| `api-critic` | claude **opus** | `api-designer` | Contract / envelope violations |
+| `plan-critic` | **grok** | autoplan Pass 4 | Wave-plan review (non-blocking if missing) |
 
-### Cross-cutting reviewers
+### Cross-cutting
 
 | Agent | Model | Cadence |
 |---|---|---|
-| `test-engineer` | **opus** (test-first) | Once per implementation task, BEFORE producer |
-| `security-reviewer` | opus (red-team) | Once per PR, AFTER critic loop |
-| `retro` | sonnet | Per-wave, post-merge |
+| `test-engineer` | **opus** (test-first) | Before producer codes |
+| `security-reviewer` | **opus** (red-team) | Per PR after critic |
+| `retro` | **opus** | Per-wave post-merge |
+| `docs-writer` | **claude-fable-5** | Docs / design proposals |
+| `investigate` | **opus** | Bugs / incidents |
+| `orchestrator` / `cto` | **opus** | Plan / architectural gate |
 
-### Routine-driven discovery (cron-triggered, no Critic pair)
+### Routine discovery
 
-| Agent | Model | Cadence | Purpose |
-|---|---|---|---|
-| `pr-sentinel` | sonnet | Every 30 min via Paperclip routine | Scans the GitHub PR queue, classifies un-attached PRs by branch prefix, files Paperclip tasks for the appropriate review chain. Discovery + routing only — never reviews, approves, or merges. Closes the gap where dependabot / direct-board / external-contrib PRs sat unreviewed because the producer-critic chain only fires on Paperclip-filed work. |
+| Agent | Model | Purpose |
+|---|---|---|
+| `pr-sentinel` | **sonnet** | PR queue triage (Paperclip and/or local launchd — see `docs/local-pr-sentinel.md`) |
 
-### Specialty reviewers (invoke as needed)
+### Archived (not active)
 
-`perf-reviewer`, `testing-reviewer`, `plan-reviewer`, `migration-reviewer`, `maintainability-reviewer`, `production-auditor`, `red-team-reviewer`, `api-reviewer`
-
-### Meta + domain
-
-`orchestrator` (CEO), `tech-scout`, `analytics-agent`, `data-engineer`, `performance-engineer`, `seo-auditor`, `release-manager`, `docs-writer`, `investigate`
+Specialty / niche roles live in [`roles/_archived/`](roles/_archived/README.md) — reactivate with `git mv` when a wave needs them. Do **not** put archived ids in plan files.
 
 ## Parallel development rules
 
 1. Break work into non-conflicting tasks (different files/directories)
-2. Each agent works on its own git worktree (`scripts/task-worktree.sh`)
+2. Prefer isolated git worktrees or per-task branches (fleet path uses branches via dispatch)
 3. `api.yaml` changes merge FIRST (everything depends on the contract)
 4. Database migrations merge BEFORE code that uses them
 5. Tests merge LAST
-6. **No two agents touch the same files**
-7. **Conventional Commits**, no AI/vendor branding on the delivery face — ban `Co-Authored-By:` AI trailers, "Made with Claude/Kimi/Grok", "Generated with …" in commits **and** PR titles/bodies (provenance lives in handoffs/logs only; see `skills/git-ship`)
+6. **No two agents thrash the same files** without a barrier
+7. **Conventional Commits**, no AI/vendor branding on the delivery face — ban `Co-Authored-By:` AI trailers, "Made with …", "Generated with …" in commits **and** PR titles/bodies (provenance in handoffs/logs only; see `skills/git-ship`)
 8. **No direct push to `main`** — all changes via PR
 
 ## Adding a role
@@ -525,18 +517,22 @@ The sync script resolves agent → provider file via a 3-level lookup:
 
 | Doc | What it covers |
 |---|---|
-| [`docs/plan-file-format.md`](docs/plan-file-format.md) | Detailed WAVE format spec, parsing rules, pipe character / VERDICT line warnings |
-| [`docs/operator-guide.md`](docs/operator-guide.md) | Running the fleet: single CLI vs dispatch, plans, logs, handoff Phase 1, skills inject, common failures + cookbook |
-| [`docs/org-chart.md`](docs/org-chart.md) | Mermaid + ASCII visualization of reporting + pairing edges (Paperclip's tree UI can't draw peer edges; this is canonical) |
-| [`docs/paperclip-architecture.md`](docs/paperclip-architecture.md) | Paperclip platform architecture — companies, agents, issues, runs, adapters |
-| [`docs/architecture.md`](docs/architecture.md) | Single-machine, multi-machine, agent communication topology |
-| [`docs/issue-lifecycle.md`](docs/issue-lifecycle.md) | Paperclip issue states (backlog → todo → in_progress → in_review → done) + label-flip discipline |
-| [`docs/scenarios.md`](docs/scenarios.md) | Real-world examples — bug fix, feature request, sprint planning, multi-machine, pre-launch audit |
-| [`skills/README.md`](skills/README.md) | L2 skill pack layout, promotion rules, delivery-face law |
-| [`docs/proposals/skills-evolution-SYNTHESIS.md`](docs/proposals/skills-evolution-SYNTHESIS.md) | **Owner freeze** — skills architecture, phases 0–3, inject path, gates |
-| [`docs/proposals/skills-evolution-BRIEF.md`](docs/proposals/skills-evolution-BRIEF.md) | Design brief that produced the three vendor proposals |
-| [`config/role-skills.yaml`](config/role-skills.yaml) | Role → skill pack map |
-| [`providers/kimi/README.md`](providers/kimi/README.md) | Kimi K3 producer setup, rate-cap behavior, trial gate for cross-vendor pairs |
+| [`docs/operator-guide.md`](docs/operator-guide.md) | **Start here for ops** — dispatch, handoffs, skills inject, failures, cookbook |
+| [`docs/plan-file-format.md`](docs/plan-file-format.md) | Canonical WAVE plan grammar (matches `dispatch.sh`) |
+| [`docs/architecture.md`](docs/architecture.md) | Fleet topology: launchers, failover, L1/L2/L3, Paperclip coexistence |
+| [`docs/org-chart.md`](docs/org-chart.md) | Pairing + reporting (vendor-aware) |
+| [`docs/paperclip-architecture.md`](docs/paperclip-architecture.md) | Paperclip companies / agents / issues |
+| [`docs/issue-lifecycle.md`](docs/issue-lifecycle.md) | Paperclip issue states + PR Sentinel |
+| [`docs/local-pr-sentinel.md`](docs/local-pr-sentinel.md) | Local launchd PR Sentinel (vs Paperclip heartbeat) |
+| [`docs/scenarios.md`](docs/scenarios.md) | Worked examples |
+| [`docs/proposals/README.md`](docs/proposals/README.md) | **Proposals index** — freezes vs drafts |
+| [`skills/README.md`](skills/README.md) | L2 skill packs |
+| [`docs/proposals/skills-evolution-SYNTHESIS.md`](docs/proposals/skills-evolution-SYNTHESIS.md) | Skills freeze |
+| [`config/role-skills.yaml`](config/role-skills.yaml) | Role → skill map |
+| [`providers/kimi/README.md`](providers/kimi/README.md) | Kimi launcher |
+| [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic Pass 4 |
+
+Ops: `make scorecard`, `make fleet-status` (when configured).
 | [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic and judgment-seat launcher |
 | [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md) | Weekly Paperclip release scan log |
 

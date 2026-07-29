@@ -22,15 +22,15 @@ graph TD
     CTO --> QA
     CTO --> SEC
 
-    FE["Frontend Engineer<br/><i>Sonnet</i>"]:::sonnet
-    FEC["Frontend Critic<br/><i>Opus</i>"]:::opus
-    BE["Backend Engineer<br/><i>Sonnet</i>"]:::sonnet
-    BEC["Backend Critic<br/><i>Opus</i>"]:::opus
-    DB["Database Engineer<br/><i>Opus — DB exception</i>"]:::opus
-    DBC["Database Critic<br/><i>Opus</i>"]:::opus
-    API["API Designer<br/><i>Sonnet</i>"]:::sonnet
-    APIC["API Critic<br/><i>Opus</i>"]:::opus
-    DEVOPS["DevOps Engineer<br/><i>Sonnet</i>"]:::sonnet
+    FE["Frontend Engineer<br/><i>Kimi K3</i>"]:::sonnet
+    FEC["Frontend Critic<br/><i>Claude Opus</i>"]:::opus
+    BE["Backend Engineer<br/><i>Claude Sonnet</i>"]:::sonnet
+    BEC["Backend Critic<br/><i>Claude Opus</i>"]:::opus
+    DB["Database Engineer<br/><i>Claude Opus — DB</i>"]:::opus
+    DBC["Database Critic<br/><i>Claude Opus</i>"]:::opus
+    API["API Designer<br/><i>Claude Opus</i>"]:::opus
+    APIC["API Critic<br/><i>Claude Opus</i>"]:::opus
+    DEVOPS["DevOps Engineer<br/><i>Claude Opus</i>"]:::opus
 
     CTO --> FE
     CTO --> FEC
@@ -52,7 +52,9 @@ graph TD
 
 ### Routine-driven discovery (no pair)
 
-The **PR Sentinel** (`roles/pr-sentinel.md`, sonnet, reports to CTO) runs on a Paperclip routine every 30 minutes. It scans the GitHub PR queue, classifies un-attached PRs by branch prefix, and files Paperclip tasks for the appropriate review chain. It does NOT pair with a Critic — its output is routing tasks, not code, so there's nothing for a Critic to critique. It also doesn't review, approve, or merge — it discovers and routes; existing chain takes over. Without it, dependabot / direct-board / external-contrib PRs would sit unreviewed because the producer-critic chain only fires on Paperclip-filed work.
+> **Config wins:** live vendor + Claude tier always come from `config/workers.yaml` + `config/routing.yaml`. Quality-first policy (2026-07-28): judgment/irreversible seats use Opus; implementation producers stay Sonnet when paired with an Opus critic; Frontend primary is **Kimi K3**.
+
+The **PR Sentinel** (`roles/pr-sentinel.md`, Claude sonnet, reports to CTO) may run as a Paperclip routine and/or local launchd sentinel (`docs/local-pr-sentinel.md`). It scans the GitHub PR queue, classifies un-attached PRs by branch prefix, and files Paperclip tasks for the appropriate review chain. It does NOT pair with a Critic — its output is routing tasks, not code, so there's nothing for a Critic to critique. It also doesn't review, approve, or merge — it discovers and routes; existing chain takes over. Without it, dependabot / direct-board / external-contrib PRs would sit unreviewed because the producer-critic chain only fires on Paperclip-filed work.
 
 **Two outputs per scan:**
 
@@ -77,7 +79,7 @@ The **PR Sentinel** (`roles/pr-sentinel.md`, sonnet, reports to CTO) runs on a P
               │                        │                        │
    ┌──────────▼───────┐     ┌──────────▼─────────┐    ┌─────────▼───────┐
    │ QA Engineer      │     │ Security Engineer  │    │ DevOps Engineer │
-   │ Opus             │     │ Opus               │    │ Sonnet          │
+   │ Opus             │     │ Opus               │    │ Opus            │
    │ test-first       │     │ red-team every PR  │    │ infra / CI      │
    └──────────────────┘     └────────────────────┘    └─────────────────┘
                                        │
@@ -88,34 +90,37 @@ The **PR Sentinel** (`roles/pr-sentinel.md`, sonnet, reports to CTO) runs on a P
               │                                                    │
    ┌──────────▼─────────┐                          ┌───────────────▼────┐
    │ Frontend Engineer  │ ◄──── pairs ────►        │ Frontend Critic    │
-   │ Sonnet             │                          │ Opus               │
+   │ Kimi K3            │                          │ Claude Opus        │
    └────────────────────┘                          └────────────────────┘
 
    ┌────────────────────┐                          ┌────────────────────┐
    │ Backend Engineer   │ ◄──── pairs ────►        │ Backend Critic     │
-   │ Sonnet             │                          │ Opus               │
+   │ Claude Sonnet      │                          │ Claude Opus        │
    └────────────────────┘                          └────────────────────┘
 
    ┌────────────────────┐                          ┌────────────────────┐
    │ Database Engineer  │ ◄──── pairs ────►        │ Database Critic    │
-   │ Opus (DB exception)│                          │ Opus               │
+   │ Claude Opus (DB)   │                          │ Claude Opus        │
    └────────────────────┘                          └────────────────────┘
 
    ┌────────────────────┐                          ┌────────────────────┐
    │ API Designer       │ ◄──── pairs ────►        │ API Critic         │
-   │ Sonnet             │                          │ Opus               │
+   │ Claude Opus        │                          │ Claude Opus        │
    └────────────────────┘                          └────────────────────┘
 ```
 
 ## Pairing matrix (canonical)
 
-| Producer | Producer model | Critic | Critic model | Discipline scope |
-|---|---|---|---|---|
-| Frontend Engineer (`roles/web-frontend.md`) | Sonnet | Frontend Critic (`roles/frontend-critic.md`) | **Opus** | Next.js / React / Tailwind / a11y |
-| Backend Engineer (`roles/go-backend.md`) | Sonnet | Backend Critic (`roles/backend-critic.md`) | **Opus** | Go / Chi / pgx / sqlc / OpenAPI contract |
-| Database Engineer (`roles/db-architect.md`) | **Opus** (DB exception) | Database Critic (`roles/database-critic.md`) | **Opus** | Postgres migrations + sqlc queries + index strategy |
-| API Designer (`roles/api-designer.md`) | Sonnet | API Critic (`roles/api-critic.md`) | **Opus** | `api.yaml` / generated TS client / response envelopes |
-| DevOps Engineer (`roles/devops.md`) | Sonnet | (none — by design) | — | Infra / CI; Security Engineer covers review surface |
+| Producer | Vendor | Model / tier | Critic | Critic tier | Discipline |
+|---|---|---|---|---|---|
+| Frontend (`web-frontend`) | **kimi** (failover claude) | **K3** | `frontend-critic` | **opus** | Next.js / React / Tailwind / a11y |
+| Backend (`go-backend`) | claude | **sonnet** | `backend-critic` | **opus** | Go / Chi / pgx / sqlc |
+| Database (`db-architect`) | claude | **opus** (irreversible) | `database-critic` | **opus** | Migrations / sqlc / indexes |
+| API Designer (`api-designer`) | claude | **opus** | `api-critic` | **opus** | `api.yaml` / envelopes |
+| DevOps (`devops`) | claude | **opus** | (none — Security) | — | CI / deploy / infra |
+| Plan critic (`plan-critic`) | **grok** | CLI default | (Pass 4 autoplan) | — | Wave-plan review |
+
+Cross-cutting (Claude **opus** unless noted): `test-engineer`, `security-reviewer`, `cto`, `orchestrator`, `investigate`, `retro`. `docs-writer` → **claude-fable-5**. `pr-sentinel` → **sonnet** (routing volume).
 
 The concrete Paperclip agent IDs for each producer/critic in a given company are recorded in that company's manifest (`companies/<name>.md`), not here — IDs are per-deployment.
 
@@ -131,7 +136,7 @@ Task arrives
 4. Critic reviews diff         ←── Opus (paired with producer, hard 2-loop budget)
 5. Security red-teams PR       ←── Opus (independent, runs once after Critic)
 6. CTO architectural gate      ←── Opus (final verdict — APPROVE-MERGE / BLOCK-FIX / BLOCK-ESCALATE)
-7. Merge → DevOps + CI         ←── Sonnet + tooling
+7. Merge → DevOps + CI         ←── Opus + tooling
 ```
 
 ## Heterogeneity invariant (non-negotiable)

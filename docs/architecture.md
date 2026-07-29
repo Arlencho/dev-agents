@@ -1,317 +1,78 @@
 # Dev Agents Architecture
 
-## Single Machine — Parallel Agents
+Living topology for the multi-vendor CLI fleet. If this file disagrees with `config/workers.yaml`, `config/routing.yaml`, or `scripts/dispatch.sh`, **config and scripts win**.
 
-When running on one machine (e.g., your MacBook Pro), agents run as parallel processes in separate terminals or as background tasks within a single Claude Code session.
+## What runs
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    MacBook Pro                           │
-│                                                         │
-│  ┌─────────────┐                                        │
-│  │ You (CTO)   │                                        │
-│  │             │── "I need to add payments"              │
-│  └──────┬──────┘                                        │
-│         │                                               │
-│         ▼                                               │
-│  ┌─────────────────┐                                    │
-│  │  Orchestrator    │  Analyzes → Plans → Assigns       │
-│  │  (tech lead)     │  "Wave 1: db + api spec           │
-│  │                  │   Wave 2: backend                  │
-│  │                  │   Wave 3: frontend + tests"        │
-│  └────────┬─────────┘                                   │
-│           │                                             │
-│           │ Wave 1 (parallel)                           │
-│           ├──────────────────┬──────────────────┐       │
-│           ▼                  ▼                  ▼       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │ db-architect  │  │ api-designer │  │   devops     │  │
-│  │ Terminal 1    │  │ Terminal 2   │  │ Terminal 3   │  │
-│  │              │  │              │  │              │  │
-│  │ branch:      │  │ branch:      │  │ branch:      │  │
-│  │ feat/pay-db  │  │ feat/pay-api │  │ feat/pay-ci  │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  │
-│         │                 │                 │           │
-│         └────────┬────────┘─────────────────┘           │
-│                  ▼                                      │
-│           Merge to main                                 │
-│           (api spec first, then db, then ci)            │
-│                  │                                      │
-│           │ Wave 2 (parallel)                           │
-│           ├──────────────────┬──────────────────┐       │
-│           ▼                  ▼                  ▼       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │ go-backend   │  │ web-frontend │  │test-engineer │  │
-│  │ Terminal 1   │  │ Terminal 2   │  │ Terminal 3   │  │
-│  │              │  │              │  │              │  │
-│  │ branch:      │  │ branch:      │  │ branch:      │  │
-│  │ feat/pay-svc │  │ feat/pay-ui  │  │ feat/pay-tst │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  │
-│         │                 │                 │           │
-│         └────────┬────────┘─────────────────┘           │
-│                  ▼                                      │
-│           Merge to main                                 │
-│           (backend first, then frontend, tests last)    │
-│                  │                                      │
-│                  ▼                                      │
-│  ┌──────────────────┐  ┌──────────────────┐             │
-│  │security-reviewer │  │   seo-auditor    │             │
-│  │ "Review payment  │  │ "Audit checkout  │             │
-│  │  code for vulns" │  │  page for SEO"   │             │
-│  └──────────────────┘  └──────────────────┘             │
-│                                                         │
-│  ┌──────────────────┐                                   │
-│  │   tech-scout     │  (runs weekly, independent)       │
-│  │ "Any new Claude  │                                   │
-│  │  Code features?" │                                   │
-│  └──────────────────┘                                   │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-                   ┌───────────┐
-                   │  GitHub   │  PRs, CI, merge
-                   │  (remote) │
-                   └─────┬─────┘
-                         │
-                    ┌────┴────┐
-                    ▼         ▼
-              ┌──────────┐ ┌──────────┐
-              │ Cloud Run│ │  Vercel  │
-              │ (Go API) │ │  (Web)   │
-              └──────────┘ └──────────┘
-```
+| Path | When | Mechanism |
+|------|------|-----------|
+| **Co-pilot chat** | Human in Claude / Kimi / Grok interactive session | Mode 1: plan, advise, small local work |
+| **Fleet dispatch** | Multi-agent waves on owned hardware | `dispatch.sh` → SSH/`run-remote.sh` → `providers/<vendor>/launch.sh` |
+| **Paperclip** | Board, budgets, heartbeats | `claude_local` adapter (Claude today); multi-company manifests under `companies/` |
+| **flow.sh** | Optional gated single-pipeline | intake → producer → critic → tests → CTO → human merge |
 
----
+**Non-goals:** API-key fleet, same-seat producer×critic when a cross-vendor pair exists, silent skill auto-promotion.
 
-## Multi-Machine — Distributed Agents
-
-When running across your MacBook Pro + 2 Mac Minis, the MacBook acts as orchestrator and the Mac Minis execute agents in parallel.
+## Prompt layers (every fleet launch)
 
 ```
-                    ┌──────────────────────────────────────┐
-                    │          MacBook Pro (You)            │
-                    │                                      │
-                    │  ┌─────────────┐                     │
-                    │  │ You (CTO)   │                     │
-                    │  └──────┬──────┘                     │
-                    │         │                            │
-                    │         ▼                            │
-                    │  ┌─────────────────┐                 │
-                    │  │  Orchestrator    │                 │
-                    │  │  Plans waves,    │                 │
-                    │  │  dispatches to   │                 │
-                    │  │  machines        │                 │
-                    │  └────────┬─────────┘                │
-                    │           │                          │
-                    │  Also runs locally:                  │
-                    │  ┌──────────────────┐                │
-                    │  │security-reviewer │ (reviews PRs)  │
-                    │  │seo-auditor       │ (audits pages) │
-                    │  │tech-scout        │ (weekly scan)  │
-                    │  └──────────────────┘                │
-                    │                                      │
-                    └──────────┬───────────────────────────┘
-                               │
-                    ┌──────────┼───────────┐
-                    │          │           │
-          SSH + run-remote.sh  │  SSH + run-remote.sh
-                    │          │           │
-                    ▼          │           ▼
-┌───────────────────────┐     │    ┌───────────────────────┐
-│     Mac Mini 1        │     │    │     Mac Mini 2        │
-│     (Backend)         │     │    │     (Frontend)        │
-│                       │     │    │                       │
-│  ┌──────────────┐     │     │    │  ┌──────────────┐     │
-│  │ go-backend   │     │     │    │  │ web-frontend │     │
-│  │              │     │     │    │  │              │     │
-│  │ branch:      │     │     │    │  │ branch:      │     │
-│  │ feat/pay-svc │     │     │    │  │ feat/pay-ui  │     │
-│  └──────────────┘     │     │    │  └──────────────┘     │
-│                       │     │    │                       │
-│  ┌──────────────┐     │     │    │  ┌──────────────┐     │
-│  │ db-architect │     │     │    │  │   mobile     │     │
-│  │              │     │     │    │  │              │     │
-│  │ branch:      │     │     │    │  │ branch:      │     │
-│  │ feat/pay-db  │     │     │    │  │ feat/pay-mob │     │
-│  └──────────────┘     │     │    │  └──────────────┘     │
-│                       │     │    │                       │
-│  ~/.claude/agents/ ──►│     │    │◄── ~/.claude/agents/  │
-│  (symlinked from      │     │    │  (symlinked from      │
-│   dev-agents repo)    │     │    │   dev-agents repo)    │
-│                       │     │    │                       │
-└───────────┬───────────┘     │    └───────────┬───────────┘
-            │                 │                │
-            │     ┌───────────┴──────────┐     │
-            │     │                      │     │
-            └────►│       GitHub         │◄────┘
-                  │                      │
-                  │  PRs from all 3      │
-                  │  machines merge      │
-                  │  to main             │
-                  │                      │
-                  └──────────┬───────────┘
-                             │
-                        ┌────┴────┐
-                        ▼         ▼
-                  ┌──────────┐ ┌──────────┐
-                  │ Cloud Run│ │  Vercel  │
-                  │ (Go API) │ │  (Web)   │
-                  └──────────┘ └──────────┘
+L1 charter     roles/<role>.md  (or providers/<vendor> copy)
+L2 skill packs skills/*/SKILL.md via skill-inject.sh  (before L3)
+L3 case file   preamble + handoff ledger slice + task text
 ```
 
----
+Missing L2 packs **warn and continue** — never block dispatch.
 
-## Setup Per Machine
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   Any Machine                        │
-│                                                     │
-│  1. git clone dev-agents                            │
-│  2. ./scripts/bootstrap.sh claude                   │
-│     │                                               │
-│     └──► Symlinks agents to ~/.claude/agents/       │
-│          ├── go-backend.md ──► roles/go-backend.md  │
-│          ├── web-frontend.md                        │
-│          ├── orchestrator.md                        │
-│          ├── ... (11 agents total)                  │
-│          └── seo-auditor.md                         │
-│                                                     │
-│  3. git clone <project-repo>                        │
-│  4. claude --agent <role> "task"                    │
-│                                                     │
-│  Updating agents:                                   │
-│  cd dev-agents && git pull                          │
-│  (symlinks auto-update — no re-bootstrap needed)    │
-│                                                     │
-└─────────────────────────────────────────────────────┘
-```
-
----
-
-## Agent Communication Flow
-
-Agents don't talk to each other directly. They communicate through **git**:
+## Fleet dispatch path
 
 ```
-  Agent A                    Git (main)                  Agent B
-  (go-backend)                                          (web-frontend)
-     │                          │                          │
-     │── commit + push ────────►│                          │
-     │                          │                          │
-     │                          │◄──── pull + rebase ──────│
-     │                          │                          │
-     │                          │── commit + push ────────►│
-     │                          │                          │
+plan file (.plan)
+    │
+    ▼
+dispatch.sh  ── parse waves (see docs/plan-file-format.md)
+    │
+    ├─ resolve provider: workers.yaml provider_preferences
+    │                    + routing.yaml provider_failover
+    │                    + logs/provider-state/ cooldown (exit 75 rate-cap)
+    │
+    ▼
+run-remote.sh  ── skill-inject.sh → launch on worker
+    │
+    ▼
+providers/<vendor>/launch.sh <role> <task>
+    exit 0 ok | 1 fail | 75 rate-capped | 69 unavailable
 ```
 
-The orchestrator coordinates **timing** (wave order) and **scope** (which files each agent touches). It doesn't relay messages between agents.
+### Live multi-vendor seats (summary)
 
----
+| Role | Primary vendor | Claude tier if Claude | Critic |
+|------|----------------|----------------------|--------|
+| `web-frontend` | **kimi** (→ K3) | sonnet (failover) | `frontend-critic` claude **opus** |
+| `go-backend` | claude | **sonnet** | `backend-critic` **opus** |
+| `db-architect` | claude | **opus** (DB exception) | `database-critic` **opus** |
+| `api-designer` | claude | **opus** | `api-critic` **opus** |
+| `devops` | claude | **opus** | Security covers review |
+| `test-engineer` | claude | **opus** | (test-first; pairs with gates) |
+| `plan-critic` | **grok** | n/a | Pass 4 of autoplan |
+| CTO / security / critics | claude | **opus** | — |
 
-## Your Setup
+Full matrix: `docs/org-chart.md` + `config/routing.yaml`.
 
-```
-┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│  MacBook Pro     │     │   Mac Mini 1     │     │   Mac Mini 2     │
-│                  │     │                  │     │                  │
-│  Role:           │     │  Role:           │     │  Role:           │
-│  Orchestrator    │     │  Backend work    │     │  Frontend work   │
-│  + Reviews       │     │                  │     │                  │
-│  + Merges        │     │  Agents:         │     │  Agents:         │
-│                  │     │  go-backend      │     │  web-frontend    │
-│  Agents:         │     │  db-architect    │     │  mobile          │
-│  orchestrator    │     │  api-designer    │     │  seo-auditor     │
-│  security-review │     │  devops          │     │  test-engineer   │
-│  tech-scout      │     │                  │     │                  │
-│                  │◄───►│                  │◄───►│                  │
-│  SSH dispatch    │     │  SSH receive     │     │  SSH receive     │
-│                  │     │                  │     │                  │
-└──────────────────┘     └──────────────────┘     └──────────────────┘
-         │                       │                        │
-         └───────────────┬───────┘────────────────────────┘
-                         ▼
-                   ┌───────────┐
-                   │  GitHub   │
-                   └───────────┘
-```
+## Single-machine wave (conceptual)
 
----
+Orchestrator plans waves → parallel seats on separate branches → merge barriers → critics / security / CTO. Git is the bus. No long-lived daemon required for dispatch.
 
-## Dispatch Flow — Commander Mode
+## Multi-machine
 
-This is how you work from your MacBook without keeping it open. The orchestrator produces a plan, you dispatch it, close the laptop, and Mac Minis do the work.
+Orchestrator on MacBook; workers via SSH (`workers.yaml`). Same launch contract on every host after `setup-machine.sh`.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        MacBook Pro                               │
-│                                                                  │
-│  Step 1: Plan                                                    │
-│  ┌─────────────────────────────────────────────────────────┐     │
-│  │ claude --agent orchestrator "build the payments feature" │     │
-│  │                                                         │     │
-│  │ Output: plan.txt                                        │     │
-│  │   db-architect | create payments migration | feat/db    │     │
-│  │   go-backend | implement Stripe service | feat/pay-svc  │     │
-│  │   web-frontend | build checkout page | feat/pay-ui      │     │
-│  └─────────────────────────────────────────────────────────┘     │
-│                              │                                   │
-│  Step 2: Dispatch            │                                   │
-│  ┌───────────────────────────┴─────────────────────────────┐     │
-│  │ ./scripts/dispatch.sh <repo-url> plan.txt               │     │
-│  │                                                         │     │
-│  │ Reads config/workers.yaml                               │     │
-│  │ Assigns tasks by preferred_agents                       │     │
-│  │ Runs all via SSH in parallel                            │     │
-│  └───────┬─────────────────────────────┬───────────────────┘     │
-│          │                             │                         │
-│  Step 3: Close laptop. Go to meetings.                           │
-│                                                                  │
-└──────────┼─────────────────────────────┼─────────────────────────┘
-           │ SSH                         │ SSH
-           ▼                             ▼
-┌─────────────────────┐     ┌─────────────────────┐
-│   Mac Mini 1        │     │   Mac Mini 2        │
-│                     │     │                     │
-│   db-architect      │     │   web-frontend      │
-│   "create payments  │     │   "build checkout   │
-│    migration"       │     │    page"            │
-│         │           │     │         │           │
-│   go-backend        │     │         │           │
-│   "implement Stripe │     │         │           │
-│    service"         │     │         │           │
-│         │           │     │         │           │
-│   Push branches ────┼──┐  │   Push branch ──────┼──┐
-│                     │  │  │                     │  │
-└─────────────────────┘  │  └─────────────────────┘  │
-                         │                           │
-                         ▼                           ▼
-                   ┌───────────────────────────────────┐
-                   │            GitHub                  │
-                   │                                   │
-                   │  PR: feat/db (db-architect)       │
-                   │  PR: feat/pay-svc (go-backend)    │
-                   │  PR: feat/pay-ui (web-frontend)   │
-                   │                                   │
-                   │  CI runs automatically            │
-                   └───────────────┬───────────────────┘
-                                   │
-                                   ▼
-                   ┌───────────────────────────────────┐
-                   │        You come back              │
-                   │                                   │
-                   │  Open laptop                      │
-                   │  Review PRs                       │
-                   │  Merge in order                   │
-                   │  Deploy                           │
-                   └───────────────────────────────────┘
-```
+## Paperclip coexistence
 
-### The files involved:
+Paperclip owns issues, assignees, budgets, optional heartbeats. Fleet multi-vendor dispatch is the production path for Kimi/Grok seats. Paperclip adapter remains largely Claude-local — do not assume Kimi/Grok heartbeats without adapter work.
 
-```
-config/workers.yaml     — which machines exist and what they're good at
-scripts/dispatch.sh     — reads plan file, assigns to workers, runs via SSH
-scripts/run-remote.sh   — executes one agent on one remote machine
-```
+## Related
+
+- Operator cookbook: `docs/operator-guide.md`
+- Org / pairing: `docs/org-chart.md`
+- Plan grammar: `docs/plan-file-format.md`
+- Skills freeze: `docs/proposals/skills-evolution-SYNTHESIS.md`

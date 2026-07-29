@@ -2,7 +2,7 @@
 
 Owner: Arlen Rios. Adoption date: 2026-04-27. Pinned version: `2026.427.0` (installed 2026-04-27 via `npx paperclipai onboard --yes`). Instance dir: `~/.paperclip/instances/default/`. Bind: `127.0.0.1:3100` (loopback / `local_trusted` mode).
 
-> **TL;DR** — Paperclip is the *runtime* under dev-agents. Roles, wave-plans, retros, and config stay where they are. The SSH-push dispatch via `scripts/dispatch.sh` becomes one of two ways to run agents; the other is Paperclip's heartbeat model with multi-company isolation, budget caps, and a UI dashboard.
+> **TL;DR** — Paperclip is the *board + budget + heartbeat runtime* under dev-agents. Roles, wave-plans, retros, and config stay where they are. **Multi-vendor production path** (Kimi / Grok / Claude CLIs, zero API keys) is fleet **`scripts/dispatch.sh`** + `providers/*/launch.sh`. Paperclip's `claude_local` adapter is largely Claude today — do not assume Kimi/Grok heartbeats without adapter work. Path A (Paperclip) and Path B (fleet dispatch) coexist.
 
 ## 1. What Paperclip is
 

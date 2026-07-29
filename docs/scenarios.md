@@ -216,3 +216,19 @@ claude --agent orchestrator "the app is slow, users are complaining, help me fig
 ```
 
 The orchestrator doesn't just route — it **thinks with you**.
+
+---
+
+## Scenario: Cross-vendor frontend wave (flagship path)
+
+**Goal:** Ship a small UI fix with decorrelated review.
+
+1. Plan:
+   ```
+   1 | web-frontend    | Enable composer at flight step; add unit tests | feat/composer-flight
+   2 | frontend-critic | Review composer enable PR against PRD        | feat/composer-flight
+   ```
+2. Optional: `./scripts/autoplan.sh wave-plans/composer.plan` (includes Grok Pass 4 when installed).
+3. Dispatch: `./scripts/dispatch.sh git@github.com:Org/repo.git wave-plans/composer.plan --auto`
+4. Expect: Kimi K3 produces; Claude Opus critic reviews; merge only after human gate.
+
