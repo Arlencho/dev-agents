@@ -39,11 +39,12 @@ else
     echo "WARNING: charter $CHARTER_FILE not found — running without role charter" >&2
 fi
 
-# AGENT_MODEL: claude tier aliases are meaningless here — ignore them and use
-# the CLI's default model. Pass through anything else (vendor-native ID).
+# AGENT_MODEL: Claude tier / product aliases are meaningless on Kimi — ignore
+# them and use the CLI default (K3). Only pass through true vendor-native IDs.
+# (Failover used to forward docs-writer's claude-fable-5 and break kimi.)
 MODEL_FLAG=()
 case "${AGENT_MODEL:-}" in
-    ""|opus|sonnet|haiku) ;;
+    ""|opus|sonnet|haiku|claude-fable-5|claude-*|fable-*) ;;
     *) MODEL_FLAG=(--model "$AGENT_MODEL") ;;
 esac
 

@@ -43,10 +43,11 @@ else
     echo "WARNING: charter $CHARTER_FILE not found — running without role charter" >&2
 fi
 
-# Claude tier aliases are meaningless here; pass through vendor-native IDs only.
+# Claude tier / product aliases are meaningless here; pass through vendor-native
+# IDs only. (Failover must not forward claude-fable-5 / opus / sonnet.)
 MODEL_FLAG=()
 case "${AGENT_MODEL:-}" in
-    ""|opus|sonnet|haiku) ;;
+    ""|opus|sonnet|haiku|claude-fable-5|claude-*|fable-*) ;;
     *) MODEL_FLAG=(--model "$AGENT_MODEL") ;;
 esac
 

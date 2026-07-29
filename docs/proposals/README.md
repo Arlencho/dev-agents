@@ -15,6 +15,7 @@ Design proposals and freezes for the dev-agents toolkit. **Not operator runbooks
 |------|--------|--------|
 | `skills-evolution-SYNTHESIS.md` | **Freeze** | Skills Phase 0 inject shipped; promote via PR |
 | `session-modes-SYNTHESIS.md` | **Freeze** | Session modes Phase 0: docs + skill + packet; no daemon |
+| `experience-console-SYNTHESIS.md` | **Freeze** | Fleet Desk Phase 0: static dual-scope operator desk (build next) |
 | `multi-vendor-context-transparency-SYNTHESIS.md` | **Freeze** | Handoff / brain Phase 0–1 direction |
 
 ## Briefs (owner asks)
@@ -26,7 +27,7 @@ Design proposals and freezes for the dev-agents toolkit. **Not operator runbooks
 | `experience-console-BRIEF.md` | Brief for Experience Console (operator UI: work, skills, learnings) |
 | `phase-1-handoff-ledger.md` | Phase 1 handoff ledger notes |
 
-## Competing experience-console drafts (not shipped)
+## Experience-console seat drafts (superseded by SYNTHESIS)
 
 | File | Seat |
 |------|------|
@@ -34,7 +35,7 @@ Design proposals and freezes for the dev-agents toolkit. **Not operator runbooks
 | `experience-console-proposal-grok.md` | B |
 | `experience-console-proposal-kimi.md` | C |
 
-Do **not** treat as product law until owner SYNTHESIS.
+Prefer `experience-console-SYNTHESIS.md` (**Fleet Desk** Phase 0 freeze).
 
 ## Session-modes seat drafts (superseded by SYNTHESIS)
 
