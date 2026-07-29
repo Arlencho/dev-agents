@@ -1,21 +1,27 @@
 #!/bin/bash
 set -euo pipefail
 
-# Run a Claude agent on a remote machine via SSH
+# Run a fleet agent on a worker host.
 # Usage: ./scripts/run-remote.sh <host> <repo-url> <agent> <task> [branch]
 #
 # WARNING: This script uses --dangerously-skip-permissions for unattended
 # execution. The agent can read/write/execute without prompts. Only run
 # on trusted machines with trusted repos.
 #
-# Prerequisites on remote machine:
-#   1. Claude Code installed (npm install -g @anthropic-ai/claude-code)
-#   2. Agents bootstrapped (./scripts/bootstrap.sh claude)
+# Localhost / 127.0.0.1: runs **in-process** (no SSH). Required so Claude
+# OAuth/keychain from `claude login` is visible. Non-interactive `ssh localhost`
+# sees loggedIn:false even when the desktop session is authenticated.
+#
+# True remote hosts: still use SSH + scp (Mac Minis, etc.).
+#
+# Prerequisites on worker:
+#   1. Vendor CLIs installed + logged in (claude / kimi / grok)
+#   2. Agents bootstrapped where needed
 #   3. GitHub SSH key configured
 #
 # Examples:
 #   ./scripts/run-remote.sh mac-mini-1 git@github.com:Arlencho/olympus-platform.git go-backend "fix auth bug #123"
-#   ./scripts/run-remote.sh mac-mini-2 git@github.com:Arlencho/olympus-platform.git web-frontend "build settings page" feat/settings
+#   ./scripts/run-remote.sh localhost git@github.com:Arlencho/dev-agents.git devops "task" feat/x
 
 HOST="${1:?Usage: run-remote.sh <host> <repo-url> <agent> <task> [branch] [--log-dir <dir>]}"
 REPO_URL="${2:?Missing repo URL}"
@@ -23,6 +29,55 @@ AGENT="${3:?Missing agent name}"
 TASK="${4:?Missing task description}"
 BRANCH="${5:-fix/${AGENT}-$(date +%s)}"
 shift 5 2>/dev/null || shift $#
+
+# Local worker? Never SSH — Claude OAuth does not survive BatchMode ssh.
+IS_LOCAL=0
+case "$HOST" in
+    localhost|127.0.0.1) IS_LOCAL=1 ;;
+esac
+
+# Run a command string on the worker (local bash -c or ssh).
+remote_run() {
+    if [ "$IS_LOCAL" -eq 1 ]; then
+        bash -c "$1"
+    else
+        ssh "$HOST" "$1"
+    fi
+}
+
+# Copy a local file to worker path (relative to home or absolute under $HOME).
+# Usage: remote_put <local> <remote-path-under-home> e.g. remote_put a.sh dev/guardrails/a.sh
+remote_put() {
+    local src="$1" dest_rel="$2"
+    if [ "$IS_LOCAL" -eq 1 ]; then
+        mkdir -p "$HOME/$(dirname "$dest_rel")"
+        cp -f "$src" "$HOME/$dest_rel"
+    else
+        ssh "$HOST" "mkdir -p ~/$(dirname "$dest_rel")"
+        scp -q "$src" "$HOST:~/$dest_rel"
+    fi
+}
+
+# Copy a local directory tree to worker path under home.
+remote_put_dir() {
+    local src="$1" dest_rel="$2"
+    if [ "$IS_LOCAL" -eq 1 ]; then
+        mkdir -p "$HOME/$dest_rel"
+        cp -R "$src"/. "$HOME/$dest_rel/" 2>/dev/null || true
+    else
+        ssh "$HOST" "mkdir -p ~/$dest_rel"
+        scp -rq "$src/." "$HOST:~/$dest_rel/" 2>/dev/null || true
+    fi
+}
+
+# Pipe a bash script (stdin) to the worker.
+remote_bash_s() {
+    if [ "$IS_LOCAL" -eq 1 ]; then
+        bash -s
+    else
+        ssh "$HOST" bash -s
+    fi
+}
 
 # Parse optional flags
 # Default log dir: \$HOME expands worker-side (see WORK_DIR note below).
@@ -63,7 +118,7 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 LOG_FILE="${REPO_NAME}-${BRANCH//\//-}-${TIMESTAMP}.log"
 
 echo "=== Remote Agent Execution ==="
-echo "Host:   $HOST"
+echo "Host:   $HOST$([ "$IS_LOCAL" -eq 1 ] && echo ' (local, no SSH)')"
 echo "Repo:   $REPO_NAME"
 echo "Agent:  $AGENT"
 echo "Model:  ${MODEL:-default}"
@@ -72,13 +127,17 @@ echo "Task:   $TASK"
 echo "Log:    $LOG_DIR/$LOG_FILE"
 echo ""
 
-# Verify SSH connectivity
-echo "Checking SSH connection..."
-ssh -o ConnectTimeout=5 "$HOST" "echo 'Connected'" || {
-    echo "ERROR: Cannot SSH to $HOST"
-    echo "Make sure SSH key is configured: ssh-copy-id $HOST"
-    exit 1
-}
+if [ "$IS_LOCAL" -eq 1 ]; then
+    # Do not SSH: non-interactive ssh drops Claude OAuth/keychain (loggedIn:false).
+    echo "Local worker — running in-session (Claude OAuth / keychain available)"
+else
+    echo "Checking SSH connection..."
+    ssh -o ConnectTimeout=5 "$HOST" "echo 'Connected'" || {
+        echo "ERROR: Cannot SSH to $HOST"
+        echo "Make sure SSH key is configured: ssh-copy-id $HOST"
+        exit 1
+    }
+fi
 
 # A/B control arm (Phase 1): a task whose text carries the [blind] marker gets
 # no handoff slice in its preamble — per-task control, so a plan can hold a
@@ -131,55 +190,50 @@ fi
 # alphabet is inert inside double quotes.
 FULL_TASK_B64=$(printf '%s' "$FULL_TASK" | base64)
 
-# Copy guardrails to remote
+# Copy guardrails to worker
 GUARDRAILS_SCRIPT="$SCRIPT_DIR/guardrails.sh"
 GUARDRAILS_CONFIG="$SCRIPT_DIR/../config/guardrails.yaml"
 if [ -f "$GUARDRAILS_SCRIPT" ] && [ -f "$GUARDRAILS_CONFIG" ]; then
     echo "Copying guardrails to $HOST..."
-    ssh "$HOST" "mkdir -p ~/dev/guardrails/config"
-    scp -q "$GUARDRAILS_SCRIPT" "$HOST:~/dev/guardrails/guardrails.sh"
-    scp -q "$GUARDRAILS_CONFIG" "$HOST:~/dev/guardrails/config/guardrails.yaml"
-    ssh "$HOST" "chmod +x ~/dev/guardrails/guardrails.sh"
+    remote_run "mkdir -p ~/dev/guardrails/config"
+    remote_put "$GUARDRAILS_SCRIPT" "dev/guardrails/guardrails.sh"
+    remote_put "$GUARDRAILS_CONFIG" "dev/guardrails/config/guardrails.yaml"
+    remote_run "chmod +x ~/dev/guardrails/guardrails.sh"
 else
     echo "WARNING: Guardrails not found locally, skipping safety hooks"
 fi
 
-# Ship the provider launcher runtime to the worker (same scp precedent as
-# guardrails above). lib.sh + the chosen provider's launch.sh land flat in
-# ~/dev/agent-runtime/; non-claude providers also get the role charter, which
-# their launcher injects into the prompt (claude resolves --agent natively).
+# Ship the provider launcher runtime to the worker. lib.sh + launch.sh land
+# flat in ~/dev/agent-runtime/; non-claude providers also get the role charter.
 PROVIDER_LAUNCHER="$SCRIPT_DIR/../providers/$PROVIDER/launch.sh"
 PROVIDER_LIB="$SCRIPT_DIR/../providers/lib.sh"
 RATECAP_CONF="$SCRIPT_DIR/../config/ratecap-patterns.conf"
 if [ -f "$PROVIDER_LAUNCHER" ] && [ -f "$PROVIDER_LIB" ]; then
     echo "Shipping $PROVIDER launcher runtime to $HOST..."
-    ssh "$HOST" "mkdir -p ~/dev/agent-runtime/roles ~/dev/agent-runtime/skills ~/dev/agent-runtime/config"
-    scp -q "$PROVIDER_LIB" "$HOST:~/dev/agent-runtime/lib.sh"
-    scp -q "$PROVIDER_LAUNCHER" "$HOST:~/dev/agent-runtime/launch.sh"
-    [ -f "$RATECAP_CONF" ] && scp -q "$RATECAP_CONF" "$HOST:~/dev/agent-runtime/ratecap-patterns.conf"
+    remote_run "mkdir -p ~/dev/agent-runtime/roles ~/dev/agent-runtime/skills ~/dev/agent-runtime/config"
+    remote_put "$PROVIDER_LIB" "dev/agent-runtime/lib.sh"
+    remote_put "$PROVIDER_LAUNCHER" "dev/agent-runtime/launch.sh"
+    [ -f "$RATECAP_CONF" ] && remote_put "$RATECAP_CONF" "dev/agent-runtime/ratecap-patterns.conf"
     if [ "$PROVIDER" != "claude" ] && [ -f "$SCRIPT_DIR/../roles/$AGENT.md" ]; then
-        scp -q "$SCRIPT_DIR/../roles/$AGENT.md" "$HOST:~/dev/agent-runtime/roles/$AGENT.md"
+        remote_put "$SCRIPT_DIR/../roles/$AGENT.md" "dev/agent-runtime/roles/$AGENT.md"
     fi
-    # Global L2 skills + map (for local skill-inject / offline debugging on worker)
     if [ -d "$SCRIPT_DIR/../skills" ]; then
-        scp -rq "$SCRIPT_DIR/../skills/." "$HOST:~/dev/agent-runtime/skills/" 2>/dev/null || true
+        remote_put_dir "$SCRIPT_DIR/../skills" "dev/agent-runtime/skills"
     fi
     if [ -f "$SCRIPT_DIR/../config/role-skills.yaml" ]; then
-        scp -q "$SCRIPT_DIR/../config/role-skills.yaml" "$HOST:~/dev/agent-runtime/config/role-skills.yaml" 2>/dev/null || true
+        remote_put "$SCRIPT_DIR/../config/role-skills.yaml" "dev/agent-runtime/config/role-skills.yaml"
     fi
 else
     echo "ERROR: launcher runtime for provider '$PROVIDER' not found ($PROVIDER_LAUNCHER)" >&2
     exit 1
 fi
 
-# Execute on remote
+# Execute on worker (local bash -s or ssh bash -s)
 echo "Starting agent on $HOST..."
-ssh "$HOST" bash -s <<REMOTE_SCRIPT
+remote_bash_s <<REMOTE_SCRIPT
 set -euo pipefail
 
-# Non-interactive ssh shells get a bare PATH (/usr/bin:/bin:/usr/sbin:/sbin) —
-# the vendor CLIs (kimi, grok, claude) install under \$HOME. Prepend the known
-# locations (expanded worker-side) so launch.sh can find its CLI.
+# Ensure vendor CLIs are on PATH (ssh bare PATH; local session may already have them).
 export PATH="\$HOME/.kimi-code/bin:\$HOME/.grok/bin:\$HOME/.local/bin:\$PATH"
 
 # Create log directory
@@ -306,11 +360,20 @@ if [ "$REMOTE_EXIT" -eq 75 ] || [ "$REMOTE_EXIT" -eq 69 ]; then
 fi
 
 # Agent intent block (handoff.md at repo root) — merged alongside the skeleton.
-if ssh "$HOST" "test -f $WORK_DIR/handoff.md" 2>/dev/null; then
-    ssh "$HOST" "cat $WORK_DIR/handoff.md" > "$HANDOFF_DIR/$TASK_ID.md" 2>/dev/null || true
-    echo "Handoff recorded: $HANDOFF_DIR/$TASK_ID.{jsonl,md}"
-elif [ "$REMOTE_EXIT" -eq 0 ]; then
-    echo "WARNING: $AGENT left no handoff.md (soft phase — task still counts as done)" >&2
+if [ "$IS_LOCAL" -eq 1 ]; then
+    if [ -f "$HOME/dev/$REPO_NAME/handoff.md" ]; then
+        cp "$HOME/dev/$REPO_NAME/handoff.md" "$HANDOFF_DIR/$TASK_ID.md" 2>/dev/null || true
+        echo "Handoff recorded: $HANDOFF_DIR/$TASK_ID.{jsonl,md}"
+    elif [ "$REMOTE_EXIT" -eq 0 ]; then
+        echo "WARNING: $AGENT left no handoff.md (soft phase — task still counts as done)" >&2
+    fi
+else
+    if ssh "$HOST" "test -f $WORK_DIR/handoff.md" 2>/dev/null; then
+        ssh "$HOST" "cat $WORK_DIR/handoff.md" > "$HANDOFF_DIR/$TASK_ID.md" 2>/dev/null || true
+        echo "Handoff recorded: $HANDOFF_DIR/$TASK_ID.{jsonl,md}"
+    elif [ "$REMOTE_EXIT" -eq 0 ]; then
+        echo "WARNING: $AGENT left no handoff.md (soft phase — task still counts as done)" >&2
+    fi
 fi
 
 # Rate-cap sentinel (exit 75): mark the vendor cooling, log the event, learn it.
@@ -328,7 +391,11 @@ fi
 # On other failures, auto-record a learning from the last 3 log lines
 # (skip 75 — already logged high above).
 if [ "$REMOTE_EXIT" -ne 0 ] && [ "$REMOTE_EXIT" -ne 75 ] && [ -x "$SCRIPT_DIR/learnings.sh" ]; then
-    FAIL_TAIL=$(ssh "$HOST" "tail -3 $LOG_DIR/$LOG_FILE 2>/dev/null" || echo "no log available")
+    if [ "$IS_LOCAL" -eq 1 ]; then
+        FAIL_TAIL=$(tail -3 "$HOME/dev/agent-logs/$LOG_FILE" 2>/dev/null || echo "no log available")
+    else
+        FAIL_TAIL=$(ssh "$HOST" "tail -3 $LOG_DIR/$LOG_FILE 2>/dev/null" || echo "no log available")
+    fi
     "$SCRIPT_DIR/learnings.sh" add "$REPO_NAME" "$AGENT" failure \
         "Agent exited $REMOTE_EXIT. Last output: $FAIL_TAIL" \
         --severity medium 2>/dev/null || true

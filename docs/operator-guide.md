@@ -189,6 +189,16 @@ Not a ticket system: GitHub stays source of issues; Fleet Desk shows what the fl
 
 ---
 
+## Localhost workers and Claude OAuth
+
+`run-remote.sh` treats `localhost` / `127.0.0.1` as an **in-session** worker: it does **not** use SSH.
+
+**Why:** Non-interactive `ssh localhost` cannot see Claude’s OAuth/keychain. You get `loggedIn: true` in your terminal after `claude login`, but `ssh localhost 'claude auth status'` shows `loggedIn: false` and the fleet dies in ~8s with “OAuth session expired.”
+
+True remote hosts (Mac Minis) still use SSH. Only the local machine skips it.
+
+---
+
 ## Vendor auth preflight
 
 **Validate sessions before any wave** — do not re-login every run; only when the check fails.
