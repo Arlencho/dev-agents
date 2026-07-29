@@ -1,142 +1,87 @@
-# Handoff — critic loop 2, PR #46 `feat/fleet-desk-data-contract`
+# Handoff — Fleet Desk Wave 2 UI craft (`feat/fleet-desk-ui`)
 
-Seat: critic / verify-only. No production code modified, no UI redesign, no
-re-implementation. Reviewed `f41484c` (= `origin/feat/fleet-desk-data-contract`).
-
-## VERDICT: APPROVE
-
-Both blocking findings (F1, F2) are fixed, and the fixes are proven by
-executable mutation evidence rather than by green-suite assertion. 11 mutants
-applied on a clean tree and reverted: **9 killed, 2 verified equivalent, 0
-surviving defects.**
+Seat: web-frontend (UI CRAFT only). Data contract, joins, and PMI logic untouched
+(except one tiny cosmetic fix, below). Built on top of Wave 1 (`#46`).
 
 ## Built
 
-Nothing. Verification only. `handoff.md` is the sole file written.
+- `templates/experience/site.css` (new) — the Wave 2 visual system: design tokens
+  (paper/ink, one bronze accent), `prefers-color-scheme` dark palette, status pills
+  (text AND color, never color alone), PMI band badges, wave section headers,
+  segmented control, stat strip, breadcrumbs, meta grid, empty-state boxes,
+  focus-visible rings, skip link, `prefers-reduced-motion`. Zero JavaScript.
+- `scripts/experience_build.py` (rewritten renderer) — still reads **only**
+  `site/experience/data/index.json`; CSS moved out of the Python string into the
+  template and copied to `site/experience/assets/site.css` each build (pages link
+  it via `<link rel="stylesheet">`; stale-HTML cleanup now also preserves `assets/`).
+  - Work: **group-by-wave + flat toggle** as plain links (`work/index.html` ⇄
+    `work/flat/index.html`, same pair per company). No JS.
+  - Home: fleet stat strip (trails, done %·n, critic share, waves, companies,
+    vendor mix), companies strip with `n=`, recent work, watchlist, roles+PMI,
+    skills/learnings funnel.
+  - Trail detail: breadcrumb (`← Work · scope · wave N`), meta grid
+    (vendor·model, branch, base→head mono SHAs, exit, ts, join, links, source),
+    all six handoff sections (open_questions/next_hint now shown too), raw
+    redacted record in `<details>`.
+  - Company: status pill, repo/GitHub link, joined trails, per-company learnings,
+    "skills are fleet-global" note.
+  - Roles/Skills/Learn: status pills, PMI badge + reason + cap + expandable raw
+    inputs, specialized-pack "boost label, never a P2 shortcut" wording.
+  - a11y: `aria-current` on nav / scope chips / segment; skip link; semantic h1→h2.
+- `scripts/experience_data.py` (tiny fix) — `phase_note` no longer captures the
+  `## Active phase` heading itself; heading lines are skipped so olympus now lands
+  on the `| Wave plan in flight | …` row like safeplace. No join/PMI/PMI-gate changes.
+- `tests/run-experience-tests.sh` — 24 new Wave 2 smoke checks (stylesheet exists
+  + linked, `prefers-color-scheme`, no inline `<style>`/`style=` in HTML, segment
+  toggle + flat pages, status pill text, skip link, aria-current, breadcrumb,
+  base→head, raw-record disclosure, empty-state teaches, PMI badge). Added
+  `assert_absent_html` helper that scans only `*.html` (data/index.json may
+  legitimately contain `style="` inside handoff prose).
+- `docs/experience.md` — operator walkthrough updated for the new UI (toggle,
+  visual-system reading guide, stylesheet location).
 
-## Evidence
+## Decisions (+why)
 
-Baseline, clean tree:
-
-```
-$ git rev-parse HEAD; git rev-parse origin/feat/fleet-desk-data-contract
-f41484c9745ef687bb0b0f421d9ba972b4aec1da
-f41484c9745ef687bb0b0f421d9ba972b4aec1da
-$ bash tests/run-experience-tests.sh | tail -1
-== 97 passed, 0 failed ==
-```
-
-### F1 — `make experience-data` must not wipe the rendered site — FIXED
-
-Reproduced the original failure path end to end:
-
-```
-$ rm -rf site/experience && make experience
-html count: 48   data/index.json md5 904e9d52496d7c77b13a3d458d74d6fb
-$ make experience-data
-index.html exists: YES
-html count: 48
-data/index.json exists: YES   md5 982c9bd78aedf90abe46e61ca6636aa0
-```
-
-HTML survives (48 → 48) and the JSON genuinely changed. The fix was **not**
-traded for a stale-page regression — hygiene moved to the HTML owner and still
-works:
-
-```
-$ mkdir -p site/experience/trail/ghost-trail && echo … > …/index.html
-$ echo GHOSTDATA > site/experience/data/stray-asset.txt && make experience
-ghost page pruned: YES
-ghost dir pruned:  YES
-data/index.json intact: YES
-```
-
-Part C is non-vacuous by construction: it stamps `generated_at='STALE-STAMP'`
-and asserts the stamp is gone, so it proves a real refresh rather than mere
-file existence (confirmed by mutant M8b below).
-
-### F2 — no-dump assertions are non-vacuous — FIXED
-
-Fixtures now carry 4 absolute operator log paths (3× `/Users/fixtureop/…`,
-1× `/home/fixtureop/…`; 18 remain empty) plus a real transcript on disk with
-marker, token shapes and home paths. The guards at
-`tests/run-experience-tests.sh:126-139` make fixture rot loud — verified by
-mutating the fixtures, not just the code (M4, M5).
-
-### Mutation results
-
-| # | Mutant | Result |
-| --- | --- | --- |
-| M1 | `rmtree(out_dir)` restored in `write_dataset` | **killed** — 5 fails (Part C) |
-| M2 | log body read into `trails[].source.log_body` | **killed** — 4 fails |
-| M3 | `log_name` keeps full path (`str` not `.name`) | **killed** — 3 fails |
-| M4 | fixture rot: all `"log"` back to `""` (the original F2 cause) | **killed** — 2 fails |
-| M5 | fixture transcript deleted from disk | **killed** — 3 fails |
-| M6 | `clean_html()` made a no-op | **killed** — 1 fail |
-| M7 | `data/` exclusion removed from `clean_html` | survived — **equivalent** |
-| M8 | `write_dataset` early-returns when `index.json` exists | survived — **equivalent** |
-| M8b | data step rewrites stale content (true no-op refresh) | **killed** — 1 fail |
-| M9 | PMI P2 gate `and` → `or` | **killed** — 3 fails |
-| M10 | Phase 0 cap `P2` → `P3` | **killed** — 2 fails |
-| M11 | join company-id validation bypassed | **killed** — 1 fail |
-
-M1–M3 independently reproduce the producer's claimed table exactly. M4–M11 are
-mine; the producer did not test them.
-
-**Equivalence proven, not assumed:**
-
-- **M7** — `data/` holds only `index.json`: verified `0` `*.html` files under
-  `data/` (nothing for the unlink loop to take) and the dir is never empty
-  (nothing for the prune loop to take). The exclusion is defensive, correct to
-  keep, unobservable today.
-- **M8** — `rmtree(data_dir)` runs *before* the mutated guard, so `index.json`
-  never exists at that point and the early return is unreachable. Replaced with
-  M8b, which forces a genuine stale refresh and **is** caught — so the "stale
-  stamp gone" assertion is real.
-
-### SYNTHESIS contract, PMI P2 gate, joins — re-checked
-
-The revise diff touches only cleaning logic:
-
-```
-$ git diff 3682027..1823655 --stat -- scripts/
- scripts/experience-build.sh |  4 ++--
- scripts/experience_build.py | 22 ++++++++++++++++++++++
- scripts/experience_data.py  | 15 +++++++++++----
-```
-
-`experience_data.py` changes are confined to `write_dataset()` and the
-`--no-clean` help string. Projection, PMI and join logic are byte-identical to
-the reviewed commit, so loop-1's verification carries. Spot-checked anyway with
-live mutants M9/M10 (PMI P2 gate + Phase 0 cap) and M11 (joins cannot invent a
-company) — all killed. `docs/experience.md:40-43` documents the ownership split
-and matches observed behavior.
-
-## Decisions
-
-- Re-derived F1/F2 from the failing behavior rather than trusting the
-  producer's evidence block; the three claimed mutants were re-run from scratch.
-- Added fixture-level mutants (M4, M5). F2 was a *fixture* defect, so mutating
-  only code would have left the new guards themselves unverified.
-- Reported M7/M8 as equivalent with proof instead of filing them as coverage
-  gaps — matching loop-1's handling of M11/M12.
-
-## Open questions / follow-ups (non-blocking, do not hold the merge)
-
-- **F3** still open: `counts.unlinked_trails` is documented but unasserted
-  (`grep -c unlinked_trails tests/run-experience-tests.sh` → `0`).
-- **F4** still open: `handoff_truncated` remains undocumented
-  (`grep -c handoff_truncated docs/experience-data.md` → `0`).
-- Both were explicitly non-blocking and out of scope for an F1/F2-only revise.
-  Worth a small follow-up PR.
-- Producer's own note stands: if a future phase ships real non-HTML assets,
-  `clean_html()`'s empty-dir prune should be revisited (M7 stops being
-  equivalent at that point).
+- **External stylesheet over inline `<style>`** — the charter prefers
+  `templates/experience/` CSS; one cached file, and "no inline styles" becomes a
+  testable craft invariant.
+- **Flat/wave toggle as two static pages, not JS** — SYNTHESIS §6 "static is a
+  feature, minimal/no required JS"; links work over `file://` everywhere.
+- **Did not add filters (role/status/wave dropdowns)** — §4.2 shows them, but
+  Phase 0 law is scan-first static; wave sections + flat view cover the operator
+  questions without JS. Flagged as a Phase 1 candidate.
+- **Raw JSONL is not rendered** — the contract carries no raw JSONL text field;
+  the audit disclosure shows the redacted handoff markdown instead. Contract unchanged.
+- **phase_note kept as raw table row** (`| Wave plan … | …`) — matches safeplace's
+  Wave 1 rendering; stripping pipes would be display sugar over the contract.
 
 ## Do not repeat
 
-- Do not "simplify" the two-sided clean split back into one rmtree — M1 and M6
-  fail in opposite directions and both are now guarded.
-- Do not set fixture `"log"` fields back to `""` to quiet anything; M4 shows
-  the vacuity guards fire immediately.
-- Do not re-file M7/M8 as bugs. They are equivalent mutants with proof above.
+- Python <3.12 f-strings: `{" a=\"b\"" if x else ""}` inside an f-string
+  expression is a SyntaxError — compute the attribute string outside the braces.
+- `assert_absent` over the whole site dir will false-positive on
+  `data/index.json` (handoff prose contains `style="`) — use `assert_absent_html`.
+- Chrome headless `--force-prefers-color-scheme=light` does not work; to verify
+  the light palette, strip the dark `@media` block from a copy of the CSS.
+
+## Evidence
+
+```
+$ make test
+… == 121 passed, 0 failed ==   (fleet desk experience; all other suites green too)
+$ ls site/experience/assets site/experience/work
+assets: site.css     work: flat/ index.html
+$ grep -c 'style=' site/experience/index.html  → 0
+```
+
+Headless-Chrome screenshots checked visually (dark + stripped-light): home,
+work (grouped), trail, role, company (empty state), conductor (empty state).
+
+## Open questions / next hint (critic)
+
+- Verify the toggle links from `company/<id>/work/flat/` resolve (depth-4 prefix).
+- Confirm the phase_note heading-skip did not alter fixture expectations (it is
+  untested there — worth one fixture assertion if you want it pinned).
+- PMI P2 wording on roles index vs role detail: check "boost label" honesty reads
+  right to an operator.
+- PR: `gh pr create` on `feat/fleet-desk-ui` (see PR body for the checklist).
