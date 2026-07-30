@@ -46,6 +46,7 @@ DEFAULT_PORT = 8777
 DEFAULT_INTERVAL = 2.0
 STALE_AFTER = 120     # seconds without an event → STALE chrome
 OFFLINE_AFTER = 900   # seconds without an event → OFFLINE chrome
+QUIET_AFTER = 90      # running stream with no new events → waiting_on quiet_stream
 RECENT_EVENTS = 50    # tail kept in the projection (already redaction-safe)
 
 ISO = "%Y-%m-%dT%H:%M:%SZ"
@@ -356,8 +357,11 @@ def project(events, now=None, source=None, malformed=0):
             out["started_at"] = ts
             out["repo"] = ev.get("repo")
             out["plan"] = ev.get("plan")
-            if ev.get("mode") in ("wave", "conductor"):
-                out["mode"] = ev["mode"]
+            # session = orchestrator/autopilot bridge (same Floor lanes as wave)
+            if ev.get("mode") in ("wave", "conductor", "session"):
+                out["mode"] = "wave" if ev["mode"] == "session" else ev["mode"]
+                if ev.get("mode") == "session":
+                    out["session"] = True
         elif kind == "dispatch_plan":
             if isinstance(ev.get("waves"), int):
                 out["wave"]["total"] = ev["waves"]
@@ -366,8 +370,8 @@ def project(events, now=None, source=None, malformed=0):
         elif kind == "wave_start":
             wave_current = ev.get("wave")
             waves_seen.add(wave_current)
-            if ev.get("mode") in ("wave", "conductor"):
-                out["mode"] = ev["mode"]
+            if ev.get("mode") in ("wave", "conductor", "session"):
+                out["mode"] = "wave" if ev["mode"] == "session" else ev["mode"]
         elif kind == "wave_end":
             waves_seen.add(ev.get("wave"))
         elif kind == "seat_dispatch":
@@ -518,7 +522,32 @@ def project(events, now=None, source=None, malformed=0):
         else:
             state = "live"
     out["staleness"] = {"seconds": age, "state": state,
-                        "stale_after_s": STALE_AFTER, "offline_after_s": OFFLINE_AFTER}
+                        "stale_after_s": STALE_AFTER, "offline_after_s": OFFLINE_AFTER,
+                        "quiet_after_s": QUIET_AFTER}
+
+    # Hang honesty: a still-running dispatch with no new events for QUIET_AFTER
+    # surfaces first-class on waiting_on so the Floor does not look "fine".
+    if (
+        out["status"] == "running"
+        and isinstance(age, int)
+        and age >= QUIET_AFTER
+        and state in ("stale", "offline", "live")
+    ):
+        # Prefer stale/offline; still flag quiet when just past QUIET_AFTER but
+        # under STALE_AFTER so the operator sees "maybe stuck" early.
+        quiet_label = (
+            "no new events for %ds — stream may be stuck (check agent log growth)"
+            % age
+        )
+        if not any(w.get("kind") == "quiet_stream" for w in waiting):
+            # Append (do not steal W[0]): human gates and active seats stay first.
+            waiting.append({
+                "kind": "quiet_stream",
+                "label": quiet_label,
+                "since": out["last_event_ts"],
+                "seconds": age,
+            })
+            out["waiting_on"] = waiting
 
     out["events_seen"] = len(events)
     out["recent_events"] = events[-RECENT_EVENTS:]
@@ -687,6 +716,13 @@ def serve(args, out_path):
     print("  SSE       http://%s:%d/events" % (args.host, args.port))
     print("  open      %s" % url)
     print("  (Ctrl-C to stop)")
+    if getattr(args, "open_browser", False):
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            print("  browser   opened")
+        except Exception as exc:
+            print("  browser   open failed: %s" % exc, file=sys.stderr)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -727,6 +763,8 @@ def main(argv=None):
     parser.add_argument("--print", dest="print_json", action="store_true",
                         help="also print the projection to stdout")
     parser.add_argument("--verbose", action="store_true", help="log every HTTP request")
+    parser.add_argument("--open", dest="open_browser", action="store_true",
+                        help="open the Ops Floor URL in the default browser (follow live)")
     args = parser.parse_args(argv)
 
     out_path = args.out or os.path.join(args.site_dir, "data", "live.json")

@@ -163,6 +163,11 @@
       var extra = "";
       if (st.state === "replay") extra = " · <strong class=\"wm-inline\">REPLAY</strong>";
       else if (st.state !== "live") extra = " · stream " + esc(st.state);
+      // Hang honesty: still "running" but quiet → call it out in ambient
+      var quiet = (d.waiting_on || []).some(function (w) { return w.kind === "quiet_stream"; });
+      if (quiet && st.state !== "replay") {
+        extra += ' · <strong class="wm-inline">QUIET</strong> (no new events)';
+      }
       msg.innerHTML = "<strong>" + esc(d.status || "unknown") + "</strong> — dispatch " +
         "<span class=\"mono\">" + esc(d.dispatch_id || "—") + "</span>" + extra;
     }
@@ -174,6 +179,7 @@
       }
       meta.textContent = (d.source || "live.json") +
         " · last event " + (st.age == null ? "—" : fmtDur(st.age) + " ago") +
+        (st.age != null && st.age >= 90 ? " · follow may be stuck" : "") +
         " · snapshot " + esc(d.generated_at || "—") + seqNote;
     }
   }
@@ -187,9 +193,14 @@
       return;
     }
     box.innerHTML = items.map(function (w) {
-      return '<p class="witem flush"><span class="pill accent">' + esc(w.kind || "wait") + "</span> " +
+      var kind = w.kind || "wait";
+      var pillCls = kind === "quiet_stream" ? "pill warn" : "pill accent";
+      return '<p class="witem flush' + (kind === "quiet_stream" ? " quiet" : "") + '">' +
+        '<span class="' + pillCls + '">' + esc(kind) + "</span> " +
         esc(w.label || "waiting") +
-        (w.since ? ' <span class="muted">since ' + esc(timeOf(w.since)) + "</span>" : "") + "</p>";
+        (w.seconds != null ? ' <span class="muted mono">(' + esc(fmtDur(w.seconds)) + ")</span>" : "") +
+        (w.since && kind !== "quiet_stream" ? ' <span class="muted">since ' + esc(timeOf(w.since)) + "</span>" : "") +
+        "</p>";
     }).join("");
   }
 
