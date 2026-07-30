@@ -476,6 +476,7 @@ Honesty rules the projector enforces:
 ### Running it
 
 ```bash
+make desk-follow                   # recommended: watch + serve + open browser
 make desk-live                     # watch + serve http://127.0.0.1:8777/live/ (SSE at /events)
 make desk-live PORT=9000           # different port
 make desk-live-once                # write live.json once, no server (file:// desks)

@@ -98,6 +98,22 @@ Agents load **charter (L1) + skill packs (L2) + case file (L3 preamble) + task**
 
 **Session modes (Phase 0):** co-pilot contracts **Conductor / Wave / Auto** — classify → task packet → human go → `dispatch.sh`. Chat does not silently ship product fixes. Contract: [`docs/session-modes.md`](docs/session-modes.md). Freeze: [`docs/proposals/session-modes-SYNTHESIS.md`](docs/proposals/session-modes-SYNTHESIS.md).
 
+### Fleet Desk (v2 — shipped)
+
+Static **Almanac** (settled record) + live **Ops Floor** (motion during dispatch). Full walkthrough: [`docs/experience.md`](docs/experience.md).
+
+```bash
+make experience-open   # Almanac (file://) — companies, missions, trails
+make desk-follow       # Ops Floor at http://127.0.0.1:8777/live/ (leave open)
+
+# Terminal B — work that the Floor can see:
+./scripts/dispatch.sh git@github.com:you/repo.git wave-plans/your.plan
+# or long shell:
+./scripts/fleet-session.sh run --label my-run --repo my-repo -- make test
+```
+
+Live polls ~3s (no reload). Settled runs: **REPLAY** scrubber on the Floor. Quiet stream (~90s no events while still “running”) shows **QUIET** hang chrome.
+
 ## Operator Quickstart
 
 If you're running agents on owned hardware (local machines or Mac Minis), this section is your starting point.
@@ -523,8 +539,10 @@ Specialty / niche roles live in [`roles/_archived/`](roles/_archived/README.md) 
 | [`docs/operator-guide.md`](docs/operator-guide.md) | **Start here for ops** — dispatch, handoffs, skills inject, failures, cookbook |
 | [`docs/plan-file-format.md`](docs/plan-file-format.md) | Canonical WAVE plan grammar (matches `dispatch.sh`) |
 | [`docs/session-modes.md`](docs/session-modes.md) | Co-pilot session modes: Conductor / Wave / Auto (Phase 0) |
-| [`docs/experience.md`](docs/experience.md) | **Fleet Desk** — start/view experience overview (`make experience`) |
-| [`docs/proposals/experience-console-SYNTHESIS.md`](docs/proposals/experience-console-SYNTHESIS.md) | Fleet Desk Phase 0 freeze |
+| [`docs/experience.md`](docs/experience.md) | **Fleet Desk (v2)** — Almanac + Ops Floor: live follow, REPLAY, operator path |
+| [`docs/experience-data.md`](docs/experience-data.md) | Fleet Desk data contract (schema v2 + live/1 events) |
+| [`docs/proposals/fleet-desk-v2-SYNTHESIS.md`](docs/proposals/fleet-desk-v2-SYNTHESIS.md) | Fleet Desk v2 freeze (Phases A–C shipped) |
+| [`docs/proposals/experience-console-SYNTHESIS.md`](docs/proposals/experience-console-SYNTHESIS.md) | Fleet Desk Phase 0/1 data freeze (schema v2) |
 | [`docs/architecture.md`](docs/architecture.md) | Fleet topology: launchers, failover, L1/L2/L3, Paperclip coexistence |
 | [`docs/org-chart.md`](docs/org-chart.md) | Pairing + reporting (vendor-aware) |
 | [`docs/paperclip-architecture.md`](docs/paperclip-architecture.md) | Paperclip companies / agents / issues |
@@ -537,11 +555,10 @@ Specialty / niche roles live in [`roles/_archived/`](roles/_archived/README.md) 
 | [`docs/proposals/session-modes-SYNTHESIS.md`](docs/proposals/session-modes-SYNTHESIS.md) | Session modes freeze (Phase 0) |
 | [`config/role-skills.yaml`](config/role-skills.yaml) | Role → skill map |
 | [`providers/kimi/README.md`](providers/kimi/README.md) | Kimi launcher |
-| [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic Pass 4 |
-
-Ops: `make test` (unit), `make experience` / `make experience-open` (Fleet Desk UI), `make evidence` (quality scorecard), `make scorecard` (rate-caps), `make fleet-status` (when configured).
 | [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic and judgment-seat launcher |
 | [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md) | Weekly Paperclip release scan log |
+
+**Ops:** `make test` · `make experience` / `make experience-open` (Almanac) · **`make desk-follow`** (live Ops Floor + browser) · `./scripts/fleet-session.sh run --label X -- <cmd>` (long shell on Floor) · `make evidence` · `make scorecard` · `make fleet-status` (when configured).
 
 ## Real-world results
 

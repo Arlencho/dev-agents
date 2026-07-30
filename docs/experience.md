@@ -210,7 +210,7 @@ The home page's Live teaser mirrors the same projection snapshot when present.
 
 Settled runs can be scrubbed on the Floor without looking like a live dispatch.
 
-1. Run `make desk-live` (needs HTTP so the scrubber can call `/api/runs` and `/api/replay`).
+1. Run `make desk-follow` (or `make desk-live`) — HTTP so the scrubber can call `/api/runs` and `/api/replay`.
 2. Open **Floor**. When the projection is terminal (settled / aborted), click **Enter REPLAY**.
 3. Drag the scrubber — the Floor re-projects only events with `seq <= as_of_seq`.
 4. Honesty chrome: violet LED + **REPLAY** watermark. Green LIVE is never painted in replay.
