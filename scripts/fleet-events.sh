@@ -31,7 +31,7 @@ FLEET_EVENTS_SCHEMA="fleet-events/1"
 
 # Keys emitted as JSON numbers when the value is an integer. Everything else is
 # a quoted string — a branch literally named "42" must not become a number.
-_FE_NUMERIC_KEYS=" seq exit wave waves seats attempt duration_s succeeded failed total blocked cooldown_minutes next_wave "
+_FE_NUMERIC_KEYS=" seq exit wave waves seats attempt duration_s elapsed_s succeeded failed total blocked cooldown_minutes next_wave "
 
 _fe_enabled() {
     [ "${FLEET_EVENTS:-1}" = "0" ] && return 1

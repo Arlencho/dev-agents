@@ -175,7 +175,7 @@ FLEET_EVENTS=0 ./scripts/dispatch.sh ...   # opt out of the stream entirely
 |----------|---------|
 | **Watch a wave while it runs** | Terminal A: `make desk-follow`. Terminal B: `dispatch.sh` or `fleet-session.sh run …` |
 | **Timers / motion** | Floor polls every ~3s — **no page reload** (HTTP only, not `file://`) |
-| **Stuck?** | Ambient **QUIET** + waiting-on `quiet_stream` when no events for ~90s while still “running” |
+| **Stuck?** | Ambient **QUIET** + waiting-on `quiet_stream` when no events for ~90s while still “running”. Dispatch emits **`seat_heartbeat`** every ~45s so long healthy seats stay LIVE; STALE with heartbeats means a real stall |
 | **Autopilot / long shell work** | Wrap so Floor sees it: `./scripts/fleet-session.sh run --label my-run -- <cmd>` |
 
 ```bash

@@ -417,8 +417,19 @@ with one `orchestrator` seat, optional `progress` heartbeats, and a clean
 ./scripts/fleet-session.sh run --label my-run --repo dev-agents -- make test
 ```
 
-Unknown event names (e.g. `progress`) still advance `last_event_ts` and appear in
-`recent_events` — they do not invent seats.
+Unknown event names (e.g. `progress`, `seat_heartbeat`) still advance
+`last_event_ts` and appear in `recent_events` — they do not invent seats.
+
+### Seat heartbeats (follow live while agents work)
+
+`scripts/dispatch.sh` emits **`seat_heartbeat`** for every still-running seat
+while waiting on a wave (default every **45s**, env `FLEET_HEARTBEAT_S`; set
+`0` to disable). That keeps Ops Floor `last_event_ts` fresh so a healthy long
+seat does **not** flip to STALE/QUIET solely because of event silence between
+`seat_dispatch` and `seat_exit`.
+
+If STALE/QUIET still appears **with** heartbeats, the stream truly stopped
+(agent dead, emitter disabled, or heartbeats off) — not “task too hard.”
 
 When `status=running` and no event has arrived for `quiet_after_s` (default 90),
 the projection adds `waiting_on[]` entry `kind=quiet_stream` so the Floor can

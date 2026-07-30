@@ -866,11 +866,49 @@ for wave_num in "${SORTED_WAVES[@]}"; do
     wave_fail=0
     declare -A FAILED_TASKS=()  # idx -> retry_count (=() keeps ${#..[@]} bound under set -u)
 
+    # Seat heartbeats keep Ops Floor last_event_ts fresh while agents work.
+    # Without them the Floor goes STALE after 120s of event silence even when
+    # seats are healthy (seat_dispatch … long gap … seat_exit). Override:
+    #   FLEET_HEARTBEAT_S=45   (default; set 0 to disable)
+    # Must stay under desk_live QUIET_AFTER (90) / STALE_AFTER (120).
+    heartbeat_s="${FLEET_HEARTBEAT_S:-45}"
+
     for pid in "${!WAVE_PIDS[@]}"; do
         idx="${WAVE_PIDS[$pid]}"
         set +e
-        wait "$pid"
-        status=$?
+        if [ "${heartbeat_s:-0}" -gt 0 ] 2>/dev/null; then
+            # Emit immediately, then every heartbeat_s until this pid exits.
+            while kill -0 "$pid" 2>/dev/null; do
+                for hpid in "${!WAVE_PIDS[@]}"; do
+                    if kill -0 "$hpid" 2>/dev/null; then
+                        hidx="${WAVE_PIDS[$hpid]}"
+                        helapsed=$(( $(date +%s) - TASK_START[$hidx] ))
+                        fleet_event seat_heartbeat \
+                            task_id="$hidx" \
+                            agent="${TASK_AGENT[$hidx]}" \
+                            branch="${TASK_BRANCH[$hidx]}" \
+                            wave="$wave_num" \
+                            provider="${RESULT_PROVIDER[$hidx]:-}" \
+                            worker="${RESULT_WORKER[$hidx]:-}" \
+                            elapsed_s="$helapsed"
+                    fi
+                done
+                # Sleep in short chunks so we notice seat exit without full-interval lag.
+                slept=0
+                while [ "$slept" -lt "$heartbeat_s" ]; do
+                    if ! kill -0 "$pid" 2>/dev/null; then
+                        break
+                    fi
+                    sleep 5
+                    slept=$((slept + 5))
+                done
+            done
+            wait "$pid"
+            status=$?
+        else
+            wait "$pid"
+            status=$?
+        fi
         set -e
 
         end_time=$(date +%s)

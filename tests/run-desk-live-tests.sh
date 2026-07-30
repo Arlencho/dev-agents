@@ -580,6 +580,15 @@ grep -q 'quiet_stream\|QUIET' "$REPO_DIR/templates/experience/floor.js" \
   && ok "floor.js surfaces QUIET hang chrome" || bad "floor.js surfaces QUIET hang chrome"
 test -x "$REPO_DIR/scripts/fleet-session.sh" \
   && ok "fleet-session.sh is executable" || bad "fleet-session.sh is executable"
+grep -q 'seat_heartbeat' "$REPO_DIR/scripts/dispatch.sh" \
+  && ok "dispatch.sh emits seat_heartbeat while seats run" \
+  || bad "dispatch.sh emits seat_heartbeat while seats run"
+grep -q 'FLEET_HEARTBEAT_S' "$REPO_DIR/scripts/dispatch.sh" \
+  && ok "seat heartbeat interval is configurable (FLEET_HEARTBEAT_S)" \
+  || bad "seat heartbeat interval is configurable (FLEET_HEARTBEAT_S)"
+grep -q 'elapsed_s' "$REPO_DIR/scripts/fleet-events.sh" \
+  && ok "fleet-events treats elapsed_s as numeric on heartbeats" \
+  || bad "fleet-events treats elapsed_s as numeric on heartbeats"
 
 echo ""
 echo "----------------------------------------"
