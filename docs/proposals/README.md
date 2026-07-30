@@ -15,7 +15,8 @@ Design proposals and freezes for the dev-agents toolkit. **Not operator runbooks
 |------|--------|--------|
 | `skills-evolution-SYNTHESIS.md` | **Freeze** | Skills Phase 0 inject shipped; promote via PR |
 | `session-modes-SYNTHESIS.md` | **Freeze** | Session modes Phase 0: docs + skill + packet; no daemon |
-| `experience-console-SYNTHESIS.md` | **Freeze** | Fleet Desk Phase 0: static dual-scope operator desk (build next) |
+| `experience-console-SYNTHESIS.md` | **Freeze** | Fleet Desk schema v2 / Phase 0–1 data law |
+| `fleet-desk-v2-SYNTHESIS.md` | **Freeze** | Fleet Desk v2 product: Almanac + Ops Floor; Phases A–C + follow **shipped** |
 | `multi-vendor-context-transparency-SYNTHESIS.md` | **Freeze** | Handoff / brain Phase 0–1 direction |
 
 ## Briefs (owner asks)
@@ -35,7 +36,16 @@ Design proposals and freezes for the dev-agents toolkit. **Not operator runbooks
 | `experience-console-proposal-grok.md` | B |
 | `experience-console-proposal-kimi.md` | C |
 
-Prefer `experience-console-SYNTHESIS.md` (**Fleet Desk** Phase 0 freeze).
+Prefer `experience-console-SYNTHESIS.md` (data law) and `fleet-desk-v2-SYNTHESIS.md` (v2 product; living ops: [`../experience.md`](../experience.md)).
+
+## Fleet Desk v2 seat drafts (superseded by SYNTHESIS — design PRs closed)
+
+| File / PR | Seat |
+|-----------|------|
+| `fleet-desk-v2-BRIEF.md` | Owner brief |
+| Proposal A / B / C (PRs #53–#55, closed) | Design seats only |
+
+Prefer `fleet-desk-v2-SYNTHESIS.md`. Sketch: `sketches/fleet-desk-v2-hybrid.html` (reference only).
 
 ## Session-modes seat drafts (superseded by SYNTHESIS)
 
