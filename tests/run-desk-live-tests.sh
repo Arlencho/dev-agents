@@ -212,7 +212,7 @@ assert_py "wave position known" "$OUT" 'd["wave"]["current"]==2 and d["wave"]["t
 assert_py "resolved human gate is not still waiting" "$OUT" \
   'not any(w["kind"]=="human_gate" for w in W)'
 assert_py "waiting_on falls back to the running seat" "$OUT" \
-  'len(W)==1 and W[0]["kind"]=="seat" and W[0]["task_id"]=="2"'
+  'any(w.get("kind")=="seat" and w.get("task_id")=="2" for w in W)'
 assert_py "last_event_ts is the newest event" "$OUT" 'd["last_event_ts"]=="2026-07-29T10:20:02Z"'
 assert_py "old stream reads offline, never live" "$OUT" 'd["staleness"]["state"]=="offline"'
 assert_py "staleness thresholds are published" "$OUT" \
@@ -231,8 +231,9 @@ assert_py "guardrail block is Blocked, not failed noise" "$OUT_C" \
 assert_py "log travels as a filename only" "$OUT_C" \
   'S["0"]["log"]=="olympus-platform-feat-payments-svc-20260729-120002.log" and "/" not in S["0"]["log"]'
 assert_py "open human gate is first-class in waiting_on" "$OUT_C" \
-  'W[0]["kind"]=="human_gate" and W[0]["gate"]=="failure_gate" and W[0]["next_wave"]==2'
-assert_py "gate label says what the human must do" "$OUT_C" '"continue after failed wave 1" in W[0]["label"]'
+  'any(w.get("kind")=="human_gate" and w.get("gate")=="failure_gate" and w.get("next_wave")==2 for w in W)'
+assert_py "gate label says what the human must do" "$OUT_C" \
+  'any(w.get("kind")=="human_gate" and "continue after failed wave 1" in (w.get("label") or "") for w in W)'
 
 # Empty events dir → honest idle, not a crash.
 OUT_E="$TMP/out/live-empty.json"
@@ -519,6 +520,66 @@ grep -q 'floor-watermark\|REPLAY\|replay' "$REPO_DIR/templates/experience/floor.
 grep -q 'api/replay\|/api/runs' "$REPO_DIR/scripts/desk_live.py" \
   && ok "desk_live.py serves /api/runs and /api/replay" \
   || bad "desk_live.py serves /api/runs and /api/replay"
+
+# ── Part E: follow live (quiet hang + fleet-session bridge) ───────────
+echo ""
+echo "== Part E: follow live (quiet_stream + fleet-session) =="
+
+# Quiet hang: running seat, last event 200s ago → waiting_on quiet_stream
+QUIET_DIR="$TMP/quiet-events"
+mkdir -p "$QUIET_DIR"
+python3 - "$QUIET_DIR/quiet-run.jsonl" <<'PY'
+import json, sys
+from datetime import datetime, timezone, timedelta
+path = sys.argv[1]
+now = datetime.now(timezone.utc).replace(tzinfo=None)
+old = now - timedelta(seconds=200)
+def ts(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+did = "quiet-run"
+rows = [
+    {"schema":"fleet-events/1","seq":1,"ts":ts(old),"dispatch_id":did,"event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"quiet.plan"},
+    {"schema":"fleet-events/1","seq":2,"ts":ts(old),"dispatch_id":did,"event":"wave_start","wave":1,"seats":1,"mode":"wave"},
+    {"schema":"fleet-events/1","seq":3,"ts":ts(old),"dispatch_id":did,"event":"seat_dispatch","task_id":"0","agent":"devops","branch":"feat/hang","wave":1,"provider":"claude","attempt":1},
+]
+with open(path, "w") as f:
+    for r in rows:
+        f.write(json.dumps(r) + "\n")
+PY
+echo "quiet-run.jsonl" > "$QUIET_DIR/latest"
+python3 "$DESK_LIVE" --once --events-dir "$QUIET_DIR" --out "$TMP/quiet.json" \
+  --dispatch-id quiet-run >/dev/null 2>&1
+assert_py "quiet hang projects status running" "$TMP/quiet.json" \
+  'd["status"]=="running"'
+assert_py "quiet hang marks stream stale or offline" "$TMP/quiet.json" \
+  'd["staleness"]["state"] in ("stale","offline")'
+assert_py "quiet hang surfaces quiet_stream on waiting_on" "$TMP/quiet.json" \
+  'any(w.get("kind")=="quiet_stream" for w in d.get("waiting_on") or [])'
+assert_py "staleness publishes quiet_after_s" "$TMP/quiet.json" \
+  'isinstance((d.get("staleness") or {}).get("quiet_after_s"), int)'
+
+# fleet-session.sh run wraps a command and closes the stream
+SESS_DIR="$TMP/session-events"
+mkdir -p "$SESS_DIR"
+FLEET_EVENTS_DIR="$SESS_DIR" bash "$REPO_DIR/scripts/fleet-session.sh" run \
+  --label follow-test --repo dev-agents -- true >/dev/null 2>&1
+sess_files="$(ls "$SESS_DIR"/*.jsonl 2>/dev/null | wc -l | tr -d ' ')"
+[ "$sess_files" -ge 1 ] && ok "fleet-session run writes a jsonl stream" || bad "fleet-session run writes a jsonl stream"
+python3 "$DESK_LIVE" --once --events-dir "$SESS_DIR" --out "$TMP/sess.json" >/dev/null 2>&1
+assert_py "fleet-session settles the orchestrator seat" "$TMP/sess.json" \
+  'd["status"]=="settled" and any(s.get("agent")=="orchestrator" for s in d.get("seats") or [])'
+assert_py "fleet-session progress events appear in the tail" "$TMP/sess.json" \
+  'any(e.get("event")=="progress" for e in d.get("recent_events") or [])'
+
+grep -qE '^desk-follow:' "$REPO_DIR/Makefile" \
+  && ok "make desk-follow target exists" || bad "make desk-follow target exists"
+grep -q 'fleet-session' "$REPO_DIR/docs/experience.md" \
+  && ok "docs/experience.md documents fleet-session follow path" \
+  || bad "docs/experience.md documents fleet-session follow path"
+grep -q 'quiet_stream\|QUIET' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "floor.js surfaces QUIET hang chrome" || bad "floor.js surfaces QUIET hang chrome"
+test -x "$REPO_DIR/scripts/fleet-session.sh" \
+  && ok "fleet-session.sh is executable" || bad "fleet-session.sh is executable"
 
 echo ""
 echo "----------------------------------------"

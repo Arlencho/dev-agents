@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once experience-live
+.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once desk-follow experience-live
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -36,6 +36,15 @@ desk: experience ## Alias for make experience (Fleet Desk)
 
 desk-live: ## Ops Floor watcher: tail logs/fleet-events/ → live.json + serve site/experience (PORT=8777)
 	@python3 ./scripts/desk_live.py --port $(or $(PORT),8777) $(LIVE_FLAGS)
+
+desk-follow: ## Follow live: serve Floor + open browser (http://127.0.0.1:8777/live/)
+	@if [ ! -d site/experience/live ]; then \
+		echo "desk-follow: building static desk first (make experience)…"; \
+		./scripts/experience-build.sh; \
+	fi
+	@echo "Follow: leave this running. Autopilot / dispatch events appear on the Floor."
+	@echo "  Tip: wrap long work with  ./scripts/fleet-session.sh run --label X -- <cmd>"
+	@python3 ./scripts/desk_live.py --open --port $(or $(PORT),8777) $(LIVE_FLAGS)
 
 experience-live: desk-live ## Alias for make desk-live (live Ops Floor during a dispatch)
 

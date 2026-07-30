@@ -406,6 +406,24 @@ One JSON object per line, appended, never rewritten. Every line carries:
 | `FLEET_EVENTS=0` | writes nothing at all (dispatch behaves exactly as before) |
 | `FLEET_EVENTS_DIR=/path` | write the stream somewhere else (default `logs/fleet-events`) |
 
+### Follow bridge (orchestrator / long shell)
+
+`scripts/fleet-session.sh` opens a short stream (mode `session` → Floor wave lanes)
+with one `orchestrator` seat, optional `progress` heartbeats, and a clean
+`dispatch_end`. Same redaction law as dispatch. Use so autopilot is visible on
+`make desk-follow` without a multi-seat plan:
+
+```bash
+./scripts/fleet-session.sh run --label my-run --repo dev-agents -- make test
+```
+
+Unknown event names (e.g. `progress`) still advance `last_event_ts` and appear in
+`recent_events` — they do not invent seats.
+
+When `status=running` and no event has arrived for `quiet_after_s` (default 90),
+the projection adds `waiting_on[]` entry `kind=quiet_stream` so the Floor can
+show **QUIET** instead of a silent green live run.
+
 An unwritable directory disables the stream with a warning — a dispatch is never
 failed by its own telemetry.
 

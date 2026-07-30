@@ -530,6 +530,13 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 
 .waiting .witem { margin: 0 0 4px; font-size: 12.5px; }
 .waiting .witem:last-child { margin-bottom: 0; }
+.waiting .witem.quiet { color: var(--warn); }
+.pill.warn {
+  color: var(--warn); background: var(--warn-soft);
+  border: 1px solid var(--warn); border-radius: 999px;
+  padding: 1px 8px; font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
 
 ol.events {
   margin: 0; padding-left: 0; list-style: none;

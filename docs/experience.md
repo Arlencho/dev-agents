@@ -163,10 +163,29 @@ SYNTHESIS §3 Phase B.
 while serving the desk on `http://127.0.0.1:8777/live/` with SSE at `/events`.
 
 ```bash
-make desk-live          # watch + serve (Ctrl-C to stop) — run it beside a dispatch
+make desk-follow        # **recommended** — serve Floor + open browser (live, no reload)
+make desk-live          # same watcher without auto-opening the browser
 make desk-live-once     # write live.json once, no server (file:// desks)
 FLEET_EVENTS=0 ./scripts/dispatch.sh ...   # opt out of the stream entirely
 ```
+
+### Follow live (not only after finish)
+
+| You want | Do this |
+|----------|---------|
+| **Watch a wave while it runs** | Terminal A: `make desk-follow`. Terminal B: `dispatch.sh` or `fleet-session.sh run …` |
+| **Timers / motion** | Floor polls every ~3s — **no page reload** (HTTP only, not `file://`) |
+| **Stuck?** | Ambient **QUIET** + waiting-on `quiet_stream` when no events for ~90s while still “running” |
+| **Autopilot / long shell work** | Wrap so Floor sees it: `./scripts/fleet-session.sh run --label my-run -- <cmd>` |
+
+```bash
+# Example: follow make test on the Floor
+make desk-follow   # leave open
+./scripts/fleet-session.sh run --label make-test --repo dev-agents -- make test
+```
+
+Chat “Command running” alone is **not** on the Floor. Events must hit `logs/fleet-events/`
+(`dispatch.sh` already does; use `fleet-session.sh` for other long jobs).
 
 The Floor page loads `assets/floor.js`, a tiny poller that re-reads
 `data/live.json` every few seconds over http and repaints the LED, waiting-on
