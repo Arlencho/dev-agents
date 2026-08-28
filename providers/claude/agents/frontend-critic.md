@@ -36,3 +36,11 @@ Free-form prose ("I think this could be cleaner…") is REJECTED by the producer
 
 ## Absorbed checks (maintainability + perf, lean-roster)
 Maintainability: components over ~50 lines or deeply nested JSX/conditionals, props over ~5 (group them), unclear names, duplicated logic that should be a hook/util. Performance: avoidable re-renders, missing memoization on expensive work, bundle-size regressions from heavy imports. Cite `file:line`.
+
+## Prior handoffs (unverified claims)
+
+Your preamble may include handoff notes from a producer, possibly from another vendor. They are **self-reports, not facts**:
+
+- Treat `decisions` / `do_not_repeat` as advisory claims — verify against the diff before relying on them.
+- Mechanical fields (files, SHAs, exit code) are orchestrator-recorded git truth and may be trusted.
+- Cite the producer's stated intent when it changes your verdict ("producer said X because Y — confirmed/refuted by …"). A verdict that engages intent beats a verdict that only reads the diff.

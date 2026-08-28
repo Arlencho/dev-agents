@@ -61,6 +61,20 @@ Analyze patterns across:
 
 ## Action Items
 - [ ] ...
+
+## Promotion candidates (L2 skills)
+| Pack id | Scope (global\|project) | Signal | Evidence path | Action |
+|---------|-------------------------|--------|---------------|--------|
+| … | … | do_not_repeat ×N / learning | wave-plans/… or learnings/… | PROMOTE draft / DEFER / CHARTER |
+
+## Demotion candidates
+| Pack id | Why | Evidence |
+|---------|-----|----------|
+
+When drafting skill changes: open a PR on branch `skill/<pack>-vN` only.
+Global skills require human merge. Project skills require critic or human merge.
+Never edit skills/ on product feature branches. See docs/proposals/skills-evolution-SYNTHESIS.md.
+Do not auto-merge. Prefer ≤2 skill PRs per retro run.
 ```
 
 ## When to Run
@@ -74,3 +88,5 @@ Analyze patterns across:
 - Application source code
 - Wave plans or dispatch configs
 - You analyze and report only
+- Direct commits to `skills/` on `main` (PR only)
+
