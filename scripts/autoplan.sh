@@ -110,8 +110,19 @@ VERDICT: REJECT (followed by REASONS:)"
 
     # Run the CTO agent for plan review (plan-reviewer folded into CTO, lean-roster 2026-06)
     # Ground Truth: fail-closed — CLI failure is NOT treated as APPROVE.
+    #
+    # `--agent` takes a NAME, not a path. This used to pass
+    # "$REPO_DIR/providers/claude/agents/cto.md" and the CLI answered
+    # "not found. Available agents: ..." on every run, exit 1 — which the
+    # fail-closed branch below correctly turned into VERDICT: REJECT. So every
+    # plan was rejected and `dispatch.sh --review` could not be used at all.
+    # The name resolves to the same charter: ~/.claude/agents/cto.md is a
+    # symlink to providers/claude/agents/cto.md (installed by
+    # `make bootstrap PROVIDER=claude`), and that file is identical to
+    # roles/cto.md. Matches providers/claude/launch.sh, which already passes
+    # a bare role name.
     set +e
-    REVIEW_OUTPUT=$(claude --agent "$REPO_DIR/providers/claude/agents/cto.md" --print "$FULL_PROMPT" 2>&1)
+    REVIEW_OUTPUT=$(claude --agent cto --print "$FULL_PROMPT" 2>&1)
     REVIEW_EXIT=$?
     set -e
 

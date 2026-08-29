@@ -82,7 +82,12 @@ agent() {
     esac
     return 0
   fi
-  claude --agent "$charter" --print "$2"
+  # `--agent` takes a NAME, not a path — passing "$charter" makes the CLI exit 1
+  # with "not found. Available agents: ...". The -f check above stays as a guard
+  # that the role exists in this repo; only the flag value changes. Same bug and
+  # same fix as scripts/autoplan.sh (see the comment there for why the name
+  # resolves to this very file).
+  claude --agent "$1" --print "$2"
 }
 
 # pick the producer from issue labels (routing.yaml label_routes), fall back to title
