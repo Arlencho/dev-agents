@@ -10,8 +10,14 @@ CONFIG="$REPO_DIR/config/workers.yaml"
 ROUTING_CONFIG="$REPO_DIR/config/routing.yaml"
 STATE_DIR="$REPO_DIR/logs/provider-state"
 
-# Source the resolver/cooldown functions straight out of dispatch.sh.
-eval "$(sed -n '/^get_provider() {/,/^}/p;/^get_failover_chain() {/,/^}/p;/^get_cooldown_minutes() {/,/^}/p;/^provider_cooling() {/,/^}/p;/^resolve_provider() {/,/^}/p' "$REPO_DIR/scripts/dispatch.sh")"
+# get_provider / get_failover_chain are shared with flow.sh and sync-providers.sh.
+# CONFIG and ROUTING_CONFIG are set above, so the library uses this repo's config.
+# shellcheck source=../scripts/config-lib.sh
+source "$REPO_DIR/scripts/config-lib.sh"
+
+# The cooldown + resolution logic is still dispatch-specific; pull those three
+# straight out of dispatch.sh.
+eval "$(sed -n '/^get_cooldown_minutes() {/,/^}/p;/^provider_cooling() {/,/^}/p;/^resolve_provider() {/,/^}/p' "$REPO_DIR/scripts/dispatch.sh")"
 
 pass=0; fail=0
 check() { if [ "$2" = "$3" ]; then printf '  ok   %-48s (%s)\n' "$1" "$3"; pass=$((pass+1)); else printf '  FAIL %-48s want=%s got=%s\n' "$1" "$2" "$3"; fail=$((fail+1)); fi; }

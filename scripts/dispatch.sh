@@ -52,6 +52,12 @@ LOGS_DIR="$REPO_DIR/logs"
 WAVE_PLANS_DIR="$REPO_DIR/wave-plans"
 NOTIFY_SCRIPT="$SCRIPT_DIR/notify.sh"
 
+# Seat resolution (get_provider / get_failover_chain / get_model) is shared with
+# flow.sh, sync-providers.sh and the routing tests. CONFIG and ROUTING_CONFIG are
+# already set above, so the library picks them up rather than its own defaults.
+# shellcheck source=scripts/config-lib.sh
+. "$SCRIPT_DIR/config-lib.sh"
+
 # Fleet Desk Phase B — append-only event stream for the Ops Floor.
 # Best-effort and opt-out (FLEET_EVENTS=0); a missing library never blocks a
 # dispatch, so every call site can assume fleet_event exists.
@@ -211,64 +217,6 @@ get_max_agents() {
     echo "4"  # default
 }
 
-# --------------------------------------------------
-# Get provider preference for an agent
-# --------------------------------------------------
-get_provider() {
-    local agent="$1"
-    local in_prefs=false
-    local default_provider="claude"
-    while IFS= read -r line; do
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${line// /}" ]] && continue
-
-        if [[ "$line" =~ ^[[:space:]]*provider_preferences: ]]; then
-            in_prefs=true
-            continue
-        fi
-        if [ "$in_prefs" = true ]; then
-            # Stop when we hit a non-indented line (next top-level key)
-            if [[ "$line" =~ ^[a-zA-Z] ]]; then
-                in_prefs=false
-                continue
-            fi
-            if [[ "$line" =~ ^[[:space:]]*${agent}:[[:space:]]*(.*) ]]; then
-                echo "${BASH_REMATCH[1]}"
-                return
-            fi
-            if [[ "$line" =~ ^[[:space:]]*default:[[:space:]]*(.*) ]]; then
-                default_provider="${BASH_REMATCH[1]}"
-            fi
-        fi
-    done < "$CONFIG"
-    echo "$default_provider"
-}
-
-# --------------------------------------------------
-# Get the failover chain for an agent from routing.yaml provider_failover:.
-# Returns space-separated vendors (agent-specific, else default:, else empty).
-# --------------------------------------------------
-get_failover_chain() {
-    local agent="$1"
-    [ -f "$ROUTING_CONFIG" ] || { echo ""; return; }
-    local in_block=false default_chain=""
-    while IFS= read -r line; do
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${line// /}" ]] && continue
-        if [[ "$line" =~ ^[[:space:]]*provider_failover: ]]; then in_block=true; continue; fi
-        if [ "$in_block" = true ]; then
-            [[ "$line" =~ ^[a-zA-Z] ]] && { in_block=false; continue; }
-            if [[ "$line" =~ ^[[:space:]]*${agent}:[[:space:]]*\[(.*)\] ]]; then
-                echo "${BASH_REMATCH[1]}" | tr ',' ' '; return
-            fi
-            if [[ "$line" =~ ^[[:space:]]*default:[[:space:]]*\[(.*)\] ]]; then
-                default_chain=$(echo "${BASH_REMATCH[1]}" | tr ',' ' ')
-            fi
-        fi
-    done < "$ROUTING_CONFIG"
-    echo "$default_chain"
-}
-
 # Cooldown window (minutes) from routing.yaml rate_caps:, default 60.
 get_cooldown_minutes() {
     local v
@@ -312,51 +260,6 @@ resolve_provider() {
         echo "$candidate"; return 0
     done
     echo "$primary"
-}
-
-# --------------------------------------------------
-# Get model tier for an agent from routing.yaml
-# Returns tier alias (opus/sonnet/haiku) or explicit model ID.
-# Returns empty string if no routing config — caller should skip --model
-# and let claude use its default.
-# --------------------------------------------------
-get_model() {
-    local agent="$1"
-    [ -f "$ROUTING_CONFIG" ] || { echo ""; return; }
-    local in_routing=false
-    local default_model=""
-    while IFS= read -r line; do
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${line// /}" ]] && continue
-
-        if [[ "$line" =~ ^[[:space:]]*model_routing: ]]; then
-            in_routing=true
-            continue
-        fi
-        if [ "$in_routing" = true ]; then
-            # Stop when we hit a non-indented line (next top-level key)
-            if [[ "$line" =~ ^[a-zA-Z] ]]; then
-                in_routing=false
-                continue
-            fi
-            if [[ "$line" =~ ^[[:space:]]*${agent}:[[:space:]]*(.*) ]]; then
-                # Strip inline comments and whitespace (Ground Truth: clean AGENT_MODEL)
-                local val="${BASH_REMATCH[1]}"
-                val="${val%%#*}"
-                val="${val// /}"
-                val="${val//$'\t'/}"
-                echo "$val"
-                return
-            fi
-            if [[ "$line" =~ ^[[:space:]]*default:[[:space:]]*(.*) ]]; then
-                default_model="${BASH_REMATCH[1]}"
-                default_model="${default_model%%#*}"
-                default_model="${default_model// /}"
-                default_model="${default_model//$'\t'/}"
-            fi
-        fi
-    done < "$ROUTING_CONFIG"
-    echo "$default_model"
 }
 
 # --------------------------------------------------
