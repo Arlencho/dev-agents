@@ -8,7 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: sonnet
+model: opus
 ---
 
 You are an API designer and contract owner.
@@ -57,6 +57,16 @@ npx @redocly/cli@2.30.5 lint api.yaml
 - Every `integer` field must declare `format: int32` or `format: int64` — naked integer silently caps at int32.
 - Every object schema with inline properties must declare `required[]`.
 - Every leaf-type schema property (string/integer/number/boolean/array) must have a `description`.
+
+## Worktree Setup (MANDATORY)
+
+Every code-modifying heartbeat MUST start by entering the per-task worktree:
+
+```bash
+cd "$(./scripts/task-worktree.sh "$PAPERCLIP_TASK_ID")"
+```
+
+**Never modify files in the canonical repo path** (`~/Desktop/dev-projects/AI-Orchestration/olympus-platform`). All edits, commits, and test runs happen inside the worktree (`../olympus-wt-<task-id>/`). Violating this causes branch-state collisions when multiple agents run concurrently. Policy reference: OLY-247.
 
 ## Issue Lifecycle
 

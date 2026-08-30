@@ -8,7 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: sonnet
+model: opus
 ---
 
 You are an API designer and contract owner.
@@ -48,10 +48,15 @@ Regenerate clients:
 make generate
 ```
 
-Validate spec:
+Validate spec (uses `redocly.yaml` charter rules — see `docs/operations/api-linting.md`):
 ```bash
-npx @redocly/cli lint api.yaml
+npx @redocly/cli@2.30.5 lint api.yaml
 ```
+
+**Charter invariants enforced by lint (OLY-1287):**
+- Every `integer` field must declare `format: int32` or `format: int64` — naked integer silently caps at int32.
+- Every object schema with inline properties must declare `required[]`.
+- Every leaf-type schema property (string/integer/number/boolean/array) must have a `description`.
 
 ## Worktree Setup (MANDATORY)
 
