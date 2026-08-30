@@ -11,5 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Runs before the tests: a roles/ vs providers/ drift or a seat synced to
+      # a vendor that cannot run it is a config error, and the failure is far
+      # easier to read here than as a downstream test failure.
+      - name: make lint
+        run: make lint
       - name: make test
         run: make test
