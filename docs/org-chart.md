@@ -31,6 +31,7 @@ graph TD
     API["API Designer<br/><i>Claude Opus</i>"]:::opus
     APIC["API Critic<br/><i>Claude Opus</i>"]:::opus
     DEVOPS["DevOps Engineer<br/><i>Claude Opus</i>"]:::opus
+    DEVOPSC["DevOps Critic<br/><i>Grok</i>"]:::sonnet
 
     CTO --> FE
     CTO --> FEC
@@ -41,14 +42,16 @@ graph TD
     CTO --> API
     CTO --> APIC
     CTO --> DEVOPS
+    CTO --> DEVOPSC
 
     FE <-..->|pairs| FEC
     BE <-..->|pairs| BEC
     DB <-..->|pairs| DBC
     API <-..->|pairs| APIC
+    DEVOPS <-..->|pairs| DEVOPSC
 ```
 
-> Solid edges are `reportsTo`. Dashed `<-..->` edges are pairing relationships used by the CEO's routing playbook on every implementation task. DevOps Engineer has no Critic by design — Security Engineer covers the review surface.
+> Solid edges are `reportsTo`. Dashed `<-..->` edges are pairing relationships used by the CEO's routing playbook on every implementation task. DevOps Engineer pairs with the DevOps Critic, which runs on a non-Anthropic model (Grok, failover Kimi), the second cross-vendor pair in the fleet after Frontend. It previously had no Critic, with Security Engineer named as the substitute; that never held, because `security-reviewer` is dispatched by no script, its own charter only activates *after* a paired Critic signs off, and vulnerability review is a different axis from "does this pipeline do what it claims".
 
 ### Routine-driven discovery (no pair)
 
@@ -117,7 +120,7 @@ The **PR Sentinel** (`roles/pr-sentinel.md`, Claude sonnet, reports to CTO) may 
 | Backend (`go-backend`) | claude | **sonnet** | `backend-critic` | **opus** | Go / Chi / pgx / sqlc |
 | Database (`db-architect`) | claude | **opus** (irreversible) | `database-critic` | **opus** | Migrations / sqlc / indexes |
 | API Designer (`api-designer`) | claude | **opus** | `api-critic` | **opus** | `api.yaml` / envelopes |
-| DevOps (`devops`) | claude | **opus** | (none — Security) | — | CI / deploy / infra |
+| DevOps (`devops`) | claude | **opus** | `devops-critic` | **grok** (failover kimi) | CI / deploy / infra |
 | Plan critic (`plan-critic`) | **grok** | CLI default | (Pass 4 autoplan) | — | Wave-plan review |
 
 Cross-cutting (Claude **opus** unless noted): `test-engineer`, `security-reviewer`, `cto`, `orchestrator`, `investigate`, `retro`. `docs-writer` → **claude-fable-5**. `pr-sentinel` → **sonnet** (routing volume).

@@ -17,17 +17,11 @@ check() {
     fi
 }
 
-# Mirror dispatch get_model (YAML model_routing)
-get_model() {
-    local agent="$1"
-    local routing="$REPO_DIR/config/routing.yaml"
-    local model
-    model=$(grep -E "^\s+${agent}:" "$routing" 2>/dev/null | head -1 | sed 's/.*:\s*//' | tr -d '[:space:]' | sed 's/#.*//')
-    if [ -z "$model" ]; then
-        model=$(grep -E "^\s+default:" "$routing" 2>/dev/null | head -1 | sed 's/.*:\s*//' | tr -d '[:space:]' | sed 's/#.*//')
-    fi
-    echo "${model:-sonnet}"
-}
+# get_model / get_provider / get_failover_chain come from the same library
+# dispatch.sh and flow.sh use. This file used to carry a hand-rolled "mirror" of
+# get_model, which meant the test could pass while dispatch resolved differently.
+# shellcheck source=../scripts/config-lib.sh
+source "$REPO_DIR/scripts/config-lib.sh"
 
 echo "== effective_model (provenance) =="
 check "claude + opus" "opus" "$(effective_model claude opus)"
@@ -53,6 +47,14 @@ check "cto → opus" "opus" "$(get_model cto)"
 check "docs-writer → claude-fable-5" "claude-fable-5" "$(get_model docs-writer)"
 check "pr-sentinel → sonnet" "sonnet" "$(get_model pr-sentinel)"
 check "unknown role → default sonnet" "sonnet" "$(get_model this-role-does-not-exist-xyz)"
+
+echo "== cross-vendor critic seats (non-Anthropic by design) =="
+check "devops-critic → grok" "grok" "$(get_provider devops-critic)"
+check "devops-critic failover stays non-Anthropic" "grok kimi" "$(echo $(get_failover_chain devops-critic))"
+check "devops-critic effective model (alias ignored)" "vendor-default" "$(effective_model grok "$(get_model devops-critic)")"
+check "plan-critic → grok" "grok" "$(get_provider plan-critic)"
+check "plan-critic never fails over to claude" "grok" "$(echo $(get_failover_chain plan-critic))"
+check "devops producer stays on claude" "claude" "$(get_provider devops)"
 
 echo "== kimi effective for routed web-frontend =="
 req="$(get_model web-frontend)"

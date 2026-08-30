@@ -76,8 +76,16 @@ echo "  3. Clone your repos:     git clone git@github.com:Arlencho/<repo>.git"
 echo "  4. Run an agent:         cd <repo> && claude --agent go-backend 'do something'"
 echo ""
 echo "Available agents:"
+# Seats owned by another vendor have no Claude agent registered, so flag them
+# rather than listing them next to a `claude --agent` example.
+# shellcheck source=scripts/config-lib.sh
+. "$SCRIPT_DIR/config-lib.sh"
 for agent in "$REPO_DIR/roles/"*.md; do
     name=$(basename "$agent" .md)
     desc=$(grep "^description:" "$agent" | head -1 | sed 's/description: //')
-    printf "  %-18s %s\n" "$name" "$desc"
+    vendors=$(role_providers "$name")
+    case " $vendors " in
+        *" claude "*) printf "  %-18s %s\n" "$name" "$desc" ;;
+        *)            printf "  %-18s [runs on %s, not via claude --agent] %s\n" "$name" "$vendors" "$desc" ;;
+    esac
 done

@@ -44,21 +44,40 @@ PY
 }
 
 # assert_absent <name> <dir> <ERE>
+# assert_absent <name> <dir> <ERE> [allow-ERE]
+# A 4th argument allowlists matching LINES that are known-benign, so the
+# tripwire keeps its teeth instead of being weakened at the pattern level.
 assert_absent() {
-  local name="$1" dir="$2" pattern="$3"
-  if grep -REl "$pattern" "$dir" >/dev/null 2>&1; then
-    bad "$name (matched: $(grep -REl "$pattern" "$dir" | head -3 | tr '\n' ' '))"
+  local name="$1" dir="$2" pattern="$3" allow="${4:-}"
+  # `|| true` on every capture: this file runs under `set -e`, and grep exits 1
+  # when it finds nothing, which is the passing case here.
+  local hits files f
+  files=$(grep -REl "$pattern" "$dir" 2>/dev/null || true)
+  if [ -n "$allow" ] && [ -n "$files" ]; then
+    hits=""
+    for f in $files; do
+      if grep -E "$pattern" "$f" 2>/dev/null | grep -qvE "$allow"; then hits="$hits$f"$'\n'; fi
+    done
+  else
+    hits="$files"
+  fi
+  if [ -n "$hits" ]; then
+    bad "$name (matched: $(echo "$hits" | head -3 | tr '\n' ' '))"
   else
     ok "$name"
   fi
 }
 
-# assert_absent_html <name> <dir> <ERE> — HTML pages only (data/index.json may
-# legitimately carry arbitrary handoff prose).
+# assert_absent_html <name> <dir> <ERE> [exclude-dir]
+# HTML pages only (data/index.json may legitimately carry arbitrary handoff
+# prose). The optional 4th argument skips a subdirectory that the generator does
+# not produce, e.g. hand-authored design sketches under site/sketches/.
 assert_absent_html() {
-  local name="$1" dir="$2" pattern="$3"
-  if grep -REl --include='*.html' "$pattern" "$dir" >/dev/null 2>&1; then
-    bad "$name (matched: $(grep -REl --include='*.html' "$pattern" "$dir" | head -3 | tr '\n' ' '))"
+  local name="$1" dir="$2" pattern="$3" skip="${4:-}"
+  local args=(-REl --include='*.html')
+  [ -n "$skip" ] && args+=(--exclude-dir="$skip")
+  if grep "${args[@]}" "$pattern" "$dir" >/dev/null 2>&1; then
+    bad "$name (matched: $(grep "${args[@]}" "$pattern" "$dir" | head -3 | tr '\n' ' '))"
   else
     ok "$name"
   fi
@@ -98,8 +117,12 @@ PY
   then ok "$name"; else bad "$name"; fi
 }
 
-SECRET_SHAPES='gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|BEGIN [A-Z ]*PRIVATE KEY|(api[_-]?key|password|secret|token)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9]{16,}'
+SECRET_SHAPES='gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|(^|[^A-Za-z0-9_])sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|BEGIN [A-Z ]*PRIVATE KEY|(api[_-]?key|password|secret|token)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9]{16,}'
 HOME_PATHS='/Users/[A-Za-z0-9._-]+/|/home/[A-Za-z0-9._-]+/'
+# The fixture operator is synthetic test data, and handoff prose quotes those
+# paths verbatim when describing the redaction bug that produced them. A real
+# operator home leaking still fails.
+FIXTURE_HOME='fixtureop'
 
 echo "== A. fixture repo (deterministic) =="
 FIXOUT="$TMP/fixture-site"
@@ -1010,7 +1033,7 @@ grep -q "group by wave\|Wave " "$SITE/work/index.html" && ok "work has wave grou
 grep -q "Playbook Maturity\|PMI" "$SITE/roles/index.html" && ok "roles PMI" || bad "roles PMI"
 grep -q 'rel="stylesheet"' "$SITE/index.html" && ok "site links external stylesheet" || bad "site links external stylesheet"
 grep -q 'class="seg"' "$SITE/work/index.html" && ok "site work has group toggle" || bad "site work has group toggle"
-assert_absent_html "no inline styles in site HTML" "$SITE" '[[:space:]]style=|<style'
+assert_absent_html "no inline styles in site HTML" "$SITE" '[[:space:]]style="|<style[ >]' sketches
 assert_links_resolve "site: every relative href resolves (BROKEN: 0)" "$SITE"
 
 # Phase 1 UI bind on the real projection
@@ -1046,7 +1069,7 @@ assert_json "real gh PR fields stay consistent"   "$RJ" \
 assert_json "real gh never stores issue bodies"   "$RJ" \
   'all(set(x) <= {"ref","number","url","state","title","kind","updated_at"} for t in d["trails"] for x in t["issue_links_resolved"])'
 assert_absent "no secret-shaped tokens in site"   "$SITE" "$SECRET_SHAPES"
-assert_absent "no operator home paths in site"    "$SITE" "$HOME_PATHS"
+assert_absent "no operator home paths in site"    "$SITE" "$HOME_PATHS" "$FIXTURE_HOME"
 
 if compgen -G "$SITE/trail/*/index.html" >/dev/null; then
   ok "trail pages generated"

@@ -11,6 +11,7 @@
 #   docs-writer   → claude + claude-fable-5
 #   web-frontend  → kimi   + K3 (CLI default)
 #   plan-critic   → grok   + CLI default
+#   devops-critic → grok   + CLI default (failover kimi, stays non-Anthropic)
 # Quality-first Claude tiers live in routing.yaml (2026-07-28).
 # NOTE: YAML parsers here don't strip inline comments — keep values bare.
 provider_preferences:
@@ -28,6 +29,7 @@ provider_preferences:
   database-critic: claude
   api-critic: claude
   plan-critic: grok
+  devops-critic: grok
   security-reviewer: claude
   cto: claude
   # Meta / ops

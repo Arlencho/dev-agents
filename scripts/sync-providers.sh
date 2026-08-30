@@ -14,6 +14,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 ROLES_DIR="$REPO_DIR/roles"
 
+# Vendor ownership: role_providers() returns every vendor that may run a role
+# (workers.yaml provider_preferences + routing.yaml provider_failover).
+# shellcheck source=scripts/config-lib.sh
+. "$SCRIPT_DIR/config-lib.sh"
+
 MODE="sync"
 if [ "${1:-}" = "--check" ]; then
     MODE="check"
@@ -31,6 +36,7 @@ NC='\033[0m' # No color
 ADDED=0
 UPDATED=0
 UNCHANGED=0
+SKIPPED=0
 DRIFT=0
 
 # --------------------------------------------------
@@ -62,7 +68,24 @@ for agents_dir in "${PROVIDER_DIRS[@]}"; do
 
     for role_file in "$ROLES_DIR"/*.md; do
         name=$(basename "$role_file")
+        role="${name%.md}"
         target="$agents_dir/$name"
+
+        # Vendor ownership. Only providers that may actually run this role get a
+        # copy. Claude is the only provider needing one at all: `claude --agent
+        # <name>` resolves through its own agent registry, while the kimi and
+        # grok launchers read roles/<role>.md directly and strip the frontmatter.
+        # Copying a grok-owned seat into providers/claude/agents/ registers a
+        # Claude agent pinned to a model Claude cannot resolve.
+        if ! echo " $(role_providers "$role") " | grep -q " $provider "; then
+            SKIPPED=$((SKIPPED + 1))
+            echo -e "  ${YELLOW}- $name${NC} (not owned by $provider, runs on: $(role_providers "$role"))"
+            if [ -f "$target" ]; then
+                DRIFT=$((DRIFT + 1))
+                echo -e "  ${RED}! $name${NC} (present in $provider but $provider cannot run it: delete it)"
+            fi
+            continue
+        fi
 
         if [ ! -f "$target" ]; then
             # New file — needs to be added
@@ -117,7 +140,7 @@ done
 # Summary
 # --------------------------------------------------
 echo "---"
-echo "Summary: $ADDED added, $UPDATED updated, $UNCHANGED unchanged, $DRIFT drift"
+echo "Summary: $ADDED added, $UPDATED updated, $UNCHANGED unchanged, $SKIPPED not-owned, $DRIFT drift"
 
 if [ "$DRIFT" -gt 0 ]; then
     if [ "$MODE" = "check" ]; then
