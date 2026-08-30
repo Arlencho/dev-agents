@@ -38,6 +38,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 ROUTING="$REPO_DIR/config/routing.yaml"
 AGENTS_DIR="$REPO_DIR/providers/claude/agents"
+ROLES_DIR="$REPO_DIR/roles"
+
+# Seat resolution shared with dispatch.sh (get_provider / get_model), so a
+# non-Claude critic routes the same way here as it does on the fleet path.
+# shellcheck source=scripts/config-lib.sh
+. "$SCRIPT_DIR/config-lib.sh"
 
 # ---------- args ----------
 [ $# -ge 1 ] || die "usage: flow.sh <issue-number> [--repo OWNER/REPO] [--base BRANCH] [--auto-implement]"
@@ -63,18 +69,27 @@ declare -A CRITIC_OF=(
   [db-architect]=database-critic
   [api-designer]=api-critic
   [mobile]=frontend-critic
+  [devops]=devops-critic
 )
 
 # A diff touching any of these is RISKY → critic is mandatory. Everything else
 # skips the critic (that's the cost lever — Opus only on what can hurt you).
-RISKY='payment|stripe|duffel|klarna|auth|token|session|webhook|/db/migrations|migration|state|status|refund|security|crypto|secret|pricing|currency'
+# Infra paths are here because the product-domain tokens below never match a
+# workflow or Dockerfile: a CI change that silently stops running the tests
+# scored as low-risk and shipped unreviewed (see 1-devops-ci-e2e-aptget-hang).
+RISKY='payment|stripe|duffel|klarna|auth|token|session|webhook|/db/migrations|migration|state|status|refund|security|crypto|secret|pricing|currency|\.github/workflows/|Dockerfile|docker-compose|infra/|terraform/|\.tf$|deploy'
 
 # run a role agent with a prompt: agent <role> <prompt>
 agent() {
-  local charter="$AGENTS_DIR/$1.md"
+  # Non-Claude seats have no providers/claude/agents copy by design (their
+  # launchers read roles/<role>.md directly), so the guard checks the vendor's
+  # own charter location.
+  local vendor charter
+  vendor=$(get_provider "$1")
+  if [ "$vendor" = "claude" ]; then charter="$AGENTS_DIR/$1.md"; else charter="$ROLES_DIR/$1.md"; fi
   [ -f "$charter" ] || die "charter not found for role '$1' ($charter)"
   if [ "$DRY" -eq 1 ]; then
-    echo -e "  ${YELLOW}[dry-run]${NC} would dispatch ${BOLD}$1${NC} — $(echo "$2" | head -c 80)..." >&2
+    echo -e "  ${YELLOW}[dry-run]${NC} would dispatch ${BOLD}$1${NC} (${vendor}) — $(echo "$2" | head -c 80)..." >&2
     case "$1" in
       *critic) echo "CRITIC: PASS";;
       cto)     echo "APPROVE-MERGE (dry-run stub)";;
@@ -87,7 +102,11 @@ agent() {
   # that the role exists in this repo; only the flag value changes. Same bug and
   # same fix as scripts/autoplan.sh (see the comment there for why the name
   # resolves to this very file).
-  claude --agent "$1" --print "$2"
+  if [ "$vendor" = "claude" ]; then
+    claude --agent "$1" --print "$2"
+  else
+    AGENT_MODEL="$(get_model "$1")" "$REPO_DIR/providers/$vendor/launch.sh" "$1" "$2"
+  fi
 }
 
 # pick the producer from issue labels (routing.yaml label_routes), fall back to title
@@ -121,7 +140,7 @@ CRITIC="${CRITIC_OF[$PRODUCER]:-}"
 echo "  title    : $TITLE"
 echo "  labels   : ${LABELS:-none}"
 echo "  producer : $PRODUCER"
-echo "  critic   : ${CRITIC:-none (devops/test paths have no paired critic)}"
+echo "  critic   : ${CRITIC:-none (a risky diff from this seat hard-fails at the gate)}"
 ok "routed"
 
 # ======================================================================
@@ -175,18 +194,30 @@ if [ "$RISKY_HIT" -eq 1 ] && [ -n "$FILES" ] && [ "$CRITIC" != "database-critic"
 fi
 
 # ======================================================================
+# Fail-closed. The risk gate used to print "critic review is MANDATORY" and then
+# fall through to "skipped" whenever the producer had no paired critic, which is
+# a silent downgrade of the one gate that is supposed to block. A risky diff with
+# no critic is an unreviewable diff, not an approved one.
+if [ "$RISKY_HIT" -eq 1 ] && [ -z "$CRITIC" ]; then
+  die "risky diff with no paired critic for producer '$PRODUCER'.
+  Every seat in CRITIC_OF has one; '$PRODUCER' does not. Either route this issue
+  to a paired producer, or add the pairing to CRITIC_OF in this script and give
+  the critic a charter in roles/ (see roles/devops-critic.md for the shape)."
+fi
+
 if [ "$RISKY_HIT" -eq 1 ] && [ -n "$CRITIC" ]; then
-  step "STAGE 3 · critic review  ($CRITIC, Opus, 2-loop ceiling)"
+  # The critic is no longer always Claude/Opus, so name the seat it actually runs on.
+  step "STAGE 3 · critic review  ($CRITIC on $(get_provider "$CRITIC"), 2-loop ceiling)"
   for loop in 1 2; do
     echo "  loop $loop/2"
     VERDICT=$(agent "$CRITIC" "Adversarially review PR #$PR in $REPO for issue #$ISSUE. Per your charter: output executable failure only (failing test diff or file:line contract violation). If the PR is clean, reply exactly 'CRITIC: PASS'. Otherwise reply 'CRITIC: FAIL' and the executable findings.")
     echo "$VERDICT"
     if echo "$VERDICT" | grep -q "CRITIC: PASS"; then ok "critic passed on loop $loop"; break; fi
     if [ "$loop" -eq 2 ]; then warn "critic still failing after 2 loops → escalate to CTO"; fi
-    [ "$AUTO_IMPLEMENT" -eq 1 ] && agent "$PRODUCER" "Address the Backend/Frontend critic findings on PR #$PR in $REPO. Push fixes to branch. Do not merge."
+    [ "$AUTO_IMPLEMENT" -eq 1 ] && agent "$PRODUCER" "Address the $CRITIC findings on PR #$PR in $REPO. Push fixes to branch. Do not merge."
   done
 else
-  step "STAGE 3 · critic review  (skipped — low risk or no paired critic)"
+  step "STAGE 3 · critic review  (skipped — low-risk diff)"
 fi
 
 # ======================================================================

@@ -5,7 +5,7 @@
 # Also defines model tier routing per agent — dispatch.sh reads model_routing
 # to pick the right Claude tier for each role.
 #
-# Lean roster (refactor/lean-roster, 2026-06): 19 active roles under roles/.
+# Lean roster (refactor/lean-roster, 2026-06): 20 active roles under roles/.
 # Niche / redundant reviewers are in roles/_archived/. See that README to
 # reactivate. Live seats always win: if prose docs disagree with this file
 # or workers.yaml, **this config wins**.
@@ -65,6 +65,9 @@ model_routing:
 
   # plan-critic is Grok (workers.yaml); no Claude model pin
   # plan-critic:             (omit — vendor default)
+  # devops-critic is Grok (workers.yaml); tier aliases are meaningless to grok
+  # and kimi, so no pin here: the launcher uses the vendor default.
+  # devops-critic:           (omit, vendor default)
 
   default:                   sonnet
 
@@ -105,7 +108,16 @@ title_patterns:
 # Resolution: [provider_preferences from workers.yaml] + chain, deduplicated.
 provider_failover:
   web-frontend: [kimi, claude]
-  plan-critic: [grok, claude]
+  # plan-critic never fails over: autoplan.sh Pass 4 calls
+  # providers/grok/plan-critic.sh directly and treats an absent/logged-out grok
+  # as a clean skip (exit 3). Listing claude here was dead config, and under the
+  # vendor-ownership rule it would make sync-providers.sh create a Claude seat
+  # for a charter pinned to model: grok, which Claude cannot resolve.
+  plan-critic: [grok]
+  # devops-critic stays non-Anthropic on failover. Falling back to claude would
+  # pair it with devops (claude/opus) on the same vendor AND the same tier,
+  # which is the exact same-seat pairing this role exists to prevent.
+  devops-critic: [grok, kimi]
   default: [claude, kimi]
 
 # Rate-cap sentinel: a vendor that emits a ratecap pattern (config/

@@ -44,6 +44,17 @@ files whose filename did not match their `name:` field
 ```bash
 git mv roles/_archived/<role>.md roles/<role>.md
 git mv providers/claude/agents/_archived/<role>.md providers/claude/agents/<role>.md
-# then re-add it to config/routing.yaml (model_routing + label_routes)
-# and config/workers.yaml (provider_preferences)
+# then re-add it to config/routing.yaml (model_routing + label_routes),
+# config/workers.yaml (provider_preferences)
+# and config/role-skills.yaml (L2 skill packs)
 ```
+
+**Vendor ownership.** `providers/claude/agents/<role>.md` is a deployment
+artifact for the Claude CLI only, because `claude --agent <name>` resolves
+through its own agent registry. The kimi and grok launchers read
+`roles/<role>.md` directly and strip the frontmatter, so a seat owned by
+another vendor must NOT get a copy under `providers/claude/agents/`: that
+registers a Claude agent pinned to a model Claude cannot resolve.
+`sync-providers.sh` enforces this from `workers.yaml provider_preferences` plus
+`routing.yaml provider_failover`, and `tests/run-roster-tests.sh` asserts it.
+A role reactivated onto a non-Claude vendor therefore skips the second `git mv`.

@@ -65,6 +65,7 @@ Each engineer's `AGENTS.md` is byte-for-byte verbatim from the listed role file.
 | Security Engineer | `b940a8ce-...` | security | opus | CTO | `roles/security-reviewer.md` |
 | API Critic | `b16585ed-...` | critic | opus | CTO | `roles/api-critic.md` (NEW — see § Pairing matrix) |
 | Backend Critic | `b1dd31d7-...` | critic | opus | CTO | `roles/backend-critic.md` (NEW) |
+| DevOps Critic | _not provisioned_ | critic | grok (failover kimi) | CTO | `roles/devops-critic.md` (NEW, cross-vendor) |
 | Database Critic | `a5e50b32-...` | critic | opus | CTO | `roles/database-critic.md` (NEW) |
 | Frontend Critic | `81f04cfc-...` | critic | opus | CTO | `roles/frontend-critic.md` (NEW) |
 

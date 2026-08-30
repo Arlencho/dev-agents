@@ -8,7 +8,7 @@ Run agents via **claude**, **kimi**, and **grok** CLIs with **zero API keys** �
 
 Source of truth for:
 
-1. **Agent role charters** (`roles/*.md`) — **19 active** provider-agnostic roles (engineers, critics, ops, meta). Niche reviewers are parked in `roles/_archived/` (see its README).
+1. **Agent role charters** (`roles/*.md`) — **20 active** provider-agnostic roles (engineers, critics, ops, meta). Niche reviewers are parked in `roles/_archived/` (see its README).
 2. **Heterogeneous producer-critic pattern** — every implementation task pairs a producer agent with an independent critic on a different model. Charter-level invariant.
 3. **Multi-vendor CLI orchestration** — agents run via `claude`, `kimi`, and `grok` subscription CLIs on owned hardware. Provider selection via `workers.yaml provider_preferences` + `routing.yaml provider_failover`. Rate-cap sentinel marks vendors cooling and fails over automatically.
 4. **Multi-product orchestration** (`companies/*.md`) — one manifest per product wiring agents, budgets, runtime config, and the source-of-truth product repo path.
@@ -34,7 +34,7 @@ Critics report to CTO for independence, but pair with their producer counterpart
 | Backend Engineer (`go-backend`) | claude | **sonnet** | Backend Critic | claude | **opus** | Go / Chi / pgx / sqlc / OpenAPI |
 | Database Engineer (`db-architect`) | claude | **opus** (irreversible) | Database Critic | claude | **opus** | Postgres migrations / sqlc / indexes |
 | API Designer (`api-designer`) | claude | **opus** | API Critic | claude | **opus** | `api.yaml` / generated TS client / envelopes |
-| DevOps Engineer (`devops`) | claude | **opus** | (none — Security) | — | — | CI / deploy / infra |
+| DevOps Engineer (`devops`) | claude | **opus** | `devops-critic` | **grok** | failover kimi | CI / deploy / infra |
 | Plan review (autoplan Pass 4) | — | — | Plan Critic | **grok** | default | Wave-plan review (`autoplan.sh`) |
 
 > **Config wins:** live vendor + Claude tier = `config/workers.yaml` + `config/routing.yaml`. Quality-first (2026-07-28): judgment / irreversible / contract / test-first / infra seats use **opus**; code producers stay **sonnet** when paired with an **opus** critic (best quality-per-token pair).
@@ -265,7 +265,7 @@ Login to xAI Grok via device-code OAuth against SuperGrok / X Premium+ subscript
 
 ```
 dev-agents/
-├── roles/                    # 19 active role charters (source of truth; sync → providers/)
+├── roles/                    # 20 active role charters (source of truth; sync → providers/)
 │   ├── orchestrator.md  cto.md  plan-critic.md  pr-sentinel.md
 │   ├── go-backend.md  web-frontend.md  mobile.md  db-architect.md
 │   ├── api-designer.md  devops.md  docs-writer.md  investigate.md

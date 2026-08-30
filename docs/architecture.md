@@ -51,7 +51,7 @@ providers/<vendor>/launch.sh <role> <task>
 | `go-backend` | claude | **sonnet** | `backend-critic` **opus** |
 | `db-architect` | claude | **opus** (DB exception) | `database-critic` **opus** |
 | `api-designer` | claude | **opus** | `api-critic` **opus** |
-| `devops` | claude | **opus** | Security covers review |
+| `devops` | claude | **opus** | `devops-critic` **grok** (cross-vendor) |
 | `test-engineer` | claude | **opus** | (test-first; pairs with gates) |
 | `plan-critic` | **grok** | n/a | Pass 4 of autoplan |
 | CTO / security / critics | claude | **opus** | — |
