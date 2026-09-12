@@ -6,7 +6,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: opus
+model: claude-fable-5-1
 ---
 
 # CTO -- Olympus Engineering Charter
