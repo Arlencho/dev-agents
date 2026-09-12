@@ -217,7 +217,7 @@ def empty_projection(now=None, reason="no dispatch has emitted events yet"):
         # The one line at the top of the Floor, in plain counts. Filled by
         # build(); zeros here so the key always exists (a replay sets it None).
         "summary": {"running": 0, "queued": 0, "landed_today": 0,
-                    "last_event_age_s": None},
+                    "last_event_ts": None},
         "warnings": [],
         "view": "live",  # "live" | "replay" — replay never paints a green LIVE LED
         "replay": None,
@@ -248,6 +248,8 @@ def mark_replay(proj, as_of_seq, total_events):
     # historical scrub has no present, so both stay empty rather than
     # borrowing today's counts.
     proj["summary"] = None
+    for seat in proj.get("seats") or []:
+        seat["now"] = None
     proj["replay"] = {
         "as_of_seq": as_of_seq,
         "total_events": total_events,
@@ -382,6 +384,34 @@ def local_date(dt_utc):
     return dt_utc.replace(tzinfo=timezone.utc).astimezone().date()
 
 
+def run_outcome(end_status, exits, failed):
+    """One word for how a finished dispatch ended: landed, failed or aborted.
+
+    The close-out status alone cannot tell the two bad endings apart:
+    dispatch.sh writes ``aborted`` from its exit trap whenever it does not reach
+    the normal close-out, for an operator's Ctrl-C and for a run that died by
+    itself after a seat failed alike. The seat exits can. An operator stop
+    leaves a seat without a seat_exit; a run that ended by itself has an exit
+    for every seat it dispatched. ``exits`` maps task_id to the status of that
+    seat's LAST seat_exit (None while it has none), so a retry overrides.
+
+      landed    close-out ``completed``, every seat's last exit ``success``,
+                and the dispatcher counted no failure
+      failed    at least one seat's last exit is not ``success`` and every
+                dispatched seat has exited (the run ended by itself); or a
+                ``completed`` close-out that is not clean
+      aborted   anything else: stopped while a seat was still in flight, or
+                before the normal close-out with nothing having failed
+    """
+    unexited = [t for t, st in exits.items() if st is None]
+    not_ok = [t for t, st in exits.items() if st is not None and st != "success"]
+    if end_status == "completed":
+        return "landed" if not not_ok and not unexited and not failed else "failed"
+    if not_ok and not unexited:
+        return "failed"
+    return "aborted"
+
+
 def summarize_stream(path):
     """One dispatch, folded to the facts the day view needs. Cached by mtime."""
     try:
@@ -405,9 +435,10 @@ def summarize_stream(path):
         "started_at": None, "ended_at": None,
         "status": "running", "end_status": None,
         "duration_s": None, "seats": 0, "succeeded": None, "failed": None,
-        "branches": [],
+        "outcome": None, "branches": [],
     }
     seat_ids = set()
+    exits = {}          # task_id -> status of its last seat_exit, None until one
     for ev in events:
         if ev.get("dispatch_id"):
             summary["dispatch_id"] = ev["dispatch_id"]
@@ -420,7 +451,12 @@ def summarize_stream(path):
                 summary["mode"] = ev["mode"]
         elif kind in ("seat_dispatch", "seat_exit"):
             if ev.get("task_id") is not None:
-                seat_ids.add(str(ev["task_id"]))
+                task_id = str(ev["task_id"])
+                seat_ids.add(task_id)
+                if kind == "seat_exit":
+                    exits[task_id] = ev.get("status") or "failed"
+                else:
+                    exits[task_id] = None
             branch = ev.get("branch")
             if branch and branch not in summary["branches"]:
                 summary["branches"].append(branch)
@@ -435,6 +471,8 @@ def summarize_stream(path):
                 if isinstance(ev.get(key_name), int):
                     summary[key_name] = ev[key_name]
     summary["seats"] = len(seat_ids)
+    if summary["ended_at"] is not None:
+        summary["outcome"] = run_outcome(summary["end_status"], exits, summary["failed"])
     _DAY_CACHE[path] = (key, summary)
     return summary
 
@@ -485,6 +523,7 @@ def today_view(events_dir, now, entries):
                 "purpose": known.get("purpose"),
                 "purpose_source": "queue" if known.get("purpose") else "none",
                 "status": summary.get("status"),
+                "outcome": summary.get("outcome"),
                 "end_status": summary.get("end_status"),
                 "duration_s": summary.get("duration_s"),
                 "started_at": summary.get("started_at"),
@@ -842,6 +881,10 @@ def attach_now(proj, queue_entries):
 
     A seat that is not running gets ``now: null``: the sentence is present
     tense, and a settled or unknown seat has no present.
+
+    ``last_event_ts`` is a timestamp, never a precomputed age: the page
+    computes the age live from it, so the header ticks with the rest of the
+    chrome and cannot disagree with the state note when the watcher is gone.
     """
     purpose_index = queue_purpose_index(queue_entries)
     running = 0
@@ -855,7 +898,7 @@ def attach_now(proj, queue_entries):
         "running": running,
         "queued": (proj.get("queue_meta") or {}).get("queued") or 0,
         "landed_today": len(proj.get("today") or []),
-        "last_event_age_s": (proj.get("staleness") or {}).get("seconds"),
+        "last_event_ts": proj.get("last_event_ts"),
     }
     return proj
 

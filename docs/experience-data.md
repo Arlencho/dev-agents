@@ -488,6 +488,8 @@ reader, in this order, and a command that survives none of it publishes nothing:
 | `./scripts/deploy.sh --prod` | `deploy.sh` | same rule, same basename |
 | `sudo -u deploy ./x.sh` | *(omitted)* | an option is not a program name; the reader says nothing rather than publishing an argument |
 | `echo 'unbalanced` | *(omitted)* | unparseable quoting is not tokenised on a guess |
+| `sudo ~/.ssh/ghp_<token>` | `redacted` | a basename shaped like a credential is replaced by the literal word `redacted` **before it is written**, whole, never a truncated prefix. Same shapes as the Almanac scrub (`scripts/experience_data.py`): `ghp_`/`github_pat_`, `sk-`, `xox?-`, `AKIA`, a JWT. The Floor learns that a command ran, never which |
+| `A=1 B=2 C=3 D=4 E=5 F=6 G=7 H=8 make` | *(omitted)* | the reader inspects at most the first **eight** tokens (assignments and wrappers included); a program buried deeper publishes nothing rather than a guess |
 
 The name is **sticky per seat**: it describes the last shell command, so it
 survives the reads and edits that follow, and a later command replaces it even
@@ -529,7 +531,7 @@ unwritable stream) degrades the same way.
 | `wave` | object | `{current, total}` |
 | `seats[]` | array | one per `task_id`: `agent`, `branch`, `wave`, `provider`, `worker`, `model`, `status`, `pipeline`, `exit`, `attempt`, `started_at`, `ended_at`, `duration_s`, `elapsed_s` (running), `providers_tried[]`, `failovers[]`, `ratecapped`, `log`, `activity` (newest `seat_progress`: `{ts, phase, tool, path, program, files_edited, commands_run, tests_run, commits_made}`, else `null`), `now` (one sentence worth of facts for a **running** seat, else `null`; see below) |
 | `counts` | object | pipeline counts: `queued`, `in_flight`, `blocked`, `settled`, `total` |
-| `summary` | object | The Floor's top line in plain counts: `running`, `queued`, `landed_today`, `last_event_age_s`. **`null` on a replay** (see below) |
+| `summary` | object | The Floor's top line in plain counts: `running`, `queued`, `landed_today`, plus `last_event_ts`. **`null` on a replay** (see below) |
 | `waiting_on[]` | array | first-class strip: open human gates, then rate-capped seats, else the longest-running seat. Each entry has `kind` (`human_gate`\|`ratecap`\|`seat`), `label`, `since` |
 | `last_event_ts` | string | newest event timestamp seen |
 | `staleness` | object | `{seconds, state, stale_after_s: 120, offline_after_s: 900}`; `state` ∈ `live` · `stale` · `offline` · `none` · **`replay`** (Phase C) |
@@ -649,11 +651,27 @@ missing.
 |-----|------|---------|
 | `queue[]` | array | Entries with status `queued`, **in declared order**: `position`, `plan`, `plan_basename`, `repo`, `purpose`, `added_at`, `status` (always `queued`) |
 | `queue_meta` | object | `{source, declared, declared_at, total, queued, running, settled}`. `declared_at` is the `added_at` of the **newest** entry and stamps the Floor block |
-| `today[]` | array | One entry per dispatch whose **`dispatch_end` falls on the local calendar day**: `dispatch_id`, `source`, `plan`, `plan_basename`, `repo`, `purpose` (+ `purpose_source`: `queue` or `none`), `status` (`settled` · `aborted`), `end_status`, `duration_s`, `started_at`, `ended_at`, `seats`, `succeeded`, `failed`, `branches[]` |
+| `today[]` | array | One entry per dispatch whose **`dispatch_end` falls on the local calendar day**: `dispatch_id`, `source`, `plan`, `plan_basename`, `repo`, `purpose` (+ `purpose_source`: `queue` or `none`), `status` (`settled` · `aborted`, kept for compatibility), `outcome` (`landed` · `failed` · `aborted`, see below), `end_status`, `duration_s`, `started_at`, `ended_at`, `seats`, `succeeded`, `failed`, `branches[]` |
 | `today_meta` | object | `{date, streams_read, live[], ended}`: the local day, how many streams were read, which dispatch ids are still live |
 | `multi_dispatch` | object | Present only when a second dispatch is live on the day: `{live[], followed, merged_seats}` |
 | `seats[].dispatch_id` | string | Which run a seat belongs to |
 | `seats[].foreign` | bool | `true` when the seat comes from a live dispatch other than the followed one |
+
+`today[].outcome` is the word the page prints for a finished run. `status`
+only mirrors the close-out (`settled` for `completed`, else the close-out
+status as written), and `dispatch.sh` writes `aborted` from its exit trap
+whenever it does not reach the normal close-out, so `status` alone cannot tell
+an operator's Ctrl-C from a run that died by itself after a seat failed. The
+seat exits can, so `outcome` is derived from both (a seat's **last**
+`seat_exit` counts, so a retry overrides):
+
+* `landed`: the close-out is `completed`, every seat's last `seat_exit` is
+  `success`, and the dispatcher counted no failure;
+* `failed`: at least one seat's last `seat_exit` is not `success` and every
+  dispatched seat has exited, so the run ended by itself. A `completed`
+  close-out with a failure counted is `failed` too;
+* `aborted`: anything else: the dispatcher was stopped while a seat was still
+  in flight, or before the normal close-out with nothing having failed.
 
 ### The now view (`seats[]` additions + `plan_context`)
 
@@ -666,7 +684,7 @@ from it: the header, the seat's own line, the wave count.
 | Key | Type | Meaning |
 |-----|------|---------|
 | `plan_context` | object | `{plan, purpose, waves, seats}` for the followed run |
-| `seats[].plan_purpose` | string | First comment line of the seat's plan |
+| `seats[].plan_purpose` | string | First **prose** comment line of the seat's plan header. A machine directive (`DISPATCH:`, `Law:`, `Schema:`, `Protocol:`, `Usage:`, `Ref:`/`Refs:`, `Generated by`) is skipped, the same rule as `now.purpose` and `scripts/queue.sh` |
 | `seats[].task` | string | **First sentence** of that seat's line in the plan, cut at 120 chars. Never the whole task body |
 | `seats[].wave_total` | int | Wave count of the plan, so a seat reads "wave 2 of 3" |
 | `seats[].attempt` | int | Attempt number from `seat_dispatch` |
@@ -740,7 +758,7 @@ otherwise (a settled or `unknown` seat has no present tense):
 | `running` | int | Seats with `status: running`, **across every live dispatch** of the day (the followed run plus any `foreign` seats) |
 | `queued` | int | Plans the queue declares `queued` (`queue_meta.queued`); intent, never motion |
 | `landed_today` | int | Dispatches that ended on this local calendar day (`len(today)`), landed and aborted alike |
-| `last_event_age_s` | int\|null | Seconds since the newest event (same number as `staleness.seconds`); `null` when no event has ever arrived |
+| `last_event_ts` | string\|null | Timestamp of the newest event (the same value as the top-level `last_event_ts`); `null` when no event has ever arrived. A timestamp, never a precomputed age: the page computes the age live from it, so the header ticks with the rest of the chrome and cannot disagree with the state note once the watcher is gone |
 
 Rules the projector enforces:
 

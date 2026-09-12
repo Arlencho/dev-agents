@@ -9,7 +9,8 @@
 #   Part G: scripts/seat-progress.py reader (pass-through, counts, redaction)
 #   Part H: live-activity wiring (launcher stream, reader placement, Floor)
 #   Part I: the plain sentence (issue 69): program-name reduction in the
-#           reader, seats[].now per live seat, the top-line summary
+#           reader (credential shapes redacted), seats[].now per live seat,
+#           the top-line summary, today[].outcome
 #
 # Offline by design: nothing here binds a socket or touches the network.
 #
@@ -1120,6 +1121,12 @@ assert_program "an operator path leaves only the basename" \
 assert_program "an option is never published as a program" "sudo -u deploy ./x.sh" "NONE"
 assert_program "an unparseable command publishes nothing" "echo 'unbalanced" "NONE"
 assert_program "an empty command publishes nothing" "   " "NONE"
+assert_program "a token-shaped basename is written as the literal redacted" \
+  "sudo /Users/someone/.ssh/ghp_abcdefghijklmnopqrstuvwxyz012345" "redacted"
+assert_program "an api-key-shaped basename is redacted too" \
+  "./sk-abcdefghijklmnopqrstuvwxyz --verify" "redacted"
+assert_program "a long token is redacted whole, never truncated to a prefix" \
+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c" "redacted"
 
 # ── end to end: the program reaches the stream, its arguments never do ────
 P_REPO="$TMP/program-repo"
@@ -1128,6 +1135,7 @@ P_IN="$TMP/program-in.jsonl"
 cat > "$P_IN" <<'STREAM'
 {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"FOO=LEAKCANARY-ENV sudo /usr/local/bin/deploy.sh --token LEAKCANARY-ARG"}}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"make LEAKCANARY-TARGET"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"/Users/someone/.ssh/ghp_LEAKCANARYabcdefghijklmnopqrstuv"}}]}}
 STREAM
 P_EVENTS="$TMP/events-program"
 mkdir -p "$P_EVENTS"
@@ -1142,7 +1150,7 @@ FLEET_EVENTS_SH="$EMITTER" FLEET_EVENTS_FILE="$P_FILE" \
   && ok "the reader still exits 0 with program names on" \
   || bad "the reader still exits 0 with program names on"
 assert_jsonl "the program name of the last shell command travels" "$P_FILE" \
-  '[r.get("program") for r in K["seat_progress"]][:2]==["deploy.sh","make"]'
+  '[r.get("program") for r in K["seat_progress"]][:3]==["deploy.sh","make","redacted"]'
 if grep -q "LEAKCANARY" "$P_FILE"; then
   bad "no env value, argument or absolute path travels with the program"
 else
@@ -1212,6 +1220,41 @@ write("floor-landed.jsonl", [
     {"ts": ts(120), "event": "dispatch_end", "status": "completed",
      "total": 1, "succeeded": 1, "failed": 0, "duration_s": 280},
 ])
+# a run that died by itself: the seat failed, the dispatcher's exit trap closed it
+write("floor-failed.jsonl", [
+    {"ts": ts(700), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "floor.plan"},
+    {"ts": ts(690), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/failed", "wave": 1, "provider": "local"},
+    {"ts": ts(300), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/failed", "wave": 1, "status": "failed", "exit": 1, "duration_s": 390},
+    {"ts": ts(299), "event": "dispatch_end", "status": "aborted",
+     "total": 1, "succeeded": 0, "failed": 1},
+])
+# a run the operator stopped: a seat still in flight when the close-out came
+write("floor-aborted.jsonl", [
+    {"ts": ts(600), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "floor.plan"},
+    {"ts": ts(590), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/aborted", "wave": 1, "provider": "local"},
+    {"ts": ts(400), "event": "dispatch_end", "status": "aborted",
+     "total": 1, "succeeded": 0, "failed": 0, "duration_s": 200},
+])
+# a run that reached the normal close-out with one seat failed
+write("floor-completed-fail.jsonl", [
+    {"ts": ts(560), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "floor.plan"},
+    {"ts": ts(550), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/cf-a", "wave": 1, "provider": "local"},
+    {"ts": ts(549), "event": "seat_dispatch", "task_id": "1", "agent": "devops",
+     "branch": "feat/cf-b", "wave": 1, "provider": "local"},
+    {"ts": ts(500), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/cf-a", "wave": 1, "status": "success", "exit": 0, "duration_s": 50},
+    {"ts": ts(480), "event": "seat_exit", "task_id": "1", "agent": "devops",
+     "branch": "feat/cf-b", "wave": 1, "status": "failed", "exit": 2, "duration_s": 69},
+    {"ts": ts(470), "event": "dispatch_end", "status": "completed",
+     "total": 2, "succeeded": 1, "failed": 1, "duration_s": 90},
+])
 # the followed run: one seat running with activity, one seat already settled
 write("floor-a.jsonl", [
     {"ts": ts(900), "event": "dispatch_start", "mode": "wave",
@@ -1250,10 +1293,10 @@ assert_py "summary counts the seats running right now, across live dispatches" "
   'd["summary"]["running"]==2'
 assert_py "summary counts the plans declared queued" "$I_OUT" 'd["summary"]["queued"]==2'
 assert_py "summary counts the dispatches that landed today" "$I_OUT" \
-  'd["summary"]["landed_today"]==1'
-assert_py "summary carries the seconds since the last event" "$I_OUT" \
-  'isinstance(d["summary"]["last_event_age_s"], int) '\
-'and d["summary"]["last_event_age_s"]==d["staleness"]["seconds"]'
+  'd["summary"]["landed_today"]==4'
+assert_py "summary carries the last event timestamp, never a precomputed age" "$I_OUT" \
+  'isinstance(d["summary"]["last_event_ts"], str) '\
+'and d["summary"]["last_event_ts"]==d["last_event_ts"] and "last_event_age_s" not in d["summary"]'
 assert_py "the summary counts agree with the blocks they summarise" "$I_OUT" \
   'd["summary"]["queued"]==len(d["queue"]) and d["summary"]["landed_today"]==len(d["today"]) '\
 'and d["summary"]["running"]==len([s for s in d["seats"] if s["status"]=="running"])'
@@ -1278,6 +1321,19 @@ assert_py "a seat that is not running has no sentence" "$I_OUT" \
 assert_py "the sentence never carries an absolute path" "$I_OUT" \
   'all(not str(s["now"]).count("/Users/") for s in d["seats"] if s["now"])'
 
+# The outcome word: derived from the seat exits and the close-out, one per run.
+assert_py "today names the outcome landed when every seat succeeded" "$I_OUT" \
+  '{t["dispatch_id"]: t["outcome"] for t in d["today"]}["floor-landed"]=="landed"'
+assert_py "a seat failure that ended the run by itself reads failed, not aborted" "$I_OUT" \
+  '{t["dispatch_id"]: t["outcome"] for t in d["today"]}["floor-failed"]=="failed"'
+assert_py "a completed close-out with a failure counted reads failed" "$I_OUT" \
+  '{t["dispatch_id"]: t["outcome"] for t in d["today"]}["floor-completed-fail"]=="failed"'
+assert_py "a run stopped with a seat still in flight reads aborted" "$I_OUT" \
+  '{t["dispatch_id"]: t["outcome"] for t in d["today"]}["floor-aborted"]=="aborted"'
+assert_py "today keeps status beside outcome for compatibility" "$I_OUT" \
+  '{t["dispatch_id"]: t["status"] for t in d["today"]}=={"floor-landed":"settled",'\
+'"floor-failed":"aborted","floor-aborted":"aborted","floor-completed-fail":"settled"}'
+
 # A replay has no present tense: no summary, no sentence.
 I_REPLAY="$TMP/out/live-floor-replay.json"
 python3 "$DESK_LIVE" --once --events-dir "$I_DIR" --queue-file "$I_Q" \
@@ -1285,6 +1341,19 @@ python3 "$DESK_LIVE" --once --events-dir "$I_DIR" --queue-file "$I_Q" \
 assert_py "a replay carries neither summary nor sentence" "$I_REPLAY" \
   'd["view"]=="replay" and d["summary"] is None '\
 'and all(s["now"] is None for s in d["seats"])'
+# mark_replay walks the seats itself, so a caller that attached now first
+# cannot leak a present-tense sentence into a historical scrub.
+if python3 - "$DESK_LIVE" "$I_OUT" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("desk_live", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+proj = json.load(open(sys.argv[2]))
+assert any(s["now"] for s in proj["seats"]), "fixture has no live sentence"
+mod.mark_replay(proj, 5, 5)
+sys.exit(0 if proj["summary"] is None and all(s["now"] is None for s in proj["seats"]) else 1)
+PY
+then ok "mark_replay clears every seat's sentence itself"; else bad "mark_replay clears every seat's sentence itself"; fi
 
 # An idle desk still answers the header question honestly.
 I_EMPTY="$TMP/events-empty-floor"
@@ -1293,7 +1362,7 @@ I_IDLE="$TMP/out/live-floor-idle.json"
 python3 "$DESK_LIVE" --once --events-dir "$I_EMPTY" --queue-file "$I_Q" --out "$I_IDLE" >/dev/null 2>&1
 assert_py "an idle desk reports 0 running, the queue it has, and no age" "$I_IDLE" \
   'd["status"]=="idle" and d["summary"]["running"]==0 and d["summary"]["queued"]==2 '\
-'and d["summary"]["landed_today"]==0 and d["summary"]["last_event_age_s"] is None'
+'and d["summary"]["landed_today"]==0 and d["summary"]["last_event_ts"] is None'
 
 grep -q 'program name of the last shell command' "$REPO_DIR/docs/experience-data.md" \
   && ok "the program name is documented in the event envelope" \

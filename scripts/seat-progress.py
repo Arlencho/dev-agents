@@ -20,7 +20,8 @@ REDACTION LAW (docs/experience-data.md § Redaction law, do not weaken):
     - one phase word: reading | reviewing | editing | testing | committing
     - the PROGRAM NAME of the last shell command: its first token only, with
       env assignments and sudo/nohup/time wrappers stripped, a path reduced to
-      its basename, and never an argument
+      its basename, never an argument, and a basename shaped like a credential
+      replaced by the literal word "redacted" before it is written
   What never leaves it
     - prompts, task bodies, assistant or user message text, thinking
     - tool argument values of any kind, including command lines
@@ -93,7 +94,24 @@ ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # variable, a redirect or a subshell is not a program name and yields nothing.
 PROGRAM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 PROGRAM_MAX = 40
+# How many leading tokens are inspected for the program (assignments and
+# wrappers included). A program buried deeper publishes nothing: fail-open,
+# never a guess. Documented in docs/experience-data.md next to the table.
 PROGRAM_TOKEN_SCAN = 8
+# A basename can itself be a credential (``sudo ~/.ssh/ghp_...``). The token
+# passes the same shaped-secret scrub the Almanac runs on everything it
+# publishes (scripts/experience_data.py REDACTIONS, the shapes a single bare
+# word can take) and a match is written as the literal word below, so the
+# Floor learns that a command ran and never which. Kept as a copy on purpose:
+# this reader sits in the launcher pipe and must not import the site builder.
+SECRET_TOKEN_RES = [
+    re.compile(r"(?i)\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})"),
+    re.compile(r"\bsk-[A-Za-z0-9\-_]{16,}"),
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"),
+]
+REDACTED = "redacted"
 
 
 def program_name(command):
@@ -106,9 +124,12 @@ def program_name(command):
                              so no directory (inside or outside the repo) leaves
       anything else          only a bare word is published; an option (``-u``),
                              a subshell (``(cd``) or a variable yields ``None``
+      a credential shape     a bare word that looks like a token or key is
+                             written as the literal ``redacted``, whole, never
+                             a truncated prefix of it
 
-    Returns None rather than a guess: the Floor would rather say nothing than
-    print an argument.
+    Only the first PROGRAM_TOKEN_SCAN tokens are inspected. Returns None rather
+    than a guess: the Floor would rather say nothing than print an argument.
     """
     if not isinstance(command, str) or not command.strip():
         return None
@@ -129,6 +150,8 @@ def program_name(command):
             token = os.path.basename(token.rstrip("/"))
         if not PROGRAM_RE.match(token or ""):
             return None
+        if any(p.search(token) for p in SECRET_TOKEN_RES):
+            return REDACTED
         return token[:PROGRAM_MAX]
     return None
 
