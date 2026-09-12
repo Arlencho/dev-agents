@@ -855,6 +855,19 @@ Rules the projector enforces:
 number the plan header names, else the number the declared purpose names, else
 `null`. `queue.sh list` prints it as `#NNNN` beside the plan.
 
+The Floor page (`templates/experience/floor.js`, mirrored by the build-time
+snapshot in `scripts/experience_build.py`) reads these fields so: the summary
+line is the first thing on the page and the legacy chrome (replay scrubber,
+schema intro, trail block, the four pipeline tiles, the stale mission
+breadcrumb) folds behind one `<details>` control, closed by default; NOW is
+grouped by repo with a header per repo carrying its own seats-live and
+dispatches-live counts (a replay drops the word "live", since the seats shown
+are history); each seat card reads repo, issue and milestone (with a
+"milestone unverified" mark when the lookup was skipped), purpose, the seat
+task line, the status clause, the branch dim, and the PR number and title
+when one exists; UP NEXT and LANDED TODAY rows lead with the repo and carry
+the issue or PR number when present.
+
 ### Phase C — replay API
 
 | Route / flag | Meaning |

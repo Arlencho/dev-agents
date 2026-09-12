@@ -1057,6 +1057,52 @@ class Renderer:
         purpose = str(now.get("purpose") or "").rstrip(". \t")
         return f'<div class="nowpurpose">{esc(purpose)}.</div>' if purpose else ""
 
+    @staticmethod
+    def _issue_line(issue: Any) -> str:
+        """Issue + milestone line of a seat card (mirrored in floor.js).
+
+        The number always comes from the plan header line; the milestone
+        title only from a verified gh lookup. A skipped lookup says so in
+        place instead of implying there is no milestone.
+        """
+        if not isinstance(issue, dict) or not isinstance(issue.get("number"), int):
+            return ""
+        txt = f'#{issue["number"]}'
+        if issue.get("milestone"):
+            txt += f' · {esc(issue["milestone"])}'
+        if issue.get("lookup") == "skipped":
+            txt += ' <span class="faint">(milestone unverified)</span>'
+        return f'<div class="nowissue">{txt}</div>'
+
+    @staticmethod
+    def _pr_line(pr: Any) -> str:
+        """PR number and title of a seat card (mirrored in floor.js).
+
+        Only renders when gh answered with an open (else merged) PR for the
+        seat branch; number and title only, never a body.
+        """
+        if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
+            return ""
+        txt = f'PR #{pr["number"]}'
+        if pr.get("title"):
+            txt += f' · {esc(pr["title"])}'
+        return f'<div class="nowpr">{txt}</div>'
+
+    @staticmethod
+    def _repo_head_counts(n_seats: int, n_disp: int, state: str) -> str:
+        """Repo group header counts (mirrored in floor.js).
+
+        "seats live, dispatches live" per repo (issue 72). Off a live stream
+        the word "live" is qualified; a replay drops it entirely because the
+        seats shown are history at the scrubber position.
+        """
+        seat_word = "seat" if n_seats == 1 else "seats"
+        disp_word = "dispatch" if n_disp == 1 else "dispatches"
+        if state == "replay":
+            return f"{n_seats} {seat_word} · {n_disp} {disp_word}"
+        qual = " at last event" if state in ("stale", "offline") else ""
+        return f"{n_seats} {seat_word} live{qual} · {n_disp} {disp_word} live{qual}"
+
     def _now_status(self, now: Dict[str, Any], state: str, seat: Dict[str, Any],
                     last_event_ts: Any) -> str:
         """One running seat as one short status clause of nouns (mirrored in floor.js).
@@ -1157,16 +1203,72 @@ class Renderer:
             return '<span class="state-note" id="floor-state-note" hidden></span>'
         return f'<span class="state-note" id="floor-state-note">{esc(txt)}</span>'
 
-    def _live_now_card(self, live: Dict[str, Any], state: str) -> str:
-        """The now view: purpose on its own line, then one short status clause.
+    def _now_row(self, s: Dict[str, Any], state: str, last_event_ts: Any) -> str:
+        """One live seat card (mirrored in floor.js).
 
-        The clause comes from seats[].now (projection side); its elapsed span
-        ticks in the browser from the seat_dispatch timestamp while the stream
-        is live, and a seat whose last sign of life is older than the quiet
-        threshold wears the watermark badge. A seat with now=null (older
-        projection, replay) keeps the older plan-header layout rather than an
-        invented present tense. "Live" in the note is a liveness claim, so off
-        a live stream it is qualified with "at last event".
+        Order (issue 72): repo; issue number and milestone (unverified mark
+        when the lookup was skipped); purpose; the seat task in one line;
+        the status clause from #69; the branch dim; the PR number and title
+        when one exists. A seat with now=null (older projection, replay)
+        keeps the plan-header layout rather than an invented present tense,
+        and the repo, issue, task line and PR still ride the card when the
+        projection carries them.
+        """
+        quiet = s.get("quiet") is True
+        quiet_badge = ('<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>'
+                       if quiet else "")
+        now = s.get("now")
+        if isinstance(now, dict):
+            return (
+                f'<li class="nowrow{" quiet" if quiet else ""}">'
+                f'<div class="nowhead"><span class="rname">{esc(s.get("repo") or "repo not reported")}</span>'
+                f'{self._seat_pill(s)}{quiet_badge}</div>'
+                + self._issue_line(s.get("issue"))
+                + self._now_purpose(now)
+                + (f'<div class="nowtask">{esc(s["task_line"])}</div>' if s.get("task_line") else "")
+                + f'<div class="nowsent">{self._now_status(now, state, s, last_event_ts)}</div>'
+                f'<div class="nowmeta"><span class="mono faint">'
+                f'{esc(s.get("branch") or "branch not reported")}</span>'
+                f'<span class="faint">attempt {esc(s.get("attempt") or 1)}</span></div>'
+                + self._pr_line(s.get("pr"))
+                + '</li>'
+            )
+        timer = (f'<span class="timer mono" data-elapsed-from="{esc(s.get("started_at") or "")}">'
+                 f'{self._fmt_dur(s.get("elapsed_s"))}</span>')
+        wave = (f'wave {s["wave"]}' + (f' of {s["wave_total"]}' if s.get("wave_total") else "")
+                if isinstance(s.get("wave"), int) else "wave not reported")
+        if s.get("last_heartbeat_ts"):
+            beat = f'last heartbeat {self._time_of(s.get("last_heartbeat_ts"))}'
+            if isinstance(s.get("heartbeat_age_s"), int):
+                beat += f' ({self._fmt_dur(s.get("heartbeat_age_s"))} ago)'
+        else:
+            beat = "no heartbeat yet"
+        task = s.get("task_line") or s.get("task")
+        return (
+            f'<li class="nowrow{" quiet" if quiet else ""}">'
+            f'<div class="nowhead"><span class="rname">{esc(s.get("repo") or "repo not reported")}</span>'
+            f'<span class="role">{esc(s.get("agent") or s.get("task_id"))}</span>'
+            f'{self._seat_pill(s)}{quiet_badge}{timer}</div>'
+            + self._issue_line(s.get("issue"))
+            + f'<div class="nowpurpose">{esc(s.get("plan_purpose") or "purpose not declared in the plan header")}</div>'
+            f'<div class="nowtask">{esc(task or "task line not resolvable from the plan on this machine")}</div>'
+            + self._live_activity_line(s)
+            + f'<div class="nowmeta"><span class="vendor">{esc(wave)}</span>'
+            f'<span class="vendor">attempt {esc(s.get("attempt") or 1)}</span>'
+            f'<span class="mono faint">{esc(s.get("branch") or "branch not reported")}</span>'
+            f'<span class="faint">{esc(beat)}</span></div>'
+            + self._pr_line(s.get("pr"))
+            + '</li>'
+        )
+
+    def _live_now_card(self, live: Dict[str, Any], state: str) -> str:
+        """The now view, grouped by repo (issue 72).
+
+        Each repo group has a header with the repo name and its own counts
+        (seats live, dispatches live) from repos[]; a replay carries no
+        repos[], so the counts then come from the seats shown at the
+        scrubber position. "Live" in the note is a liveness claim, so off a
+        live stream it is qualified with "at last event".
         """
         seats = [s for s in (live.get("seats") or []) if s.get("status") == "running"]
         runs = {s.get("dispatch_id") for s in seats if s.get("dispatch_id")}
@@ -1177,45 +1279,31 @@ class Renderer:
                 f"{n_runs} {'dispatch' if n_runs == 1 else 'dispatches'}"
                 if seats else "no seat is live")
         if seats:
-            rows = []
+            groups: Dict[str, List[Dict[str, Any]]] = {}
             for s in seats:
-                quiet = s.get("quiet") is True
-                quiet_badge = ('<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>'
-                               if quiet else "")
-                now = s.get("now")
-                if isinstance(now, dict):
-                    rows.append(
-                        f'<li class="nowrow{" quiet" if quiet else ""}">'
-                        f'<div class="nowhead">{self._seat_pill(s)}{quiet_badge}</div>'
-                        + self._now_purpose(now)
-                        + f'<div class="nowsent">{self._now_status(now, state, s, live.get("last_event_ts"))}</div>'
-                        f'<div class="nowmeta"><span class="mono faint">'
-                        f'{esc(s.get("branch") or "branch not reported")}</span>'
-                        f'<span class="faint">attempt {esc(s.get("attempt") or 1)}</span></div></li>'
-                    )
-                    continue
-                timer = (f'<span class="timer mono" data-elapsed-from="{esc(s.get("started_at") or "")}">'
-                         f'{self._fmt_dur(s.get("elapsed_s"))}</span>')
-                wave = (f'wave {s["wave"]}' + (f' of {s["wave_total"]}' if s.get("wave_total") else "")
-                        if isinstance(s.get("wave"), int) else "wave not reported")
-                if s.get("last_heartbeat_ts"):
-                    beat = f'last heartbeat {self._time_of(s.get("last_heartbeat_ts"))}'
-                    if isinstance(s.get("heartbeat_age_s"), int):
-                        beat += f' ({self._fmt_dur(s.get("heartbeat_age_s"))} ago)'
-                else:
-                    beat = "no heartbeat yet"
-                rows.append(
-                    f'<li class="nowrow{" quiet" if quiet else ""}">'
-                    f'<div class="nowhead"><span class="role">{esc(s.get("agent") or s.get("task_id"))}</span>'
-                    f'{self._seat_pill(s)}{quiet_badge}{timer}</div>'
-                    f'<div class="nowpurpose">{esc(s.get("plan_purpose") or "purpose not declared in the plan header")}</div>'
-                    f'<div class="nowtask">{esc(s.get("task") or "task line not resolvable from the plan on this machine")}</div>'
-                    + self._live_activity_line(s)
-                    + f'<div class="nowmeta"><span class="vendor">{esc(wave)}</span>'
-                    f'<span class="vendor">attempt {esc(s.get("attempt") or 1)}</span>'
-                    f'<span class="mono faint">{esc(s.get("branch") or "branch not reported")}</span>'
-                    f'<span class="faint">{esc(beat)}</span></div></li>'
-                )
+                groups.setdefault(s.get("repo") or "unknown", []).append(s)
+            repos_meta = {r.get("repo"): r for r in (live.get("repos") or [])
+                          if isinstance(r, dict)}
+
+            def group_seats(repo: str) -> int:
+                meta = repos_meta.get(repo) or {}
+                n = meta.get("seats_live")
+                return n if isinstance(n, int) else len(groups[repo])
+
+            order = sorted(groups, key=lambda r: (-group_seats(r), r))
+            rows = []
+            for repo in order:
+                gseats = groups[repo]
+                meta = repos_meta.get(repo) or {}
+                n_seats = group_seats(repo)
+                n_disp = meta.get("dispatches_live")
+                if not isinstance(n_disp, int):
+                    n_disp = len({s.get("dispatch_id") for s in gseats
+                                  if s.get("dispatch_id")}) or 1
+                counts = self._repo_head_counts(n_seats, n_disp, state)
+                rows.append(f'<li class="repohead"><span class="rname">{esc(repo)}</span>'
+                            f'<span class="faint">{esc(counts)}</span></li>')
+                rows.extend(self._now_row(s, state, live.get("last_event_ts")) for s in gseats)
             rows_html = "".join(rows)
         else:
             rows_html = ('<li class="muted">No seat is live. The Floor shows motion only '
@@ -1248,12 +1336,19 @@ class Renderer:
             note = ("No queue declared. Arm one with "
                     "<code>./scripts/queue.sh add &lt;plan&gt; &lt;repo&gt; &lt;purpose&gt;</code>.")
         if queue:
+            # Repo is the first word of the row; the issue number follows
+            # when the plan header names one (issue 72).
             rows = "".join(
                 '<li class="qrow">'
                 f'<span class="qpos mono">{esc(q.get("position"))}</span>'
-                f'<span class="qbody"><span class="qpurpose">{esc(q.get("purpose") or "no purpose declared")}</span>'
-                f'<span class="qmeta"><span class="vendor">{esc(q.get("repo") or "repo not declared")}</span> '
-                f'<span class="mono faint">{esc(q.get("plan_basename") or q.get("plan") or "")}</span></span></span>'
+                f'<span class="qbody"><span class="qpurpose"><span class="rname">'
+                f'{esc(q.get("repo") or "repo not declared")}</span>'
+                + (f' <span class="mono">#{q["issue"]["number"]}</span>'
+                   if isinstance(q.get("issue"), dict) and isinstance(q["issue"].get("number"), int)
+                   else "")
+                + f' {esc(q.get("purpose") or "no purpose declared")}</span>'
+                f'<span class="qmeta"><span class="mono faint">'
+                f'{esc(q.get("plan_basename") or q.get("plan") or "")}</span></span></span>'
                 '<span class="st st-unk">queued</span></li>'
                 for q in queue
             )
@@ -1304,12 +1399,17 @@ class Renderer:
                 branches = " ".join(
                     f'<span class="mono faint">{esc(b)}</span>' for b in (t.get("branches") or [])
                 ) or '<span class="faint">no branch reported</span>'
+                # Repo is the first word of the row; the PR number follows
+                # when one exists for the landing's branch (issue 72).
+                pr = t.get("pr")
+                pr_html = (f' <span class="mono">PR #{pr["number"]}</span>'
+                           if isinstance(pr, dict) and isinstance(pr.get("number"), int) else "")
                 rows.append(
                     '<li class="trow">'
-                    f'<span class="tbody"><span class="tpurpose">'
+                    f'<span class="tbody"><span class="tpurpose"><span class="rname">'
+                    f'{esc(t.get("repo") or "repo not reported")}</span>{pr_html} '
                     f'{esc(t.get("purpose") or t.get("plan_basename") or t.get("dispatch_id"))}</span>'
-                    f'<span class="tmeta"><span class="vendor">{esc(t.get("repo") or "repo not reported")}</span> '
-                    f"{branches}</span></span>"
+                    f'<span class="tmeta">{branches}</span></span>'
                     f'<span class="{cls} tout">{esc(word)}</span>'
                     f'<span class="timer mono">{esc(self._fmt_min(t.get("duration_s")))}</span></li>'
                 )
@@ -1343,10 +1443,15 @@ class Renderer:
             self.page("Ops Floor", body, 1, "global", "floor", mode="floor", script=script),
         )
 
-    def _floor_chrome_regions(self) -> str:
-        """Shared Phase C regions: REPLAY watermark, scrubber, cross-links."""
+    @staticmethod
+    def _floor_watermark_region() -> str:
+        """REPLAY watermark: honesty chrome, always outside the legacy fold."""
+        return '\n    <div class="floor-watermark" id="floor-watermark" hidden></div>\n'
+
+    @staticmethod
+    def _floor_legacy_regions() -> str:
+        """Legacy chrome inside the details fold (issue 72): scrubber, cross-links."""
         return """
-    <div class="floor-watermark" id="floor-watermark" hidden></div>
     <div class="floor-scrubber" id="floor-scrubber" hidden></div>
     <div class="floor-cross card mt" id="floor-cross">
       <div class="cardhead"><h2>Trail · Mission · Floor</h2><span class="more faint">Phase C links</span></div>
@@ -1398,19 +1503,30 @@ class Renderer:
             for i, n in enumerate(spine_nodes)
         )
         body = f"""
-    {hier}
     <div class="pagehead">
       <h1>Ops Floor</h1>
-      <p class="lede">The live radar. <strong>This is the empty shell</strong> — no
+    </div>
+    {self._floor_watermark_region()}
+    <p class="floor-summary" id="floor-summary" hidden></p>
+    <details class="floor-legacy" id="floor-legacy">
+      <summary>Replay, schema intro, pipeline and trail links</summary>
+      {hier}
+      <p class="lede"><strong>This is the empty shell</strong> — no
       <span class="mono">live.json</span> in this build, so no agents are shown or faked.
       Run a dispatch (<span class="mono">logs/fleet-events/</span>) and
       <code>make desk-live</code> to light it up; this page polls
       <span class="mono">data/live.json</span> and repaints itself when a projection appears.
       Settled runs open the Phase C <strong>REPLAY</strong> scrubber (never a green LIVE LED).
       Law: <span class="mono">docs/proposals/fleet-desk-v2-SYNTHESIS.md</span>.</p>
-    </div>
-    <p class="floor-summary" id="floor-summary" hidden></p>
-    {self._floor_chrome_regions()}
+      {self._floor_legacy_regions()}
+
+      <div class="pipeline" role="group" aria-label="Pipeline">
+        <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">&mdash;</span></div><div class="desc" id="pipe-queued-desc">no queue declared in this build</div></div>
+        <div class="pipe wip"><div class="ph">Running <span class="n" id="pipe-inflight">—</span></div><div class="desc">no seat live</div></div>
+        <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">—</span></div><div class="desc">—</div></div>
+        <div class="pipe done"><div class="ph">Done <span class="n" id="pipe-settled">—</span></div><div class="desc">settled work lives in the <a href="../work/index.html">Almanac</a></div></div>
+      </div>
+    </details>
 
     <div class="ambient">
       <span class="led off" id="floor-led" aria-hidden="true"></span>
@@ -1422,13 +1538,6 @@ class Renderer:
     <div class="waiting">
       <div class="label">Waiting on</div>
       <div id="floor-waiting-items"><p class="muted flush">Nothing waiting — there is no live dispatch to wait on.</p></div>
-    </div>
-
-    <div class="pipeline" role="group" aria-label="Pipeline">
-      <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">&mdash;</span></div><div class="desc" id="pipe-queued-desc">no queue declared in this build</div></div>
-      <div class="pipe wip"><div class="ph">Running <span class="n" id="pipe-inflight">—</span></div><div class="desc">no seat live</div></div>
-      <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">—</span></div><div class="desc">—</div></div>
-      <div class="pipe done"><div class="ph">Done <span class="n" id="pipe-settled">—</span></div><div class="desc">settled work lives in the <a href="../work/index.html">Almanac</a></div></div>
     </div>
 
     <div class="card mt" id="floor-now-card">
@@ -1550,19 +1659,35 @@ class Renderer:
         led_html = "led replay" if state == "replay" else led_cls
         msg_extra = ' · <strong class="wm-inline">REPLAY</strong>' if state == "replay" else stale_note
         wm_static = self._replay_static_watermark(state)
+        # Issue 72: the summary line is the first thing on the page. The
+        # legacy chrome (replay scrubber, schema intro, trail block, the
+        # four pipeline tiles, and the stale mission breadcrumb) folds
+        # behind one details control, closed by default. Only the honesty
+        # chrome (REPLAY watermark) and the page title sit above the line.
         body = f"""
-    {hier}
     <div class="pagehead">
       <h1>Ops Floor</h1>
+    </div>
+    {self._floor_watermark_region()}
+    {wm_static}
+    {self._floor_summary_html(live, state, age)}
+    <details class="floor-legacy" id="floor-legacy">
+      <summary>Replay, schema intro, pipeline and trail links</summary>
+      {hier}
       <p class="lede">Snapshot of <span class="mono">data/live.json</span> (schema <span class="mono">live/1</span>,
       generated {esc(live.get("generated_at") or "—")}). Served via <code>make desk-live</code> this page
       re-reads the projection every few seconds and repaints itself. Only facts from the dispatch event
       stream are shown — live state never enters <span class="mono">index.json</span>.
       Settled runs: enter <strong>REPLAY</strong> to scrub history with an honesty watermark.</p>
-    </div>
-    {self._floor_summary_html(live, state, age)}
-    {self._floor_chrome_regions()}
-    {wm_static}
+      {self._floor_legacy_regions()}
+
+      <div class="pipeline" role="group" aria-label="Pipeline">
+        <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">{queued_n}</span></div><div class="desc" id="pipe-queued-desc">{queued_desc}</div></div>
+        <div class="pipe wip"><div class="ph">In flight <span class="n" id="pipe-inflight">{cn("in_flight")}</span></div><div class="desc">seats reporting running</div></div>
+        <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">{cn("blocked")}</span></div><div class="desc">failed · rate-capped · unknown</div></div>
+        <div class="pipe done"><div class="ph">Settled <span class="n" id="pipe-settled">{cn("settled")}</span></div><div class="desc">record lands in the <a href="../work/index.html">Almanac</a></div></div>
+      </div>
+    </details>
 
     <div class="ambient">
       <span class="{led_html}" id="floor-led" aria-hidden="true"></span>
@@ -1574,13 +1699,6 @@ class Renderer:
     <div class="waiting">
       <div class="label">Waiting on</div>
       <div id="floor-waiting-items">{wait_items}</div>
-    </div>
-
-    <div class="pipeline" role="group" aria-label="Pipeline">
-      <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">{queued_n}</span></div><div class="desc" id="pipe-queued-desc">{queued_desc}</div></div>
-      <div class="pipe wip"><div class="ph">In flight <span class="n" id="pipe-inflight">{cn("in_flight")}</span></div><div class="desc">seats reporting running</div></div>
-      <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">{cn("blocked")}</span></div><div class="desc">failed · rate-capped · unknown</div></div>
-      <div class="pipe done"><div class="ph">Settled <span class="n" id="pipe-settled">{cn("settled")}</span></div><div class="desc">record lands in the <a href="../work/index.html">Almanac</a></div></div>
     </div>
 {self._live_now_card(live, state)}
 {self._live_queue_card(live)}
