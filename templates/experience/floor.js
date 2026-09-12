@@ -341,8 +341,11 @@
     }).join("");
   }
 
-  /* Landed today: every dispatch whose dispatch_end fell on this local day. */
-  function renderToday(d) {
+  /* Landed today: every dispatch whose dispatch_end fell on this local day.
+     The "still live" count is a liveness claim like any other on this page, so
+     off a live stream it is qualified with "at last event" instead of being
+     asserted in the present tense. State comes from renderAll. */
+  function renderToday(d, st) {
     var box = $("floor-today-list");
     if (!box) return;
     var items = d.today || [];
@@ -353,9 +356,13 @@
        pushed the whole page sideways at 400px. */
     var note = $("floor-today-note");
     if (note) {
+      var state = (st && st.state) || liveState(d).state;
+      var liveN = (meta.live || []).length;
+      var liveTxt = !liveN ? ""
+        : state === "live" ? " · " + liveN + " still live"
+        : " · " + liveN + " still live at last event";
       note.textContent = "dispatch_end on " + (meta.date || "today") +
-        " · " + (meta.streams_read || 0) + " stream(s) read" +
-        ((meta.live || []).length ? " · " + meta.live.length + " still live" : "");
+        " · " + (meta.streams_read || 0) + " stream(s) read" + liveTxt;
     }
     if (!items.length) {
       box.innerHTML = '<li class="muted">Nothing has landed today yet.</li>';
@@ -620,7 +627,7 @@
     renderCounts(d);
     renderNow(d);
     renderQueue(d);
-    renderToday(d);
+    renderToday(d, st);
     if (d.mode === "conductor") renderSpine(d); else renderLanes(d);
     renderEvents(d);
     renderCrossLinks(d);

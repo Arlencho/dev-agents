@@ -1092,14 +1092,25 @@ class Renderer:
     </div>
 """
 
-    def _live_today_card(self, live: Dict[str, Any]) -> str:
-        """Landed today: every dispatch that ENDED on this local calendar day."""
+    def _live_today_card(self, live: Dict[str, Any], state: str = "none") -> str:
+        """Landed today: every dispatch that ENDED on this local calendar day.
+
+        The "still live" count is a liveness claim, so it wears the same
+        watermark as the rest of the Floor: off a live stream it is qualified
+        with "at last event" rather than asserted in the present tense.
+        """
         today = live.get("today") or []
         meta = live.get("today_meta") or {}
         live_n = len(meta.get("live") or [])
+        if not live_n:
+            live_note = ""
+        elif state == "live":
+            live_note = f" · {live_n} still live"
+        else:
+            live_note = f" · {live_n} still live at last event"
         note = (f'dispatch_end on {esc(meta.get("date") or "today")} · '
                 f'{esc(meta.get("streams_read") or 0)} stream(s) read'
-                + (f" · {live_n} still live" if live_n else ""))
+                + live_note)
         if today:
             rows = []
             for t in today:
@@ -1386,7 +1397,7 @@ class Renderer:
     </div>
 {self._live_now_card(live)}
 {self._live_queue_card(live)}
-{self._live_today_card(live)}
+{self._live_today_card(live, state)}
 
     <div id="floor-mode-body">
     <div class="card">
