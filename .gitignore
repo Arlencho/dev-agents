@@ -36,3 +36,6 @@ site/experience/
 # Python bytecode from the Fleet Desk generator
 __pycache__/
 *.pyc
+
+# Agent working notes: written at the repo root every run, never history
+handoff.md
