@@ -80,7 +80,7 @@ remote_bash_s() {
 }
 
 # Parse optional flags
-# Default log dir: \$HOME expands worker-side (see WORK_DIR note below).
+# Default log dir: \$HOME expands worker-side (see FETCH_DIR note below).
 LOG_DIR="\$HOME/dev/agent-logs"
 # Model tier or ID, set by dispatch.sh via AGENT_MODEL env var (e.g. opus,
 # sonnet, haiku, or an explicit model ID). Empty means use the CLI default.
@@ -113,9 +113,23 @@ REPO_NAME=$(basename "$REPO_URL" .git)
 # \$HOME stays literal through the dispatcher-side heredoc expansion and
 # expands ON THE WORKER — a quoted "~" would never expand anywhere (latent
 # bug: quoted-tilde paths broke fresh clones, cd, and tee on every worker).
-WORK_DIR="\$HOME/dev/$REPO_NAME"
+#
+# Layout on the worker (issue #66):
+#   FETCH_DIR  ~/dev/<repo>                          the fetch point: objects and
+#              refs only. Seats never check a branch out here again.
+#   SEAT_DIR   ~/dev/worktrees/<repo>/<dispatch>/<task>-<branch>
+#              one git worktree per seat, added from origin/<branch> when the
+#              branch exists on origin, else as a new branch from origin/main.
+#              The seat runs, commits and pushes in it.
+# The dispatch id groups every seat of one dispatch. dispatch.sh passes
+# FLEET_DISPATCH_ID; a direct run gets a private id so it never shares a
+# directory with a live dispatch. Kept path-safe.
+DISPATCH_ID=$(printf '%s' "${FLEET_DISPATCH_ID:-direct-$(date +%Y%m%d-%H%M%S)-$$}" | tr -c 'A-Za-z0-9._-' '_')
+BRANCH_SAFE=$(printf '%s' "$BRANCH" | tr '/ ' '--')
+FETCH_DIR="\$HOME/dev/$REPO_NAME"
+SEAT_DIR="\$HOME/dev/worktrees/$REPO_NAME/$DISPATCH_ID/${AGENT_TASK_ID:-0}-$BRANCH_SAFE"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-LOG_FILE="${REPO_NAME}-${BRANCH//\//-}-${TIMESTAMP}.log"
+LOG_FILE="${REPO_NAME}-${BRANCH_SAFE}-${TIMESTAMP}.log"
 
 echo "=== Remote Agent Execution ==="
 echo "Host:   $HOST$([ "$IS_LOCAL" -eq 1 ] && echo ' (local, no SSH)')"
@@ -125,6 +139,7 @@ echo "Model:  ${MODEL:-default}"
 echo "Branch: $BRANCH"
 echo "Task:   $TASK"
 echo "Log:    $LOG_DIR/$LOG_FILE"
+echo "Seat:   $SEAT_DIR"
 echo ""
 
 if [ "$IS_LOCAL" -eq 1 ]; then
@@ -158,7 +173,7 @@ if [ -n "$SKILLS" ]; then
 fi
 
 # Generate preamble (includes CLAUDE.md, learnings, parallel sessions, git state, issue context)
-# Path here is dispatcher-absolute ($HOME expands locally) — WORK_DIR above is worker-relative.
+# Path here is dispatcher-absolute ($HOME expands locally); FETCH_DIR above is worker-relative.
 # Wave + provider enable the handoff slice + continuity line (Phase 1).
 PREAMBLE=$("$SCRIPT_DIR/preamble.sh" "$PRODUCT_REPO_PATH" "$AGENT" "$BRANCH" "$WAVE" "$PROVIDER" 2>/dev/null || true)
 if [ -n "$PREAMBLE" ]; then
@@ -239,85 +254,171 @@ fi
 # Local worker only: the event stream file lives on the dispatcher, so a true
 # remote host would append to a path that is not the Floor's. Without this env
 # the reader degrades to a plain pass-through and the log is unchanged.
+# Emitted as export lines into the worker env block below; a path value keeps
+# its literal \$HOME so it expands on the worker.
 PROGRESS_ENV=""
 if [ "$IS_LOCAL" -eq 1 ] && [ -n "${FLEET_EVENTS_FILE:-}" ] && [ -f "$SCRIPT_DIR/seat-progress.py" ]; then
-    PROGRESS_ENV="AGENT_STREAM_READER=\$HOME/dev/agent-runtime/seat-progress.py"
-    PROGRESS_ENV="$PROGRESS_ENV FLEET_EVENTS_SH=\$HOME/dev/agent-runtime/fleet-events.sh"
-    PROGRESS_ENV="$PROGRESS_ENV FLEET_EVENTS_FILE=$(printf '%q' "$FLEET_EVENTS_FILE")"
-    PROGRESS_ENV="$PROGRESS_ENV FLEET_DISPATCH_ID=$(printf '%q' "${FLEET_DISPATCH_ID:-}")"
-    PROGRESS_ENV="$PROGRESS_ENV SEAT_TASK_ID=$(printf '%q' "${AGENT_TASK_ID:-0}")"
-    PROGRESS_ENV="$PROGRESS_ENV SEAT_AGENT=$(printf '%q' "$AGENT")"
-    PROGRESS_ENV="$PROGRESS_ENV SEAT_REPO_DIR=$WORK_DIR"
+    PROGRESS_ENV="export AGENT_STREAM_READER=\"\$HOME/dev/agent-runtime/seat-progress.py\"
+export FLEET_EVENTS_SH=\"\$HOME/dev/agent-runtime/fleet-events.sh\"
+export FLEET_EVENTS_FILE=$(printf '%q' "$FLEET_EVENTS_FILE")
+export FLEET_DISPATCH_ID=$(printf '%q' "${FLEET_DISPATCH_ID:-}")
+export SEAT_TASK_ID=$(printf '%q' "${AGENT_TASK_ID:-0}")
+export SEAT_AGENT=$(printf '%q' "$AGENT")
+export SEAT_REPO_DIR=\"$FETCH_DIR\""
     echo "Live seat activity: seat_progress events → $(basename "$FLEET_EVENTS_FILE")"
 fi
 
-# Execute on worker (local bash -s or ssh bash -s)
+# Execute on worker (local bash -s or ssh bash -s). Two heredocs feed one
+# worker shell: the first, unquoted, carries dispatcher values as plain
+# assignments (%q-quoted, so no task or branch character reaches the worker's
+# parser); the second is quoted and runs verbatim, so worker-side code needs no
+# escaping. A path value that carries a literal $HOME expands on the worker.
 echo "Starting agent on $HOST..."
-remote_bash_s <<REMOTE_SCRIPT
+{
+    cat <<WORKER_ENV
+HOST=$(printf '%q' "$HOST")
+LOG_DIR="$LOG_DIR"
+LOG_FILE=$(printf '%q' "$LOG_FILE")
+REPO_URL=$(printf '%q' "$REPO_URL")
+BRANCH=$(printf '%q' "$BRANCH")
+AGENT=$(printf '%q' "$AGENT")
+PROVIDER=$(printf '%q' "$PROVIDER")
+MODEL=$(printf '%q' "$MODEL")
+DISPATCH_ID=$(printf '%q' "$DISPATCH_ID")
+FETCH_DIR="$FETCH_DIR"
+SEAT_DIR="$SEAT_DIR"
+FULL_TASK_B64=$(printf '%q' "$FULL_TASK_B64")
+$PROGRESS_ENV
+WORKER_ENV
+    cat <<'WORKER'
 set -euo pipefail
 
 # Ensure vendor CLIs are on PATH (ssh bare PATH; local session may already have them).
-export PATH="\$HOME/.kimi-code/bin:\$HOME/.grok/bin:\$HOME/.local/bin:\$PATH"
+export PATH="$HOME/.kimi-code/bin:$HOME/.grok/bin:$HOME/.local/bin:$PATH"
 
-# Create log directory
-mkdir -p $LOG_DIR
+mkdir -p "$LOG_DIR"
 
-# Ensure repo exists
-if [ ! -d "$WORK_DIR" ]; then
+# ---- fetch point: clone once, then only ever fetch ----
+# Every fetch-point operation (clone, fetch, hook install, worktree add /
+# remove / prune) runs under one per-repo lock: the seats of a wave start
+# within the same second, and two fetches into one .git race on ref locks
+# (two clones of a missing fetch point race on the directory itself). mkdir
+# is atomic; the pid inside lets a later seat clear the lock of a dead one.
+mkdir -p "$(dirname "$FETCH_DIR")"
+FP_LOCK="$FETCH_DIR.seat-lock"
+fp_lock() {
+    local owner
+    until mkdir "$FP_LOCK" 2>/dev/null; do
+        owner=$(cat "$FP_LOCK/pid" 2>/dev/null || echo "")
+        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+            rm -rf "$FP_LOCK"
+            continue
+        fi
+        # A lock with no pid for over a minute: its taker died between mkdir and the write.
+        if [ -z "$owner" ] && [ -n "$(find "$FP_LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+            rm -rf "$FP_LOCK"
+            continue
+        fi
+        sleep 1
+    done
+    echo "$$" > "$FP_LOCK/pid"
+}
+fp_unlock() {
+    [ "$(cat "$FP_LOCK/pid" 2>/dev/null || echo "")" = "$$" ] && rm -rf "$FP_LOCK"
+    return 0
+}
+
+fp_lock
+if [ ! -d "$FETCH_DIR" ]; then
     echo "Cloning $REPO_URL..."
-    mkdir -p ~/dev
-    cd ~/dev
-    git clone "$REPO_URL"
+    git clone "$REPO_URL" "$FETCH_DIR"
+fi
+cd "$FETCH_DIR"
+FETCH_DIR=$(pwd -P)   # git prints real paths in `worktree list`; compare like with like
+git fetch --prune origin
+
+# The fetch point never checks a task branch out again. One left there by the
+# shared-checkout flow would block `git worktree add` for that branch forever,
+# so park HEAD on main once. A dirty tree is left alone and reported.
+head_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
+if [ -n "$head_branch" ] && [ "$head_branch" != "main" ]; then
+    if [ -z "$(git status --porcelain)" ]; then
+        echo "Fetch point was left on $head_branch; parking it on main"
+        git checkout -q main
+        head_branch=main
+    else
+        echo "WARNING: fetch point $FETCH_DIR is on $head_branch with uncommitted changes; a seat on that branch cannot start until it is cleaned by hand" >&2
+    fi
+fi
+# Keep main fresh for the preamble's git state: a fast-forward of the ref the
+# fetch point already sits on, never a checkout of another branch.
+if [ "$head_branch" = "main" ] && [ -z "$(git status --porcelain)" ]; then
+    git merge -q --ff-only origin/main 2>/dev/null || true
 fi
 
-cd "$WORK_DIR"
+# Guardrail hooks live in the fetch point's .git/hooks and apply to every
+# linked worktree, so one install covers every seat.
+if [ -x "$HOME/dev/guardrails/guardrails.sh" ]; then
+    "$HOME/dev/guardrails/guardrails.sh" install "$FETCH_DIR"
+fi
 
-# Update and land on the task branch. The branch may already exist (producer
-# pushed it; a critic reviews the same branch next) — create only if missing,
-# track origin when it only exists remotely, fast-forward when local.
-git fetch origin
-git checkout main
-git pull origin main
-if git checkout "$BRANCH" 2>/dev/null; then
-    git pull origin "$BRANCH" 2>/dev/null || true
-elif git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
-    git checkout -b "$BRANCH" "origin/$BRANCH"
+# ---- seat worktree ----
+# The branch may already exist (producer pushed it; a critic reviews the same
+# branch next). From origin when it is there, else a new branch off origin/main.
+# A local branch left by an earlier seat is reused and fast-forwarded to origin.
+mkdir -p "$(dirname "$SEAT_DIR")"
+if git rev-parse --verify -q "refs/heads/$BRANCH" >/dev/null; then
+    git worktree add "$SEAT_DIR" "$BRANCH"
+    if git rev-parse --verify -q "refs/remotes/origin/$BRANCH" >/dev/null; then
+        git -C "$SEAT_DIR" merge -q --ff-only "origin/$BRANCH" 2>/dev/null \
+            || echo "WARNING: local $BRANCH has diverged from origin/$BRANCH; running on the local tip" >&2
+    fi
+elif git rev-parse --verify -q "refs/remotes/origin/$BRANCH" >/dev/null; then
+    git worktree add --track -b "$BRANCH" "$SEAT_DIR" "origin/$BRANCH"
 else
-    git checkout -b "$BRANCH"
+    git worktree add --no-track -b "$BRANCH" "$SEAT_DIR" origin/main
 fi
-
-# Install guardrails git hooks
-if [ -x ~/dev/guardrails/guardrails.sh ]; then
-    ~/dev/guardrails/guardrails.sh install "$WORK_DIR"
-fi
+fp_unlock
+cd "$SEAT_DIR"
+echo "Seat worktree: $SEAT_DIR ($(git rev-parse --short HEAD) on $BRANCH)"
 
 # Run the agent through the provider launcher (it verifies its own CLI is
-# installed + logged in, exiting 69 if not). $MODEL / $AGENT expand
-# dispatcher-side through the unquoted heredoc; the task arrives base64-encoded
-# (see above) and is decoded HERE on the worker — \$( … ) stays remote, so no
-# task character ever enters this script's parse. ~ paths expand on the worker.
-# set +e so a launcher exit (69/75/1) is captured, not aborted.
+# installed + logged in, exiting 69 if not). The task arrives base64-encoded
+# and is decoded HERE on the worker. set +e so a launcher exit (69/75/1) is
+# captured, not aborted.
 echo "Starting $PROVIDER launcher for agent $AGENT (model: ${MODEL:-default})..."
 echo "Logging to: $LOG_DIR/$LOG_FILE"
-FULL_TASK=\$(printf '%s' "$FULL_TASK_B64" | base64 -d)
+FULL_TASK=$(printf '%s' "$FULL_TASK_B64" | base64 -d)
 set +e
-AGENT_MODEL="$MODEL" ROLES_DIR=~/dev/agent-runtime/roles \
-    RATECAP_PATTERNS=~/dev/agent-runtime/ratecap-patterns.conf \
-    $PROGRESS_ENV \
-    bash ~/dev/agent-runtime/launch.sh "$AGENT" "\$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
-AGENT_EXIT=\${PIPESTATUS[0]}
+AGENT_MODEL="$MODEL" ROLES_DIR="$HOME/dev/agent-runtime/roles" \
+    RATECAP_PATTERNS="$HOME/dev/agent-runtime/ratecap-patterns.conf" \
+    bash "$HOME/dev/agent-runtime/launch.sh" "$AGENT" "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
+AGENT_EXIT=${PIPESTATUS[0]}
 set -e
 
-# Push the branch
+# Push the branch from the seat worktree
 echo "Pushing branch $BRANCH..."
 git push origin "$BRANCH" 2>/dev/null || echo "Nothing to push (no changes)"
+
+# The agent's intent block (handoff.md at the worktree root) travels with the
+# log: the worktree is gone by the time the dispatcher reads it.
+if [ -f "$SEAT_DIR/handoff.md" ]; then
+    cp "$SEAT_DIR/handoff.md" "$LOG_DIR/${LOG_FILE%.log}.handoff.md"
+fi
+
+# Remove the seat worktree. The branch ref survives in the fetch point.
+cd "$FETCH_DIR"
+fp_lock
+git worktree remove --force "$SEAT_DIR"
+git worktree prune
+fp_unlock
 
 echo ""
 echo "Log saved: $LOG_DIR/$LOG_FILE"
 echo "Done on $HOST"
-exit \$AGENT_EXIT
-REMOTE_SCRIPT
-
+exit "$AGENT_EXIT"
+WORKER
+} | remote_bash_s
 REMOTE_EXIT=$?
 
 # Log path: expand on orchestrator for localhost so ledgers + collection work;
@@ -351,7 +452,9 @@ fi
 HANDOFF_DIR="$SCRIPT_DIR/../wave-plans/$WAVE/handoffs"
 TASK_ID="${WAVE}-${AGENT}-$(echo "$BRANCH" | tr '/ ' '--')"
 mkdir -p "$HANDOFF_DIR"
-# Expand WORK_DIR for local host when querying git (remote still uses ssh)
+# Git truth is read at the fetch point: a worktree's branch ref lives in the
+# shared .git, so it is visible here and outlives the worktree's removal.
+# ($HOME expands here for the local host; the literal form goes over ssh.)
 if [ "$HOST" = "localhost" ] || [ "$HOST" = "127.0.0.1" ]; then
     LOCAL_WORK="$HOME/dev/$REPO_NAME"
     BASE_SHA=$(cd "$LOCAL_WORK" 2>/dev/null && git rev-parse --short origin/main 2>/dev/null || echo "unknown")
@@ -359,10 +462,10 @@ if [ "$HOST" = "localhost" ] || [ "$HOST" = "127.0.0.1" ]; then
     FILES_TOUCHED=$(cd "$LOCAL_WORK" 2>/dev/null && git diff --name-only "origin/main...$BRANCH" 2>/dev/null || echo "")
     DIFF_STAT=$(cd "$LOCAL_WORK" 2>/dev/null && git diff --shortstat "origin/main...$BRANCH" 2>/dev/null || echo "")
 else
-    BASE_SHA=$(ssh "$HOST" "cd $WORK_DIR && git rev-parse --short origin/main" 2>/dev/null || echo "unknown")
-    HEAD_SHA=$(ssh "$HOST" "cd $WORK_DIR && git rev-parse --short $BRANCH" 2>/dev/null || echo "unknown")
-    FILES_TOUCHED=$(ssh "$HOST" "cd $WORK_DIR && git diff --name-only origin/main...$BRANCH" 2>/dev/null || echo "")
-    DIFF_STAT=$(ssh "$HOST" "cd $WORK_DIR && git diff --shortstat origin/main...$BRANCH" 2>/dev/null || echo "")
+    BASE_SHA=$(ssh "$HOST" "cd $FETCH_DIR && git rev-parse --short origin/main" 2>/dev/null || echo "unknown")
+    HEAD_SHA=$(ssh "$HOST" "cd $FETCH_DIR && git rev-parse --short $BRANCH" 2>/dev/null || echo "unknown")
+    FILES_TOUCHED=$(ssh "$HOST" "cd $FETCH_DIR && git diff --name-only origin/main...$BRANCH" 2>/dev/null || echo "")
+    DIFF_STAT=$(ssh "$HOST" "cd $FETCH_DIR && git diff --shortstat origin/main...$BRANCH" 2>/dev/null || echo "")
 fi
 FILES_JSON=$(printf '%s\n' "$FILES_TOUCHED" | awk 'NF { printf "%s\"%s\"", (c++ ? ", " : ""), $0 }')
 LEDGER_STATUS="failed"
@@ -383,17 +486,19 @@ if [ "$REMOTE_EXIT" -eq 75 ] || [ "$REMOTE_EXIT" -eq 69 ]; then
         >> "$HANDOFF_DIR/$TASK_ID.jsonl"
 fi
 
-# Agent intent block (handoff.md at repo root) — merged alongside the skeleton.
+# Agent intent block: handoff.md was written at the seat worktree root and the
+# worker copied it next to the log before removing the worktree.
+HANDOFF_SRC="${REMOTE_LOG_PATH%.log}.handoff.md"
 if [ "$IS_LOCAL" -eq 1 ]; then
-    if [ -f "$HOME/dev/$REPO_NAME/handoff.md" ]; then
-        cp "$HOME/dev/$REPO_NAME/handoff.md" "$HANDOFF_DIR/$TASK_ID.md" 2>/dev/null || true
+    if [ -f "$HANDOFF_SRC" ]; then
+        cp "$HANDOFF_SRC" "$HANDOFF_DIR/$TASK_ID.md" 2>/dev/null || true
         echo "Handoff recorded: $HANDOFF_DIR/$TASK_ID.{jsonl,md}"
     elif [ "$REMOTE_EXIT" -eq 0 ]; then
         echo "WARNING: $AGENT left no handoff.md (soft phase — task still counts as done)" >&2
     fi
 else
-    if ssh "$HOST" "test -f $WORK_DIR/handoff.md" 2>/dev/null; then
-        ssh "$HOST" "cat $WORK_DIR/handoff.md" > "$HANDOFF_DIR/$TASK_ID.md" 2>/dev/null || true
+    if ssh "$HOST" "test -f $HANDOFF_SRC" 2>/dev/null; then
+        ssh "$HOST" "cat $HANDOFF_SRC" > "$HANDOFF_DIR/$TASK_ID.md" 2>/dev/null || true
         echo "Handoff recorded: $HANDOFF_DIR/$TASK_ID.{jsonl,md}"
     elif [ "$REMOTE_EXIT" -eq 0 ]; then
         echo "WARNING: $AGENT left no handoff.md (soft phase — task still counts as done)" >&2
