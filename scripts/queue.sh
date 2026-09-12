@@ -1,0 +1,390 @@
+#!/usr/bin/env bash
+# Fleet Desk: the Ops Floor queue (schema fleet-queue/1).
+#
+#   logs/fleet-queue.json   ordered list of plans the orchestrator has armed
+#
+# The queue is DECLARED INTENT, not observed motion. It says which plans are
+# meant to run next and in which order. The event stream
+# (logs/fleet-events/*.jsonl) stays the only source of what actually ran, and
+# scripts/desk_live.py folds the two into site/experience/data/live.json so the
+# Floor can show "Up next" without ever claiming a queued plan is running.
+#
+# Law: docs/proposals/fleet-desk-v2-SYNTHESIS.md §3 Phase B
+# Schema doc: docs/experience-data.md § Ops Floor queue
+#
+# Subcommands (each prints the resulting order):
+#   add <plan> <repo> [purpose]        append a queued entry (purpose defaults
+#                                      to the first comment line of the plan)
+#   rm <plan>                          drop an entry
+#   mv <plan> <position>               move an entry to a 1-based position
+#   start <plan> [dispatch_id] [repo]  mark running (adds it when missing)
+#   settle <plan> [status]             mark settled (default status: completed)
+#   list                               print the order and exit
+#
+# A plan is matched by repo-relative path first, then by basename, so both
+#   ./scripts/queue.sh settle wave-plans/x/y.plan
+#   ./scripts/queue.sh settle /abs/path/y.plan
+# reach the same entry.
+#
+# Crash safety: every write goes to a temp file in the same directory, is
+# fsynced, then renamed over the queue. A reader never sees a half file and an
+# interrupted write never loses an entry. Concurrent writers serialise on
+# <queue>.lock (5s timeout) so two dispatches cannot clobber each other.
+#
+# Opt-out: FLEET_QUEUE=0 makes every mutating subcommand a silent no-op.
+# Override target: FLEET_QUEUE_FILE=/path (default <repo>/logs/fleet-queue.json)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+QUEUE_FILE="${FLEET_QUEUE_FILE:-$REPO_DIR/logs/fleet-queue.json}"
+
+usage() {
+    cat <<EOF
+Usage: queue.sh <command> [args]   (every command prints the resulting order)
+
+  add <plan> <repo> [purpose]        append a queued entry; the purpose
+                                     defaults to the plan file header
+  rm <plan>                          drop an entry
+  mv <plan> <position>               move an entry to a 1-based position
+  start <plan> [dispatch_id] [repo]  mark running (adds it when missing)
+  settle <plan> [status]             mark settled (default status: completed)
+  list                               print the order and exit
+
+Queue file: $QUEUE_FILE
+EOF
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift || true
+
+case "$cmd" in
+    add|rm|mv|start|settle|list) ;;
+    ""|-h|--help|help) usage; exit 0 ;;
+    *) echo "queue.sh: unknown subcommand '$cmd'" >&2; usage >&2; exit 2 ;;
+esac
+
+# Opt-out only silences writes; list stays readable so the desk can be inspected.
+if [ "${FLEET_QUEUE:-1}" = "0" ] && [ "$cmd" != "list" ]; then
+    exit 0
+fi
+
+command -v python3 >/dev/null 2>&1 || {
+    echo "queue.sh: python3 not found on PATH" >&2
+    exit 69
+}
+
+python3 - "$QUEUE_FILE" "$REPO_DIR" "$cmd" "$@" <<'PY'
+"""fleet-queue/1 store. Stdlib only, no network, atomic writes."""
+import errno
+import fcntl
+import json
+import os
+import re
+import sys
+import time
+from datetime import datetime, timezone
+
+SCHEMA = "fleet-queue/1"
+LOCK_TIMEOUT_S = 5.0
+PURPOSE_MAX = 200
+
+queue_file, repo_dir, cmd = sys.argv[1], sys.argv[2], sys.argv[3]
+args = sys.argv[4:]
+
+
+def die(msg, code=1):
+    sys.stderr.write("queue.sh: %s\n" % msg)
+    sys.exit(code)
+
+
+def now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def norm_plan(value):
+    """Repo-relative plan path. Absolute paths never enter the queue file."""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    candidate = value
+    if os.path.isabs(candidate):
+        try:
+            rel = os.path.relpath(candidate, repo_dir)
+        except ValueError:
+            rel = os.path.basename(candidate)
+        candidate = rel if not rel.startswith("..") else os.path.basename(candidate)
+    return os.path.normpath(candidate).replace(os.sep, "/")
+
+
+def scrub(text):
+    """One clean line: no control chars, no newlines, capped."""
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(text or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:PURPOSE_MAX]
+
+
+def purpose_from_plan(plan_rel, raw=""):
+    """First comment line of the plan file, the header the orchestrator wrote.
+
+    Tried repo-relative first, then as given (so a plan outside the repo, e.g.
+    a generated /tmp plan, still yields its header).
+    """
+    candidates = []
+    if plan_rel:
+        candidates.append(plan_rel if os.path.isabs(plan_rel)
+                          else os.path.join(repo_dir, plan_rel))
+    if raw:
+        candidates.append(raw if os.path.isabs(raw) else os.path.abspath(raw))
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line.startswith("#"):
+                        continue
+                    body = line.lstrip("#").strip()
+                    if body:
+                        return scrub(body)
+        except OSError:
+            continue
+    return ""
+
+
+def blank():
+    return {"schema": SCHEMA, "updated_at": None, "entries": []}
+
+
+def load():
+    if not os.path.exists(queue_file):
+        return blank()
+    try:
+        with open(queue_file, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except ValueError as exc:
+        die("%s is not valid JSON (%s); refusing to overwrite it" % (queue_file, exc), 3)
+    except OSError as exc:
+        die("cannot read %s (%s)" % (queue_file, exc), 3)
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+        die("%s is not a fleet-queue/1 document; refusing to overwrite it" % queue_file, 3)
+    if data.get("schema") != SCHEMA:
+        die("%s carries schema %r, expected %s" % (queue_file, data.get("schema"), SCHEMA), 3)
+    return data
+
+
+def save(data):
+    """Temp file in the same dir, fsync, rename. Never a partial queue."""
+    data["schema"] = SCHEMA
+    data["updated_at"] = now_iso()
+    directory = os.path.dirname(queue_file) or "."
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError as exc:
+        die("cannot create %s (%s)" % (directory, exc), 3)
+    tmp = "%s.tmp.%d" % (queue_file, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, queue_file)
+    except OSError as exc:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        die("cannot write %s (%s)" % (queue_file, exc), 3)
+
+
+def lock():
+    """Exclusive advisory lock so concurrent dispatches never lose an entry."""
+    path = queue_file + ".lock"
+    directory = os.path.dirname(path) or "."
+    try:
+        os.makedirs(directory, exist_ok=True)
+        handle = open(path, "a+")
+    except OSError as exc:
+        die("cannot open lock %s (%s)" % (path, exc), 3)
+    deadline = time.time() + LOCK_TIMEOUT_S
+    while True:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except IOError as exc:
+            if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                die("cannot lock %s (%s)" % (path, exc), 3)
+            if time.time() >= deadline:
+                die("queue busy: %s held for more than %.0fs" % (path, LOCK_TIMEOUT_S), 5)
+            time.sleep(0.05)
+
+
+def find(entries, plan):
+    """Exact repo-relative match first, then basename. Returns index or -1."""
+    target = norm_plan(plan)
+    for i, entry in enumerate(entries):
+        if norm_plan(entry.get("plan")) == target:
+            return i
+    base = os.path.basename(target)
+    if not base:
+        return -1
+    for i, entry in enumerate(entries):
+        if os.path.basename(norm_plan(entry.get("plan"))) == base:
+            return i
+    return -1
+
+
+def new_entry(plan, repo, purpose, status="queued", raw=""):
+    return {
+        "plan": plan,
+        "repo": scrub(repo),
+        "purpose": scrub(purpose) or purpose_from_plan(plan, raw),
+        "added_at": now_iso(),
+        "status": status,
+        "dispatch_id": None,
+        "settled_at": None,
+        "settled_status": None,
+    }
+
+
+def render(data):
+    entries = data.get("entries") or []
+    tally = {"queued": 0, "running": 0, "settled": 0}
+    for entry in entries:
+        status = entry.get("status") or "queued"
+        tally[status] = tally.get(status, 0) + 1
+    out = ["%s  %s  %d entr%s (%d queued, %d running, %d settled)" % (
+        SCHEMA,
+        os.path.relpath(queue_file, repo_dir) if queue_file.startswith(repo_dir) else queue_file,
+        len(entries),
+        "y" if len(entries) == 1 else "ies",
+        tally.get("queued", 0), tally.get("running", 0), tally.get("settled", 0),
+    )]
+    if not entries:
+        out.append("  (empty) add one with: ./scripts/queue.sh add <plan> <repo> <purpose>")
+    for i, entry in enumerate(entries, 1):
+        status = entry.get("status") or "queued"
+        marker = {"queued": "queued ", "running": "running", "settled": "settled"}.get(status, status)
+        extra = ""
+        if status == "running" and entry.get("dispatch_id"):
+            extra = "  dispatch %s" % entry["dispatch_id"]
+        elif status == "settled":
+            extra = "  %s %s" % (entry.get("settled_status") or "unknown",
+                                 entry.get("settled_at") or "")
+        out.append("  %2d  %s  %-18s %s%s" % (
+            i, marker, entry.get("repo") or "repo?",
+            os.path.basename(entry.get("plan") or "plan?"), extra.rstrip()))
+        purpose = entry.get("purpose") or ""
+        if purpose:
+            out.append("      %s" % purpose)
+    return "\n".join(out)
+
+
+# ── subcommands ────────────────────────────────────────────────────────────
+
+if cmd == "list":
+    print(render(load()))
+    sys.exit(0)
+
+handle = lock()
+data = load()
+entries = data["entries"]
+rc = 0
+
+if cmd == "add":
+    if len(args) < 2:
+        die("usage: queue.sh add <plan> <repo> [purpose]", 2)
+    plan = norm_plan(args[0])
+    repo = args[1]
+    purpose = " ".join(args[2:]) if len(args) > 2 else ""
+    idx = find(entries, plan)
+    if idx >= 0:
+        entry = entries[idx]
+        entry["plan"] = plan
+        entry["repo"] = scrub(repo)
+        if purpose:
+            entry["purpose"] = scrub(purpose)
+        elif not entry.get("purpose"):
+            entry["purpose"] = purpose_from_plan(plan, args[0])
+        if entry.get("status") == "settled":
+            # Re-arming a settled plan is a fresh declaration, not history.
+            entry["status"] = "queued"
+            entry["added_at"] = now_iso()
+            entry["dispatch_id"] = None
+            entry["settled_at"] = None
+            entry["settled_status"] = None
+    else:
+        entries.append(new_entry(plan, repo, purpose, raw=args[0]))
+    save(data)
+
+elif cmd == "rm":
+    if len(args) < 1:
+        die("usage: queue.sh rm <plan>", 2)
+    idx = find(entries, args[0])
+    if idx < 0:
+        sys.stderr.write("queue.sh: %s is not in the queue\n" % args[0])
+        rc = 4
+    else:
+        entries.pop(idx)
+        save(data)
+
+elif cmd == "mv":
+    if len(args) < 2:
+        die("usage: queue.sh mv <plan> <position>", 2)
+    try:
+        position = int(args[1])
+    except ValueError:
+        die("position must be a 1-based integer, got %r" % args[1], 2)
+    idx = find(entries, args[0])
+    if idx < 0:
+        sys.stderr.write("queue.sh: %s is not in the queue\n" % args[0])
+        rc = 4
+    else:
+        entry = entries.pop(idx)
+        position = max(1, min(position, len(entries) + 1))
+        entries.insert(position - 1, entry)
+        save(data)
+
+elif cmd == "start":
+    if len(args) < 1:
+        die("usage: queue.sh start <plan> [dispatch_id] [repo]", 2)
+    plan = norm_plan(args[0])
+    dispatch_id = scrub(args[1]) if len(args) > 1 else ""
+    repo = args[2] if len(args) > 2 else ""
+    idx = find(entries, plan)
+    if idx < 0:
+        # Dispatched without being armed: record it as running so the day view
+        # is complete. The purpose comes from the plan header, never the task.
+        entry = new_entry(plan, repo, "", status="running", raw=args[0])
+        entries.append(entry)
+    else:
+        entry = entries[idx]
+        if repo and not entry.get("repo"):
+            entry["repo"] = scrub(repo)
+        if not entry.get("purpose"):
+            entry["purpose"] = purpose_from_plan(plan, args[0])
+    entry["status"] = "running"
+    entry["dispatch_id"] = dispatch_id or entry.get("dispatch_id")
+    entry["settled_at"] = None
+    entry["settled_status"] = None
+    save(data)
+
+elif cmd == "settle":
+    if len(args) < 1:
+        die("usage: queue.sh settle <plan> [status]", 2)
+    status = scrub(args[1]) if len(args) > 1 else "completed"
+    idx = find(entries, args[0])
+    if idx < 0:
+        sys.stderr.write("queue.sh: %s is not in the queue\n" % args[0])
+        rc = 4
+    else:
+        entry = entries[idx]
+        entry["status"] = "settled"
+        entry["settled_at"] = now_iso()
+        entry["settled_status"] = status
+        save(data)
+
+print(render(data))
+sys.exit(rc)
+PY
