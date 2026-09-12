@@ -305,6 +305,10 @@ Rules:
   the slug matches.
 - Turn it off with `--no-gh` or `FLEET_DESK_NO_GH=1` (status `disabled`).
 
+The live projector (`scripts/desk_live.py`) runs a second, smaller enrichment
+under the same rules for the Ops Floor: one issue milestone per plan and one PR
+per branch. See [Repo, issue, task line and PR](#repo-issue-task-line-and-pr-issue-72).
+
 ## Snapshot (optional, shareable)
 
 ```bash
@@ -583,6 +587,7 @@ scripts/dispatch.sh ─┘         │                start / settle, best effor
       "plan": "wave-plans/assistant-channel/2026-09-12-w2b-read-tools.plan",
       "repo": "olympus-platform",
       "purpose": "Assistant Channel W2-B: the six read tools and the cost quota. Issue 2800.",
+      "issue": 2800,
       "added_at": "2026-09-12T15:40:00Z",
       "status": "queued",
       "dispatch_id": null,
@@ -598,6 +603,7 @@ scripts/dispatch.sh ─┘         │                start / settle, best effor
 | `plan` | Plan path **relative to the repo**; an absolute path inside the repo is rewritten, one outside keeps its basename |
 | `repo` | Target repo slug the plan dispatches into (`olympus-platform`), not the plan's own repo |
 | `purpose` | One line the orchestrator writes. Defaults to the **first comment line of the plan file**; never a task body |
+| `issue` | int or `null`. Written at `add` and `start`: the number the plan header names (pattern `Issue NNNN`, the same parse the Floor uses), `null` when no header line names one. Stored so a plan that is gone from disk still names its requirement; a reader falls back to parsing `purpose` only for entries written before this field existed |
 | `added_at` | UTC ISO-8601, when the entry was declared. The newest one stamps the Floor block |
 | `status` | `queued` · `running` · `settled` |
 | `dispatch_id` | Set when a dispatch claims the plan; matches the event-stream id |
@@ -652,7 +658,7 @@ missing.
 | `queue[]` | array | Entries with status `queued`, **in declared order**: `position`, `plan`, `plan_basename`, `repo`, `purpose`, `added_at`, `status` (always `queued`) |
 | `queue_meta` | object | `{source, declared, declared_at, total, queued, running, settled}`. `declared_at` is the `added_at` of the **newest** entry and stamps the Floor block |
 | `today[]` | array | One entry per dispatch whose **`dispatch_end` falls on the local calendar day**: `dispatch_id`, `source`, `plan`, `plan_basename`, `repo`, `purpose` (+ `purpose_source`: `queue` or `none`), `status` (`settled` · `aborted`, kept for compatibility), `outcome` (`landed` · `failed` · `aborted`, see below), `end_status`, `duration_s`, `started_at`, `ended_at`, `seats`, `succeeded`, `failed`, `branches[]` |
-| `today_meta` | object | `{date, streams_read, live[], ended}`: the local day, how many streams were read, which dispatch ids are still live |
+| `today_meta` | object | `{date, streams_read, live[], ended}`: the local day, how many streams were read, which dispatch ids are still live (no `dispatch_end` yet, started on this local date or the one before) |
 | `multi_dispatch` | object | Present only when a second dispatch is live on the day: `{live[], followed, merged_seats}` |
 | `seats[].dispatch_id` | string | Which run a seat belongs to |
 | `seats[].foreign` | bool | `true` when the seat comes from a live dispatch other than the followed one |
@@ -780,6 +786,95 @@ Rules the projector enforces:
   for the same reason replay carries no `queue[]` or `today[]`: a historical
   scrub must not borrow the present.
 
+### Repo, issue, task line and PR (issue 72)
+
+With two repos live at once the Floor has to say which repo a seat belongs to
+and which requirement it serves. The projector follows **every dispatch still
+in motion**: no `dispatch_end` yet and started on this local date or the one
+before, so a run that crossed local midnight is still followed and counted (the
+followed run plus every `foreign` one), and `repo` is a
+first-class field on every seat, queue entry and landing. Three more facts ride
+along: the issue the plan header names, the seat's one-line task, and the PR
+for its branch. Only the milestone title and the PR number plus title come from
+`gh`; everything else is read from the stream, the queue and the plan file.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `seats[].repo` | string | Repo of the dispatch the seat belongs to (`dispatch_start.repo`), on followed and `foreign` seats alike. Present on replay seats too |
+| `seats[].issue` | object | The issue this seat's plan serves (shape below). Always present, on replay seats too |
+| `seats[].task_line` | string\|null | **First sentence** of that seat's line in the plan file: cut at the first sentence end whatever its length, else at 120 chars. Passed through the same secret scrub as `now.program` plus the path law of `activity.path`: a slash token that is not a path inside this worktree (absolute, home, variable, parent escape, `file:` URL) reads `outside-repo`, and a path inside it is printed repo-relative. Never more of the task body. `null` when the plan is not on this machine. Present on replay seats too. (`seats[].task` keeps the same value for older readers) |
+| `seats[].pr` | object | The open, else merged, PR for the seat's branch (shape below). Always present, on replay seats too |
+| `queue[].repo` | string | Already first-class since #68; the first word of an UP NEXT row |
+| `queue[].issue` | object | Same shape as `seats[].issue`. When the plan file is gone, the number comes from the `issue` field `scripts/queue.sh` stored at `add`/`start`, else from the stored header line (`purpose`) |
+| `today[].repo` | string | Already first-class since #68; the first word of a LANDED TODAY row |
+| `today[].pr` | object | The PR for the landing's branch: the first branch with a PR found, else the first branch's lookup, else a skipped record with reason `no branch` |
+| `today[].prs[]` | array | One `pr` object per entry of `branches[]`, in the same order |
+| `repos[]` | array | One counts object per repo seen today, sorted by `seats_live` then `dispatches_live` descending: `{repo, seats_live, dispatches_live, queued, landed_today, dispatch_ids[]}`. A repo the stream did not name is bucketed as `unknown`. **`[]` on a replay** (the past has no present), like `summary` |
+| `gh_enrichment` | object | What the enrichment did for this projection: `{status, reason, owner, calls, cached, skipped}`. `status` is `ok` · `skipped` (nothing needed a lookup) · `disabled` · `unavailable` · `unauthenticated` · `error` |
+
+`issue` object:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `number` | int\|null | Parsed from the plan header line that names it, pattern `Issue NNNN` (`Issue #NNNN` and any case accepted). `null` when no header line names one |
+| `source` | string | `plan` (header on disk) · `queue` (the `issue` field or the header line `queue.sh` stored) · `none` |
+| `milestone` | string\|null | Milestone title from `gh issue view`, capped at 120 chars and scrubbed. Only present when `lookup` is `verified` |
+| `lookup` | string | `verified` when gh answered for this repo and issue, else `skipped` |
+| `reason` | string\|null | Why it was skipped (`no plan header names an issue`, `disabled (...)`, `gh not on PATH`, `... timed out after 8.0s`, `... failed (exit 1)`, budget spent) |
+
+`pr` object:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `branch` | string\|null | The branch asked about |
+| `number` / `title` / `state` / `url` | mixed | From `gh pr list --head <branch>`: the **open** PR when one exists, else the **merged** one; closed-unmerged PRs are ignored. Title capped at 120 chars and scrubbed. All `null` when none |
+| `lookup` | string | `verified` when gh answered (a verified absence is `verified` with `number: null` and reason `no open or merged PR for this branch`), else `skipped` |
+| `reason` | string\|null | Why nothing is there |
+
+Rules the projector enforces:
+
+* the enrichment **never fails and never blocks the projection**: a missing
+  `gh`, missing auth, a per-call timeout (`FLEET_GH_TIMEOUT_S`, default 8 s), a
+  non-zero exit or a bad payload degrade to `lookup: skipped` with a reason, and
+  `live.json` is written either way;
+* one question per run: answers (and failures) are cached per projection and
+  for 300 s across projections, so the watcher does not ask the same question
+  every two seconds, and a projection spends at most 24 gh calls (the rest are
+  skipped with a budget reason). An idle desk with nothing to look up makes no
+  call at all;
+* a repo name in the stream is a directory name, so the slug asked of gh is
+  `<owner>/<repo>` with the owner from `FLEET_GH_OWNER`, else the owner of this
+  repo's `origin` remote. A lookup is only `verified` when gh answered for that
+  slug, so a wrong owner reads as skipped, never as a guess;
+* the redaction law holds: `task_line` is the first sentence only, cut at 120
+  and scrubbed, and it never carries a path outside the repo (such a token
+  reads `outside-repo`); the enrichment adds
+  only the issue number, the milestone title and the PR number plus title
+  (never an issue or PR body, never a comment);
+* honesty rules unchanged: a queued entry is still only `queued`, stale and
+  offline still degrade every element, and a replay carries no `repos[]` and
+  no `summary`, though its seats keep `repo`, `issue`, `task_line` and `pr`
+  (the plan on disk explains a historical seat too; gh stays optional);
+* turn the enrichment off with `--no-gh` or `FLEET_DESK_NO_GH=1`
+  (`gh_enrichment.status: disabled`).
+
+`scripts/queue.sh` stores `issue` on every entry at `add` and `start`: the
+number the plan header names, else the number the declared purpose names, else
+`null`. `queue.sh list` prints it as `#NNNN` beside the plan.
+
+The Floor page (`templates/experience/floor.js`, mirrored by the build-time
+snapshot in `scripts/experience_build.py`) reads these fields so: the summary
+line is the first thing on the page and the legacy chrome (replay scrubber,
+schema intro, trail block, the four pipeline tiles, the stale mission
+breadcrumb) folds behind one `<details>` control, closed by default; NOW is
+grouped by repo with a header per repo carrying its own seats-live and
+dispatches-live counts (a replay drops the word "live", since the seats shown
+are history); each seat card reads repo, issue and milestone (with a
+"milestone unverified" mark when the lookup was skipped), purpose, the seat
+task line, the status clause, the branch dim, and the PR number and title
+when one exists; UP NEXT and LANDED TODAY rows lead with the repo and carry
+the issue or PR number when present.
+
 ### Phase C — replay API
 
 | Route / flag | Meaning |
@@ -800,6 +895,7 @@ make desk-live-once                # write live.json once, no server (file:// de
 python3 scripts/desk_live.py --watch          # rewrite live.json on a timer, no server
 python3 scripts/desk_live.py --once --dispatch-id 20260729-100000-dev-agents --print
 python3 scripts/desk_live.py --once --dispatch-id ID --as-of-seq 4 --replay
+python3 scripts/desk_live.py --once --no-gh    # no gh enrichment (also FLEET_DESK_NO_GH=1)
 python3 scripts/desk_live.py --list-runs
 ```
 

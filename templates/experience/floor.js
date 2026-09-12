@@ -364,6 +364,39 @@
     return purpose ? '<div class="nowpurpose">' + esc(purpose) + ".</div>" : "";
   }
 
+  /* Issue and milestone the plan serves (issue 72): the number always comes
+     from the plan header line; the milestone title only from a verified gh
+     lookup. A skipped lookup says so in place instead of implying there is
+     no milestone. */
+  function issueLine(issue) {
+    if (!issue || typeof issue.number !== "number") return "";
+    var txt = "#" + issue.number;
+    if (issue.milestone) txt += " · " + esc(issue.milestone);
+    if (issue.lookup === "skipped") txt += ' <span class="faint">(milestone unverified)</span>';
+    return '<div class="nowissue">' + txt + "</div>";
+  }
+
+  /* The open (else merged) PR for the seat branch: number and title only,
+     and only when gh answered with one. Nothing renders otherwise. */
+  function prLine(pr) {
+    if (!pr || typeof pr.number !== "number") return "";
+    var txt = "PR #" + pr.number;
+    if (pr.title) txt += " · " + esc(pr.title);
+    return '<div class="nowpr">' + txt + "</div>";
+  }
+
+  /* Repo group header counts (issue 72): "seats live, dispatches live" per
+     repo. Off a live stream the word "live" is a claim the projection cannot
+     back, so it is qualified; a replay drops the word entirely (the seats
+     shown are history at the scrubber position). */
+  function repoHeadCounts(nSeats, nDisp, st) {
+    var seatWord = nSeats === 1 ? "seat" : "seats";
+    var dispWord = nDisp === 1 ? "dispatch" : "dispatches";
+    if (st && st.state === "replay") return nSeats + " " + seatWord + " · " + nDisp + " " + dispWord;
+    var qual = (st && (st.state === "stale" || st.state === "offline")) ? " at last event" : "";
+    return nSeats + " " + seatWord + " live" + qual + " · " + nDisp + " " + dispWord + " live" + qual;
+  }
+
   /* Status clause: role, phase with its program, wave, elapsed, heartbeat.
      Off a live stream the clause degrades with the page: the phase goes past
      tense, and both clocks stop at the last event. The numbers then come from
@@ -411,16 +444,25 @@
     var quiet = seat.quiet === true;
     var quietBadge = quiet
       ? '<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>' : "";
+    /* Seat card order (issue 72): repo; issue and milestone (unverified mark
+       when the lookup was skipped); purpose; seat task line; status clause;
+       branch dim; PR number and title when one exists. */
     if (seat.now && typeof seat.now === "object") {
       return '<li class="nowrow' + (quiet ? " quiet" : "") + '">' +
-        '<div class="nowhead">' + seatPill(seat) + quietBadge + "</div>" +
+        '<div class="nowhead"><span class="rname">' + esc(seat.repo || "repo not reported") + "</span>" +
+        seatPill(seat) + quietBadge + "</div>" +
+        issueLine(seat.issue) +
         nowPurpose(seat.now) +
+        (seat.task_line ? '<div class="nowtask">' + esc(seat.task_line) + "</div>" : "") +
         '<div class="nowsent">' + nowStatus(seat.now, st, seat, lastEventTs) + "</div>" +
         '<div class="nowmeta"><span class="mono faint">' + esc(seat.branch || "branch not reported") + "</span>" +
-        '<span class="faint">attempt ' + esc(seat.attempt || 1) + "</span></div></li>";
+        '<span class="faint">attempt ' + esc(seat.attempt || 1) + "</span></div>" +
+        prLine(seat.pr) + "</li>";
     }
     /* Older projection or replay: seats[].now is null, so fall back to the
-       plan-header layout rather than inventing a present-tense sentence. */
+       plan-header layout rather than inventing a present-tense sentence. The
+       repo, issue, task line and PR still ride the card when the projection
+       carries them. */
     var timer = '<span class="timer mono" data-elapsed-from="' + esc(seat.started_at || "") + '">' +
       fmtDur(seat.elapsed_s) + "</span>";
     var wave = (typeof seat.wave === "number")
@@ -431,15 +473,18 @@
         (typeof seat.heartbeat_age_s === "number" ? " (" + fmtDur(seat.heartbeat_age_s) + " ago)" : "")
       : "no heartbeat yet";
     return '<li class="nowrow' + (quiet ? " quiet" : "") + '">' +
-      '<div class="nowhead"><span class="role">' + esc(seat.agent || seat.task_id) + "</span>" +
+      '<div class="nowhead"><span class="rname">' + esc(seat.repo || "repo not reported") + "</span>" +
+      '<span class="role">' + esc(seat.agent || seat.task_id) + "</span>" +
       seatPill(seat) + quietBadge + timer + "</div>" +
+      issueLine(seat.issue) +
       '<div class="nowpurpose">' + esc(seat.plan_purpose || "purpose not declared in the plan header") + "</div>" +
-      '<div class="nowtask">' + esc(seat.task || "task line not resolvable from the plan on this machine") + "</div>" +
+      '<div class="nowtask">' + esc(seat.task_line || seat.task || "task line not resolvable from the plan on this machine") + "</div>" +
       activityLine(seat) +
       '<div class="nowmeta"><span class="vendor">' + esc(wave) + "</span>" +
       '<span class="vendor">attempt ' + esc(seat.attempt || 1) + "</span>" +
       '<span class="mono faint">' + esc(seat.branch || "branch not reported") + "</span>" +
-      '<span class="faint">' + esc(beat) + "</span></div></li>";
+      '<span class="faint">' + esc(beat) + "</span></div>" +
+      prLine(seat.pr) + "</li>";
   }
 
   function renderNow(d, st) {
@@ -452,17 +497,58 @@
       live.forEach(function (s) { if (s.dispatch_id) runs[s.dispatch_id] = 1; });
       var n = Object.keys(runs).length;
       /* "Live" is a liveness claim like any other on this page: off a live
-         stream it is qualified with "at last event", same as Landed today. */
+         stream it is qualified with "at last event", same as Landed today,
+         and a replay drops the word entirely, same branch the repo group
+         header below already follows (the seats shown are history at the
+         scrubber position). */
+      var replay = st && st.state === "replay";
       var degraded = st && (st.state === "stale" || st.state === "offline");
+      var liveClaim = replay ? "" : " live" + (degraded ? " at last event" : "");
       note.textContent = live.length
-        ? live.length + (live.length === 1 ? " seat live" : " seats live") +
-          (degraded ? " at last event" : "") +
+        ? live.length + (live.length === 1 ? " seat" : " seats") + liveClaim +
           " across " + (n || 1) + ((n || 1) === 1 ? " dispatch" : " dispatches")
         : "no seat is live";
     }
-    box.innerHTML = live.length
-      ? live.map(function (s) { return nowRow(s, st, d.last_event_ts); }).join("")
-      : '<li class="muted">No seat is live. The Floor shows motion only while a dispatch is running.</li>';
+    if (!live.length) {
+      box.innerHTML = '<li class="muted">No seat is live. The Floor shows motion only while a dispatch is running.</li>';
+      tickElapsed();
+      return;
+    }
+    /* Group by repo (issue 72): with two repos live at once a seat must sit
+       under its repo's header, which carries the per-repo counts from
+       repos[]. A replay carries no repos[], so the counts then come from the
+       seats shown at the scrubber position. */
+    var reposMeta = {};
+    (d.repos || []).forEach(function (r) {
+      if (r && r.repo) reposMeta[r.repo] = r;
+    });
+    var groups = {};
+    live.forEach(function (s) {
+      var repo = s.repo || "unknown";
+      (groups[repo] = groups[repo] || []).push(s);
+    });
+    var order = Object.keys(groups).sort(function (a, b) {
+      var ma = reposMeta[a], mb = reposMeta[b];
+      var ca = ma && typeof ma.seats_live === "number" ? ma.seats_live : groups[a].length;
+      var cb = mb && typeof mb.seats_live === "number" ? mb.seats_live : groups[b].length;
+      return cb - ca || (a < b ? -1 : a > b ? 1 : 0);
+    });
+    var html = "";
+    order.forEach(function (repo) {
+      var gseats = groups[repo];
+      var meta = reposMeta[repo] || {};
+      var nSeats = typeof meta.seats_live === "number" ? meta.seats_live : gseats.length;
+      var nDisp = typeof meta.dispatches_live === "number" ? meta.dispatches_live
+        : (function () {
+            var ids = {};
+            gseats.forEach(function (s) { if (s.dispatch_id) ids[s.dispatch_id] = 1; });
+            return Object.keys(ids).length || 1;
+          })();
+      html += '<li class="repohead"><span class="rname">' + esc(repo) + "</span>" +
+        '<span class="faint">' + esc(repoHeadCounts(nSeats, nDisp, st)) + "</span></li>";
+      html += gseats.map(function (s) { return nowRow(s, st, d.last_event_ts); }).join("");
+    });
+    box.innerHTML = html;
     tickElapsed();
   }
 
@@ -503,12 +589,16 @@
       return;
     }
     box.innerHTML = items.map(function (q) {
+      /* Repo is the first word; the issue number follows when the plan
+         header names one (issue 72). */
+      var issue = q.issue && typeof q.issue.number === "number"
+        ? ' <span class="mono">#' + q.issue.number + "</span>" : "";
       return '<li class="qrow">' +
         '<span class="qpos mono">' + esc(q.position) + "</span>" +
-        '<span class="qbody"><span class="qpurpose">' +
+        '<span class="qbody"><span class="qpurpose"><span class="rname">' +
+        esc(q.repo || "repo not declared") + "</span>" + issue + " " +
         esc(q.purpose || "no purpose declared") + "</span>" +
-        '<span class="qmeta"><span class="vendor">' + esc(q.repo || "repo not declared") + "</span> " +
-        '<span class="mono faint">' + esc(q.plan_basename || q.plan || "") + "</span></span></span>" +
+        '<span class="qmeta"><span class="mono faint">' + esc(q.plan_basename || q.plan || "") + "</span></span></span>" +
         '<span class="st st-unk">queued</span></li>';
     }).join("");
   }
@@ -556,10 +646,15 @@
       var branches = (t.branches || []).map(function (b) {
         return '<span class="mono faint">' + esc(b) + "</span>";
       }).join(" ");
+      /* Repo is the first word; the PR number follows when one exists for
+         the landing's branch (issue 72). */
+      var pr = t.pr && typeof t.pr.number === "number"
+        ? ' <span class="mono">PR #' + t.pr.number + "</span>" : "";
       return '<li class="trow">' +
-        '<span class="tbody"><span class="tpurpose">' +
+        '<span class="tbody"><span class="tpurpose"><span class="rname">' +
+        esc(t.repo || "repo not reported") + "</span>" + pr + " " +
         esc(t.purpose || t.plan_basename || t.dispatch_id) + "</span>" +
-        '<span class="tmeta"><span class="vendor">' + esc(t.repo || "repo not reported") + "</span> " +
+        '<span class="tmeta">' +
         (branches || '<span class="faint">no branch reported</span>') + "</span></span>" +
         '<span class="' + cls + ' tout">' + esc(word) + "</span>" +
         '<span class="timer mono">' + fmtMin(t.duration_s) + "</span></li>";
