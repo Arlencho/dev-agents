@@ -279,7 +279,10 @@ ship_runtime_once
 # Live seat activity: the launcher pipes the agent stream through
 # scripts/seat-progress.py, which emits redaction-safe seat_progress events into
 # the dispatcher's event stream (tool name, one repo-relative path, four counts,
-# one phase word; never a prompt, an argument or a command line).
+# one phase word; never a prompt, an argument or a command line). The reader
+# makes paths relative to SEAT_REPO_DIR, which is the seat worktree: a path
+# inside it stays repo-relative, and anything else, the fetch point included,
+# is written as the literal outside-repo (docs/experience-data.md, redaction law).
 #
 # Local worker only: the event stream file lives on the dispatcher, so a true
 # remote host would append to a path that is not the Floor's. Without this env
@@ -294,7 +297,7 @@ export FLEET_EVENTS_FILE=$(printf '%q' "$FLEET_EVENTS_FILE")
 export FLEET_DISPATCH_ID=$(printf '%q' "${FLEET_DISPATCH_ID:-}")
 export SEAT_TASK_ID=$(printf '%q' "${AGENT_TASK_ID:-0}")
 export SEAT_AGENT=$(printf '%q' "$AGENT")
-export SEAT_REPO_DIR=\"$FETCH_DIR\""
+export SEAT_REPO_DIR=\"$SEAT_DIR\""
     echo "Live seat activity: seat_progress events → $(basename "$FLEET_EVENTS_FILE")"
 fi
 
