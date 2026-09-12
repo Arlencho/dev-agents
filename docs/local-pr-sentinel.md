@@ -175,6 +175,20 @@ When developing changes to the sentinel logic, always test with `--dry-run` firs
 
 ---
 
+## Worktree Sweep (same launchd pattern)
+
+A dispatch cuts a worktree and a branch and nothing removed them once the PR merged: one
+machine reached 74 worktrees and 243 local branches. Two hooks close that loop.
+
+1. `scripts/land.sh` runs `make worktree-sweep-apply` in the olympus-platform checkout after
+   the final PR of a run merges. A sweep failure never changes the landing's exit code.
+2. Daily launchd backstop `com.arlen.worktree-sweep` for runs that never reach `land.sh`:
+   `make worktree-sweep-install` / `-uninstall`, log `~/Library/Logs/worktree-sweep.log`.
+
+Manual: `make worktree-sweep` (dry run) or `make worktree-sweep-apply` in olympus-platform.
+
+---
+
 ## Philosophy
 
 The Local PR Sentinel embodies the hybrid model used on Olympus:
