@@ -528,6 +528,28 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 }
 .wavehead2:first-of-type { margin-top: 0; }
 
+/* ── Ops Floor: Up next (declared queue) + Landed today ─────────────── */
+.qlist, .tlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.qlist > li, .tlist > li {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--bg3); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 9px 12px; font-size: 12.5px;
+}
+/* Declared intent is dashed, the same language the page uses for "not yet
+   observed" (ghost lanes, todo spine nodes): a queued plan is not motion. */
+.qlist > li.qrow { border-style: dashed; }
+.qlist > li.muted, .tlist > li.muted {
+  border-style: dashed; color: var(--muted); font-size: 12px;
+}
+.qpos {
+  flex: 0 0 auto; min-width: 20px; text-align: right;
+  color: var(--faint); font-size: 11px;
+}
+.qbody, .tbody { flex: 1 1 220px; min-width: 0; display: grid; gap: 3px; }
+.qpurpose, .tpurpose { line-height: 1.35; }
+.qmeta, .tmeta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+.tlist .timer { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
 .waiting .witem { margin: 0 0 4px; font-size: 12.5px; }
 .waiting .witem:last-child { margin-bottom: 0; }
 .waiting .witem.quiet { color: var(--warn); }

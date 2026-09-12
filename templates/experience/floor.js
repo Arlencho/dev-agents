@@ -206,11 +206,89 @@
 
   function renderCounts(d) {
     var c = d.counts || {};
-    var ids = { queued: "pipe-queued", in_flight: "pipe-inflight", blocked: "pipe-blocked", settled: "pipe-settled" };
+    var ids = { in_flight: "pipe-inflight", blocked: "pipe-blocked", settled: "pipe-settled" };
     Object.keys(ids).forEach(function (k) {
       var el = $(ids[k]);
-      if (el) el.textContent = (typeof c[k] === "number" ? c[k] : "—");
+      if (el) el.textContent = (typeof c[k] === "number" ? c[k] : "\u2014");
     });
+    /* Queued counts PLANS, not seats: the only real queue is the declared one.
+       With no queue file we fall back to the seat count and say so. */
+    var meta = d.queue_meta || {};
+    var queued = (d.queue || []).length;
+    var cell = $("pipe-queued");
+    if (cell) {
+      cell.textContent = meta.declared
+        ? queued
+        : (typeof c.queued === "number" ? c.queued : "\u2014");
+    }
+    var desc = $("pipe-queued-desc");
+    if (desc) {
+      desc.innerHTML = meta.declared
+        ? "plans armed in <span class=\"mono\">" + esc(meta.source || "logs/fleet-queue.json") + "</span>"
+        : "no queue declared, showing plan seats not started";
+    }
+  }
+
+  /* Up next: declared intent. Never rendered as motion, never as "running". */
+  function renderQueue(d) {
+    var box = $("floor-queue-list");
+    if (!box) return;
+    var items = d.queue || [];
+    var meta = d.queue_meta || {};
+    var note = $("floor-queue-note");
+    if (note) {
+      note.innerHTML = meta.declared
+        ? "Declared by the orchestrator in <span class=\"mono\">" +
+          esc(meta.source || "logs/fleet-queue.json") + "</span>, newest entry added " +
+          esc(meta.declared_at || "at an unknown time") +
+          ". Order is intent: a queued plan is not running."
+        : "No queue declared. Arm one with <code>./scripts/queue.sh add &lt;plan&gt; &lt;repo&gt; &lt;purpose&gt;</code>.";
+    }
+    if (!items.length) {
+      box.innerHTML = '<li class="muted">Nothing armed. The next dispatch is whatever the operator types.</li>';
+      return;
+    }
+    box.innerHTML = items.map(function (q) {
+      return '<li class="qrow">' +
+        '<span class="qpos mono">' + esc(q.position) + "</span>" +
+        '<span class="qbody"><span class="qpurpose">' +
+        esc(q.purpose || "no purpose declared") + "</span>" +
+        '<span class="qmeta"><span class="vendor">' + esc(q.repo || "repo not declared") + "</span> " +
+        '<span class="mono faint">' + esc(q.plan_basename || q.plan || "") + "</span></span></span>" +
+        '<span class="st st-unk">queued</span></li>';
+    }).join("");
+  }
+
+  /* Landed today: every dispatch whose dispatch_end fell on this local day. */
+  function renderToday(d) {
+    var box = $("floor-today-list");
+    if (!box) return;
+    var items = d.today || [];
+    var meta = d.today_meta || {};
+    var note = $("floor-today-note");
+    if (note) {
+      note.textContent = "dispatch_end on " + (meta.date || "today") +
+        " · " + (meta.streams_read || 0) + " stream(s) read" +
+        ((meta.live || []).length ? " · " + meta.live.length + " still live" : "");
+    }
+    if (!items.length) {
+      box.innerHTML = '<li class="muted">Nothing has landed today yet.</li>';
+      return;
+    }
+    box.innerHTML = items.map(function (t) {
+      var cls = t.status === "settled" ? "st st-done"
+        : (t.status === "aborted" || t.status === "failed") ? "st st-fail" : "st st-unk";
+      var branches = (t.branches || []).map(function (b) {
+        return '<span class="mono faint">' + esc(b) + "</span>";
+      }).join(" ");
+      return '<li class="trow">' +
+        '<span class="tbody"><span class="tpurpose">' +
+        esc(t.purpose || t.plan_basename || t.dispatch_id) + "</span>" +
+        '<span class="tmeta"><span class="vendor">' + esc(t.repo || "repo not reported") + "</span> " +
+        (branches || '<span class="faint">no branch reported</span>') + "</span></span>" +
+        '<span class="' + cls + '">' + esc(t.status || "unknown") + "</span>" +
+        '<span class="timer mono">' + fmtDur(t.duration_s) + "</span></li>";
+    }).join("");
   }
 
   function renderLanes(d) {
@@ -454,6 +532,8 @@
     renderAmbient(d, st);
     renderWaiting(d);
     renderCounts(d);
+    renderQueue(d);
+    renderToday(d);
     if (d.mode === "conductor") renderSpine(d); else renderLanes(d);
     renderEvents(d);
     renderCrossLinks(d);

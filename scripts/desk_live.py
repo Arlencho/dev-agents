@@ -82,6 +82,18 @@ def rel(path):
         return os.path.basename(path)
 
 
+def rel_safe(path):
+    """Repo-relative when the path is inside the repo, else the basename only.
+
+    Operator paths never enter the projection: a queue file outside the repo is
+    named, not located.
+    """
+    if not path:
+        return None
+    relative = rel(path)
+    return os.path.basename(path) if relative.startswith("..") else relative
+
+
 def parse_ts(value):
     """Parse an event timestamp; return None when unparseable (never raise)."""
     if not isinstance(value, str):
@@ -260,12 +272,12 @@ def read_queue(path):
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, ValueError):
-        return [], ["queue file %s is unreadable or malformed" % rel(path)]
+        return [], ["queue file %s is unreadable or malformed" % rel_safe(path)]
     if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
-        return [], ["queue file %s is not a %s document" % (rel(path), QUEUE_SCHEMA)]
+        return [], ["queue file %s is not a %s document" % (rel_safe(path), QUEUE_SCHEMA)]
     if data.get("schema") != QUEUE_SCHEMA:
         return [], ["queue file %s carries schema %r, expected %s"
-                    % (rel(path), data.get("schema"), QUEUE_SCHEMA)]
+                    % (rel_safe(path), data.get("schema"), QUEUE_SCHEMA)]
     return [e for e in data["entries"] if isinstance(e, dict)], []
 
 
@@ -301,7 +313,7 @@ def queue_meta(entries, path):
         if isinstance(added, str) and (newest is None or added > newest):
             newest = added
     return {
-        "source": rel(path) if path else None,
+        "source": rel_safe(path),
         "declared": bool(entries),
         "declared_at": newest,
         "total": len(entries),
