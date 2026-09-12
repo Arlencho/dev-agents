@@ -34,6 +34,13 @@
     last: null,
   };
 
+  /* Does the elapsed ticker run? Only while the stream itself is live. It
+     starts false so the build snapshot never counts up before a fetch has
+     confirmed anything, and it goes false again on stale, offline, replay or
+     a failed fetch: the seat then keeps the last value the projection
+     reported, the way the lanes already do. */
+  var elapsedLive = false;
+
   function $(id) { return document.getElementById(id); }
 
   function esc(s) {
@@ -301,8 +308,11 @@
   }
 
   /* One ticker for the page: elapsed counts up every second from the timestamp
-     the stream recorded, so a live seat never looks frozen between polls. */
+     the stream recorded, so a live seat never looks frozen between polls.
+     Off a live stream it does not run at all: a clock still climbing while the
+     LED says offline is a liveness claim the projection cannot back. */
   function tickElapsed() {
+    if (!elapsedLive) return;
     var nodes = document.querySelectorAll("[data-elapsed-from]");
     for (var i = 0; i < nodes.length; i++) {
       var from = new Date(nodes[i].getAttribute("data-elapsed-from") || "").getTime();
@@ -621,6 +631,7 @@
     var st = liveState(d);
     // Hard honesty: never green LIVE when view says replay.
     if (d.view === "replay" && st.state === "live") st = { state: "replay", age: st.age };
+    elapsedLive = st.state === "live";
     renderWatermark(st, d);
     renderAmbient(d, st);
     renderWaiting(d);
@@ -649,7 +660,7 @@
           renderAll(d);
         }
       })
-      .catch(function () { /* keep snapshot */ });
+      .catch(function () { elapsedLive = false; /* keep snapshot, frozen */ });
   }
 
   function stopLivePoll() {
@@ -663,12 +674,15 @@
     fetch(liveUrl, { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        if (!d) return;
+        if (!d) { elapsedLive = false; return; }
         // Auto-offer scrubber when the live projection is terminal.
         if (mode.replay) return;
         renderAll(d);
       })
-      .catch(function () { /* file:// or server down: keep the build snapshot */ })
+      .catch(function () {
+        // file:// or server down: keep the build snapshot, and stop the clock.
+        elapsedLive = false;
+      })
       .then(function () {
         if (!mode.replay) mode.pollTimer = setTimeout(pollLive, POLL_MS);
       });
