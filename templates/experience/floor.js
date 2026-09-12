@@ -74,12 +74,25 @@
     return m ? h + " h " + m + " min" : h + " h";
   }
 
+  /* Ages floor, never round: at 101 s the top line must still read "1 min
+     ago", because the LED and the state note flip at "over 2 min". A rounded
+     "2 min ago" under a live LED is two clocks disagreeing. */
   function fmtAgo(secs) {
     if (typeof secs !== "number" || !isFinite(secs) || secs < 0) return "-";
     var s = Math.floor(secs);
     if (s < 60) return s + " s ago";
-    if (s < 3600) return Math.round(s / 60) + " min ago";
+    if (s < 3600) return Math.floor(s / 60) + " min ago";
     return Math.floor(s / 3600) + " h ago";
+  }
+
+  /* Seconds between two ISO timestamps, or null when either side is missing
+     or unparsable: the degraded sentence speaks only in timestamps the
+     projection carries, and drops a clause rather than printing a guess. */
+  function secsBetween(laterTs, earlierTs) {
+    var a = new Date(laterTs || "").getTime();
+    var b = new Date(earlierTs || "").getTime();
+    if (isNaN(a) || isNaN(b)) return null;
+    return Math.max(0, Math.round((a - b) / 1000));
   }
 
   /* Live: trust timestamps. Replay: never claim live. */
@@ -353,9 +366,13 @@
 
   /* Status clause: role, phase with its program, wave, elapsed, heartbeat.
      Off a live stream the clause degrades with the page: the phase goes past
-     tense, the elapsed freezes and is qualified at the last event, and the
-     heartbeat is told as an age at the last event, not from now. */
-  function nowStatus(now, st, startedAt) {
+     tense, and both clocks stop at the last event. The numbers then come from
+     the timestamps the projection carries (elapsed = last_event_ts minus
+     started_at, heartbeat = last_event_ts minus last_heartbeat_ts), never
+     from the projection's own run time: a seat's elapsed at the last event
+     cannot depend on when the projection ran. A missing timestamp drops its
+     clause. */
+  function nowStatus(now, st, seat, lastEventTs) {
     var degraded = st && (st.state === "stale" || st.state === "offline");
     var parts = ["<strong>" + esc(now.role || "this seat") + "</strong>"];
     if (now.phase) {
@@ -368,23 +385,29 @@
       parts.push("wave " + now.wave +
         (typeof now.wave_total === "number" ? " of " + now.wave_total : ""));
     }
-    if (typeof now.elapsed_s === "number") {
-      if (degraded) {
-        parts.push(fmtMin(now.elapsed_s) + " in at the last event");
-      } else {
-        parts.push('running <span data-elapsed-from="' + esc(startedAt || "") +
+    if (degraded) {
+      var elapsedAt = secsBetween(lastEventTs, seat.started_at);
+      if (elapsedAt != null) {
+        parts.push(fmtMin(elapsedAt) + " in at the last event");
+      }
+      var heartbeatAt = secsBetween(lastEventTs, seat.last_heartbeat_ts);
+      if (heartbeatAt != null) {
+        parts.push("last heartbeat " + fmtAgo(heartbeatAt).replace(/ ago$/, "") +
+          " before the last event");
+      }
+    } else {
+      if (typeof now.elapsed_s === "number") {
+        parts.push('running <span data-elapsed-from="' + esc(seat.started_at || "") +
           '" data-elapsed-min="1">' + fmtMin(now.elapsed_s) + "</span>");
       }
-    }
-    if (typeof now.heartbeat_age_s === "number") {
-      parts.push(degraded
-        ? "last heartbeat " + fmtAgo(now.heartbeat_age_s).replace(/ ago$/, "") + " before the last event"
-        : "heartbeat " + fmtAgo(now.heartbeat_age_s));
+      if (typeof now.heartbeat_age_s === "number") {
+        parts.push("heartbeat " + fmtAgo(now.heartbeat_age_s));
+      }
     }
     return parts.join(", ") + ".";
   }
 
-  function nowRow(seat, st) {
+  function nowRow(seat, st, lastEventTs) {
     var quiet = seat.quiet === true;
     var quietBadge = quiet
       ? '<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>' : "";
@@ -392,7 +415,7 @@
       return '<li class="nowrow' + (quiet ? " quiet" : "") + '">' +
         '<div class="nowhead">' + seatPill(seat) + quietBadge + "</div>" +
         nowPurpose(seat.now) +
-        '<div class="nowsent">' + nowStatus(seat.now, st, seat.started_at) + "</div>" +
+        '<div class="nowsent">' + nowStatus(seat.now, st, seat, lastEventTs) + "</div>" +
         '<div class="nowmeta"><span class="mono faint">' + esc(seat.branch || "branch not reported") + "</span>" +
         '<span class="faint">attempt ' + esc(seat.attempt || 1) + "</span></div></li>";
     }
@@ -438,7 +461,7 @@
         : "no seat is live";
     }
     box.innerHTML = live.length
-      ? live.map(function (s) { return nowRow(s, st); }).join("")
+      ? live.map(function (s) { return nowRow(s, st, d.last_event_ts); }).join("")
       : '<li class="muted">No seat is live. The Floor shows motion only while a dispatch is running.</li>';
     tickElapsed();
   }

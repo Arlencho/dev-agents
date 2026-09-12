@@ -812,14 +812,34 @@ class Renderer:
 
     @staticmethod
     def _fmt_ago(secs: Any) -> str:
+        """Ages floor, never round: at 101 s the top line must still read
+        ``1 min ago``, because the LED and the state note flip at "over 2
+        min". A rounded "2 min ago" under a live LED is two clocks
+        disagreeing."""
         if not isinstance(secs, (int, float)) or isinstance(secs, bool) or secs < 0:
             return "-"
         s = int(secs)
         if s < 60:
             return f"{s} s ago"
         if s < 3600:
-            return f"{round(s / 60)} min ago"
+            return f"{s // 60} min ago"
         return f"{s // 3600} h ago"
+
+    @staticmethod
+    def _secs_between(later_ts: Any, earlier_ts: Any) -> Optional[int]:
+        """Seconds between two ISO timestamps, None when either is missing.
+
+        The degraded sentence speaks only in timestamps the projection
+        carries, and drops a clause rather than printing a guess.
+        """
+        if not isinstance(later_ts, str) or not isinstance(earlier_ts, str):
+            return None
+        try:
+            later = datetime.strptime(later_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            earlier = datetime.strptime(earlier_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        return max(0, int((later - earlier).total_seconds()))
 
     @staticmethod
     def _live_state(live: Dict[str, Any]) -> Tuple[str, Optional[int]]:
@@ -1037,15 +1057,20 @@ class Renderer:
         purpose = str(now.get("purpose") or "").rstrip(". \t")
         return f'<div class="nowpurpose">{esc(purpose)}.</div>' if purpose else ""
 
-    def _now_status(self, now: Dict[str, Any], state: str, started_at: Any) -> str:
+    def _now_status(self, now: Dict[str, Any], state: str, seat: Dict[str, Any],
+                    last_event_ts: Any) -> str:
         """One running seat as one short status clause of nouns (mirrored in floor.js).
 
         Built only from the seats[].now object the projection folds for this.
         Every field is independently nullable, so a missing fact drops its
         clause instead of printing a guess. Ids never enter the clause. Off a
         live stream the clause degrades with the page: the phase goes past
-        tense, the elapsed freezes and is qualified at the last event, and the
-        heartbeat is told as an age at the last event, not from now.
+        tense, and both clocks stop at the last event. The numbers then come
+        from the timestamps the projection carries (elapsed = last_event_ts
+        minus started_at, heartbeat = last_event_ts minus last_heartbeat_ts),
+        never from the projection's own run time: a seat's elapsed at the
+        last event cannot depend on when the projection ran. A missing
+        timestamp drops its clause.
         """
         degraded = state in ("stale", "offline")
         parts = [f"<strong>{esc(now.get('role') or 'this seat')}</strong>"]
@@ -1062,21 +1087,23 @@ class Renderer:
             if self._is_num(now.get("wave_total")):
                 w += f" of {now['wave_total']}"
             parts.append(w)
-        if self._is_num(now.get("elapsed_s")):
-            if degraded:
-                parts.append(f"{self._fmt_min(now['elapsed_s'])} in at the last event")
-            else:
-                parts.append(
-                    f'running <span data-elapsed-from="{esc(started_at or "")}" '
-                    f'data-elapsed-min="1">{self._fmt_min(now["elapsed_s"])}</span>'
-                )
-        if self._is_num(now.get("heartbeat_age_s")):
-            ago = self._fmt_ago(now["heartbeat_age_s"])
-            if degraded:
+        if degraded:
+            elapsed_at = self._secs_between(last_event_ts, seat.get("started_at"))
+            if elapsed_at is not None:
+                parts.append(f"{self._fmt_min(elapsed_at)} in at the last event")
+            heartbeat_at = self._secs_between(last_event_ts, seat.get("last_heartbeat_ts"))
+            if heartbeat_at is not None:
+                ago = self._fmt_ago(heartbeat_at)
                 parts.append(f"last heartbeat {ago[:-4] if ago.endswith(' ago') else ago} "
                              "before the last event")
-            else:
-                parts.append(f"heartbeat {ago}")
+        else:
+            if self._is_num(now.get("elapsed_s")):
+                parts.append(
+                    f'running <span data-elapsed-from="{esc(seat.get("started_at") or "")}" '
+                    f'data-elapsed-min="1">{self._fmt_min(now["elapsed_s"])}</span>'
+                )
+            if self._is_num(now.get("heartbeat_age_s")):
+                parts.append(f"heartbeat {self._fmt_ago(now['heartbeat_age_s'])}")
         return ", ".join(parts) + "."
 
     def _floor_summary_html(self, live: Dict[str, Any], state: str, age: Optional[int]) -> str:
@@ -1161,7 +1188,7 @@ class Renderer:
                         f'<li class="nowrow{" quiet" if quiet else ""}">'
                         f'<div class="nowhead">{self._seat_pill(s)}{quiet_badge}</div>'
                         + self._now_purpose(now)
-                        + f'<div class="nowsent">{self._now_status(now, state, s.get("started_at"))}</div>'
+                        + f'<div class="nowsent">{self._now_status(now, state, s, live.get("last_event_ts"))}</div>'
                         f'<div class="nowmeta"><span class="mono faint">'
                         f'{esc(s.get("branch") or "branch not reported")}</span>'
                         f'<span class="faint">attempt {esc(s.get("attempt") or 1)}</span></div></li>'
