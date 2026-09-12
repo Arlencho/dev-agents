@@ -347,6 +347,10 @@
     if (!box) return;
     var items = d.today || [];
     var meta = d.today_meta || {};
+    /* The note is a variable length, data driven string, so it lives in the
+       muted paragraph UNDER the head (same as #floor-queue-note), never in the
+       .cardhead .more slot: that slot is white-space: nowrap and a live day
+       pushed the whole page sideways at 400px. */
     var note = $("floor-today-note");
     if (note) {
       note.textContent = "dispatch_end on " + (meta.date || "today") +

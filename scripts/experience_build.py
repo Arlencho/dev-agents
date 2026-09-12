@@ -1124,7 +1124,8 @@ class Renderer:
             rows_html = '<li class="muted">Nothing has landed today yet.</li>'
         return f"""
     <div class="card mt" id="floor-today-card">
-      <div class="cardhead"><h2>Landed today</h2><span class="more faint" id="floor-today-note">{note}</span></div>
+      <div class="cardhead"><h2>Landed today</h2><span class="more faint">from the event stream</span></div>
+      <p class="muted" id="floor-today-note">{note}</p>
       <ol class="tlist" id="floor-today-list">{rows_html}</ol>
     </div>
 """
@@ -1249,7 +1250,9 @@ class Renderer:
     </div>
 
     <div class="card mt" id="floor-today-card">
-      <div class="cardhead"><h2>Landed today</h2><span class="more faint" id="floor-today-note">no projection in this build</span></div>
+      <div class="cardhead"><h2>Landed today</h2><span class="more faint">from the event stream</span></div>
+      <p class="muted" id="floor-today-note">No projection in this build. Landed rows come from the
+      <code>dispatch_end</code> events of the day, so nothing is claimed until a stream is read.</p>
       <ol class="tlist" id="floor-today-list"><li class="muted">No live projection, so nothing can be claimed about today.</li></ol>
     </div>
 
