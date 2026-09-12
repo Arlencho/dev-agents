@@ -237,6 +237,8 @@ if [ ! -f "$RUNTIME_SRC/providers/$PROVIDER/launch.sh" ] || [ ! -f "$RUNTIME_SRC
     exit 1
 fi
 ship_runtime_once() {
+    # The tilde is for the worker shell (remote_run / scp target), not this one.
+    # shellcheck disable=SC2088
     local dest="~/$RUNTIME_REL" stage waited
     if remote_run "test -f $dest/.ready"; then
         echo "Launcher runtime already shipped for dispatch $DISPATCH_ID"
