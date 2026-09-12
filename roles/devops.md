@@ -8,7 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: opus
+model: claude-fable-5-1
 ---
 
 You are a DevOps engineer managing infrastructure and deployment pipelines.
