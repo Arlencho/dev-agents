@@ -1,5 +1,5 @@
 #!/bin/bash
-# Ground Truth: the per-repo localhost dispatch lock in scripts/dispatch.sh.
+# Ground Truth: the per-branch localhost dispatch lock in scripts/dispatch.sh.
 # No network, no vendor CLIs, no agents dispatched.
 #
 # The lock block is EXTRACTED from dispatch.sh (between the dispatch-lock:begin
@@ -54,6 +54,7 @@ HARNESS="$SANDBOX/lock-harness.sh"
     echo 'PLAN_SOURCE="${PLAN_SOURCE:-wave-plans/test.plan}"'
     echo 'NO_WAIT="${NO_WAIT:-false}"'
     echo 'WORKER_ARRAY=(${WORKER_ARRAY_SPEC:-"macbook-pro|localhost"})'
+    echo 'TASK_BRANCH=(${TASK_BRANCH_SPEC:-"feat/alpha"})'
     printf '%s\n' "$LOCK_BLOCK"
     # eval, not exec: the extracted functions must stay in this shell's scope.
     echo 'eval "$@"'
@@ -62,45 +63,72 @@ chmod +x "$HARNESS"
 
 export DISPATCH_LOCK_POLL_S=1
 LOCKS="$SANDBOX/fleet-home/dispatch-locks"
+ALPHA="$LOCKS/dev-agents/feat-alpha.lock"
 
 echo "== lock file identifies the holder pid and plan =="
 out=$(FLEET_HOME="$SANDBOX/fleet-home" PLAN_SOURCE="wave-plans/alpha.plan" \
-      "$HARNESS" 'dispatch_lock_acquire >/dev/null; sed -n "1p;2p" "$LOCK_FILE"' 2>/dev/null)
+      "$HARNESS" 'dispatch_lock_acquire >/dev/null; sed -n "1p;2p" "${LOCK_HELD_FILES[0]}"' 2>/dev/null)
 holder_pid_recorded=$(printf '%s\n' "$out" | sed -n '1p')
 holder_plan=$(printf '%s\n' "$out" | sed -n '2p')
 check_true "lock records a holder pid" test -n "$holder_pid_recorded"
 check "lock records the plan it is running" "wave-plans/alpha.plan" "$holder_plan"
-check_true "lock file is keyed by repo name" test -f "$LOCKS/dev-agents.lock"
-rm -f "$LOCKS/dev-agents.lock"
+check_true "lock file is keyed by repo name and branch" test -f "$ALPHA"
+rm -f "$ALPHA"
+
+echo ""
+echo "== one lock per distinct branch in the plan, in sorted order =="
+files=$(FLEET_HOME="$SANDBOX/fleet-home" TASK_BRANCH_SPEC="feat/zeta feat/alpha feat/zeta fix/beta" \
+        "$HARNESS" 'dispatch_lock_acquire >/dev/null; printf "%s\n" "${LOCK_HELD_FILES[@]#$LOCK_DIR/}"' 2>/dev/null)
+check "three branches, three locks, sorted, slashes as dashes" \
+      "dev-agents/feat-alpha.lock dev-agents/feat-zeta.lock dev-agents/fix-beta.lock" "$(printf '%s' "$files" | tr '\n' ' ' | sed 's/ $//')"
+rm -rf "$LOCKS/dev-agents"
 
 echo ""
 echo "== the lock path is machine-global, not per clone =="
 # With no FLEET_HOME the lock must land under the per-user fleet base, the same
-# base as ~/dev/agent-logs and the ~/dev/<repo> checkout it protects. A path
+# base as ~/dev/agent-logs and the ~/dev/<repo> fetch point it protects. A path
 # inside this clone would give every clone on the host a private lock.
-default_lock=$(env -u FLEET_HOME "$HARNESS" 'echo "$LOCK_FILE"' 2>/dev/null)
+default_lock=$(env -u FLEET_HOME "$HARNESS" 'dispatch_lock_files; echo "${LOCK_FILES[0]}"' 2>/dev/null)
 check "default lock path follows the per-user fleet base" \
-      "$HOME/dev/dispatch-locks/dev-agents.lock" "$default_lock"
+      "$HOME/dev/dispatch-locks/dev-agents/feat-alpha.lock" "$default_lock"
 printf '%s' "$default_lock" | grep -q "^$REPO_DIR/"
 check "default lock path is outside the fleet checkout" "1" "$?"
 
 echo ""
 echo "== a second dispatch with --no-wait exits 9 and names the holder =="
 # Hold the lock with a live process (sleep) whose pid is written into the file.
-mkdir -p "$LOCKS"
+mkdir -p "$LOCKS/dev-agents"
 sleep 30 &
 holder=$!
-printf '%s\nwave-plans/held.plan\n2026-09-12T00:00:00Z\n' "$holder" > "$LOCKS/dev-agents.lock"
+printf '%s\nwave-plans/held.plan\n2026-09-12T00:00:00Z\n' "$holder" > "$ALPHA"
 
 busy=$(FLEET_HOME="$SANDBOX/fleet-home" NO_WAIT=true "$HARNESS" dispatch_lock_acquire 2>&1)
 busy_exit=$?
 check "--no-wait exit code" "9" "$busy_exit"
 printf '%s' "$busy" | grep -q "pid $holder" ; check "message names the holder pid" 0 "$?"
 printf '%s' "$busy" | grep -q "wave-plans/held.plan" ; check "message names the holder plan" 0 "$?"
+printf '%s' "$busy" | grep -q "branch feat-alpha" ; check "message names the branch" 0 "$?"
+
+echo ""
+echo "== --no-wait on the second of two branches releases the first =="
+# feat/aaa sorts before feat/alpha, so the free lock is taken first and the
+# held one is met second: --no-wait must give the first one back on its way out.
+FLEET_HOME="$SANDBOX/fleet-home" NO_WAIT=true TASK_BRANCH_SPEC="feat/aaa feat/alpha" \
+    "$HARNESS" dispatch_lock_acquire >/dev/null 2>&1
+check "--no-wait exit code with one lock already taken" "9" "$?"
+check_true "the lock it did take is released again" test ! -f "$LOCKS/dev-agents/feat-aaa.lock"
+
+echo ""
+echo "== a different branch on the same repo is not blocked =="
+FLEET_HOME="$SANDBOX/fleet-home" NO_WAIT=true TASK_BRANCH_SPEC="feat/other" \
+    "$HARNESS" dispatch_lock_acquire >/dev/null 2>&1
+check "second dispatch on another branch acquires at once" "0" "$?"
+check_true "its own lock file was written" test -f "$LOCKS/dev-agents/feat-other.lock"
+rm -f "$LOCKS/dev-agents/feat-other.lock"
 
 echo ""
 echo "== without --no-wait it queues, then takes the lock when freed =="
-( sleep 2; rm -f "$LOCKS/dev-agents.lock" ) &
+( sleep 2; rm -f "$ALPHA" ) &
 freer=$!
 start=$(date +%s)
 FLEET_HOME="$SANDBOX/fleet-home" "$HARNESS" dispatch_lock_acquire >/dev/null 2>&1
@@ -111,28 +139,29 @@ check "acquires after the holder releases" "0" "$waited_exit"
 check_true "actually waited for the holder" test "$waited" -ge 2
 kill "$holder" 2>/dev/null
 wait "$holder" 2>/dev/null
-rm -f "$LOCKS/dev-agents.lock"
+rm -f "$ALPHA"
 
 echo ""
 echo "== a lock left by a dead pid is cleared, not waited on =="
-mkdir -p "$LOCKS"
+mkdir -p "$LOCKS/dev-agents"
 sleep 0 &
 dead=$!
 wait "$dead" 2>/dev/null
-printf '%s\nwave-plans/crashed.plan\n2026-09-12T00:00:00Z\n' "$dead" > "$LOCKS/dev-agents.lock"
+printf '%s\nwave-plans/crashed.plan\n2026-09-12T00:00:00Z\n' "$dead" > "$ALPHA"
 stale=$(FLEET_HOME="$SANDBOX/fleet-home" NO_WAIT=true "$HARNESS" dispatch_lock_acquire 2>&1)
 check "stale lock is taken over" "0" "$?"
 printf '%s' "$stale" | grep -q "stale" ; check "stale takeover is announced" 0 "$?"
-rm -f "$LOCKS/dev-agents.lock"
+rm -f "$ALPHA"
 
 echo ""
-echo "== release removes only our own lock =="
-FLEET_HOME="$SANDBOX/fleet-home" "$HARNESS" 'dispatch_lock_acquire; dispatch_lock_release; [ -f "$LOCK_FILE" ]' >/dev/null 2>&1
-check "release removes the lock file" "1" "$?"
-printf '999999\nwave-plans/other.plan\n2026-09-12T00:00:00Z\n' > "$LOCKS/dev-agents.lock"
-FLEET_HOME="$SANDBOX/fleet-home" "$HARNESS" 'LOCK_HELD=true; dispatch_lock_release' >/dev/null 2>&1
-check_true "another pid's lock is left alone" test -f "$LOCKS/dev-agents.lock"
-rm -f "$LOCKS/dev-agents.lock"
+echo "== release removes only our own locks =="
+FLEET_HOME="$SANDBOX/fleet-home" TASK_BRANCH_SPEC="feat/alpha fix/beta" \
+    "$HARNESS" 'dispatch_lock_acquire; dispatch_lock_release; [ -f "$LOCK_DIR/dev-agents/feat-alpha.lock" ] || [ -f "$LOCK_DIR/dev-agents/fix-beta.lock" ]' >/dev/null 2>&1
+check "release removes every lock file it held" "1" "$?"
+printf '999999\nwave-plans/other.plan\n2026-09-12T00:00:00Z\n' > "$ALPHA"
+FLEET_HOME="$SANDBOX/fleet-home" "$HARNESS" 'LOCK_HELD_FILES=("$LOCK_DIR/dev-agents/feat-alpha.lock"); dispatch_lock_release' >/dev/null 2>&1
+check_true "another pid's lock is left alone" test -f "$ALPHA"
+rm -f "$ALPHA"
 
 echo ""
 echo "== signals release the lock while a wave is blocked =="
@@ -175,7 +204,7 @@ signal_holder() { # <holder script> <signal> <group|direct>
     local script="$1" sig="$2" scope="$3"
     local ready="$SANDBOX/ready.$sig.$scope"
     local target rc waited=0 start
-    rm -f "$ready" "$LOCKS/dev-agents.lock"
+    rm -f "$ready" "$ALPHA"
 
     # perl gives the holder a process group of its own (as leader, so pgid = pid)
     # and restores the default INT/TERM disposition before exec: a shell that
@@ -204,13 +233,13 @@ signal_holder() { # <holder script> <signal> <group|direct>
     if kill -0 "$holder" 2>/dev/null; then
         kill -KILL -"$holder" 2>/dev/null
         wait "$holder" 2>/dev/null
-        echo "timeout $([ -f "$LOCKS/dev-agents.lock" ] && echo present || echo removed) 10"
+        echo "timeout $([ -f "$ALPHA" ] && echo present || echo removed) 10"
         return
     fi
 
     wait "$holder"; rc=$?
     kill -KILL -"$holder" 2>/dev/null   # sweep any seat the trap left behind
-    echo "$rc $([ -f "$LOCKS/dev-agents.lock" ] && echo present || echo removed) $(( $(date +%s) - start ))"
+    echo "$rc $([ -f "$ALPHA" ] && echo present || echo removed) $(( $(date +%s) - start ))"
 }
 
 if command -v perl >/dev/null 2>&1; then
@@ -227,7 +256,7 @@ if command -v perl >/dev/null 2>&1; then
     check "SIGINT during the retry backoff frees the lock" "removed" "$delay_lock"
     check "backoff does not defer the trap" "130" "$delay_rc"
     check_true "lock freed within 5s, not after the 30s delay" test "$delay_s" -le 5
-    rm -f "$LOCKS/dev-agents.lock"
+    rm -f "$ALPHA"
 else
     echo "  skip perl is not available: cannot isolate a process group for the signal tests"
 fi
@@ -241,8 +270,8 @@ FLEET_HOME="$SANDBOX/fleet-home" "$HARNESS" \
     'fleet_close_dispatch() { :; }; dispatch_lock_acquire >/dev/null; dispatch_lock_arm_traps; exit 7' \
     >/dev/null 2>&1
 check "a failed run keeps its own exit code" "7" "$?"
-check_true "and the lock is still released" test ! -f "$LOCKS/dev-agents.lock"
-rm -f "$LOCKS/dev-agents.lock"
+check_true "and the lock is still released" test ! -f "$ALPHA"
+rm -f "$ALPHA"
 
 echo ""
 echo "== remote-only fleets take no lock =="
