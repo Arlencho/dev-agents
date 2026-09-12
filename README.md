@@ -183,6 +183,17 @@ brew install bash
 - `--retry-on-different-worker` — on failure, try the same task on a different worker.
 - `--no-wait`: do not queue behind another dispatch on the same repo; exit 9 immediately instead.
 
+**One worktree per seat.** `scripts/run-remote.sh` keeps `~/dev/<repo>` on the worker as a
+fetch point only (cloned once, then only ever fetched; no seat checks a branch out there) and
+gives every seat its own git worktree at `~/dev/worktrees/<repo>/<dispatch id>/<task id>-<branch>`,
+added from `origin/<branch>` when the branch exists on origin, else as a new branch from
+`origin/main`. The seat runs, commits and pushes in that worktree; `handoff.md` is copied next to
+the seat log before the worktree is removed at seat exit, on every path (normal end, launcher
+exit 1 / 69 / 75, Ctrl-C, kill). Set `FLEET_KEEP_FAILED_WORKTREES=1` on the dispatcher to keep the
+worktree of a seat that exited non-zero for inspection; the daily sweep removes it after a day.
+Fetch-point operations (clone, fetch, hook install, worktree add / remove) are serialized per
+repo by `~/dev/<repo>.seat-lock`, so the seats of one wave can start in the same second.
+
 **One local dispatch per repo.** Every localhost seat checks out and pulls inside the same
 shared tree (`~/dev/<repo>`, see `scripts/run-remote.sh`), so two dispatches running at once
 fight over one index and one HEAD. Before the first wave, `dispatch.sh` takes a per-repo lock

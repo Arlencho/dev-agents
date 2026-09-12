@@ -273,7 +273,11 @@ fi
 # assignments (%q-quoted, so no task or branch character reaches the worker's
 # parser); the second is quoted and runs verbatim, so worker-side code needs no
 # escaping. A path value that carries a literal $HOME expands on the worker.
+# set +e around the pipeline: under set -e a non-zero seat exit (1 / 69 / 75)
+# used to abort run-remote right here, before the ledger, the failover event,
+# the cooldown file and the failure learning below were ever written.
 echo "Starting agent on $HOST..."
+set +e
 {
     cat <<WORKER_ENV
 HOST=$(printf '%q' "$HOST")
@@ -287,6 +291,7 @@ MODEL=$(printf '%q' "$MODEL")
 DISPATCH_ID=$(printf '%q' "$DISPATCH_ID")
 FETCH_DIR="$FETCH_DIR"
 SEAT_DIR="$SEAT_DIR"
+KEEP_FAILED=$(printf '%q' "${FLEET_KEEP_FAILED_WORKTREES:-0}")
 FULL_TASK_B64=$(printf '%q' "$FULL_TASK_B64")
 $PROGRESS_ENV
 WORKER_ENV
@@ -363,6 +368,35 @@ if [ -x "$HOME/dev/guardrails/guardrails.sh" ]; then
 fi
 
 # ---- seat worktree ----
+# Teardown runs on every exit path: the normal end, a set -e abort, a launcher
+# exit of 1 / 69 / 75, and INT / TERM / HUP. The worktree is removed even when
+# it holds uncommitted work (the push above is the delivery; the log says what
+# happened), unless the seat failed and FLEET_KEEP_FAILED_WORKTREES=1 asks for
+# failed trees to stay for inspection. The branch ref survives either way. The
+# empty per-dispatch and per-repo directories go with the last seat.
+SEAT_ADDED=false
+seat_teardown() {
+    local rc="$1"
+    set +e
+    trap - EXIT INT TERM HUP
+    [ "$SEAT_ADDED" = true ] || return 0
+    cd "$FETCH_DIR" || return 0
+    fp_lock
+    if [ "$rc" -ne 0 ] && [ "$KEEP_FAILED" = 1 ]; then
+        echo "Seat exited $rc; keeping its worktree for inspection (FLEET_KEEP_FAILED_WORKTREES=1): $SEAT_DIR"
+    else
+        git worktree remove --force "$SEAT_DIR" || echo "WARNING: could not remove seat worktree $SEAT_DIR" >&2
+        rmdir "$(dirname "$SEAT_DIR")" 2>/dev/null
+        rmdir "$(dirname "$(dirname "$SEAT_DIR")")" 2>/dev/null
+    fi
+    git worktree prune
+    fp_unlock
+}
+trap 'seat_teardown $?' EXIT
+trap 'seat_teardown 130; exit 130' INT
+trap 'seat_teardown 143; exit 143' TERM
+trap 'seat_teardown 129; exit 129' HUP
+
 # The branch may already exist (producer pushed it; a critic reviews the same
 # branch next). From origin when it is there, else a new branch off origin/main.
 # A local branch left by an earlier seat is reused and fast-forwarded to origin.
@@ -378,6 +412,7 @@ elif git rev-parse --verify -q "refs/remotes/origin/$BRANCH" >/dev/null; then
 else
     git worktree add --no-track -b "$BRANCH" "$SEAT_DIR" origin/main
 fi
+SEAT_ADDED=true
 fp_unlock
 cd "$SEAT_DIR"
 echo "Seat worktree: $SEAT_DIR ($(git rev-parse --short HEAD) on $BRANCH)"
@@ -406,20 +441,15 @@ if [ -f "$SEAT_DIR/handoff.md" ]; then
     cp "$SEAT_DIR/handoff.md" "$LOG_DIR/${LOG_FILE%.log}.handoff.md"
 fi
 
-# Remove the seat worktree. The branch ref survives in the fetch point.
-cd "$FETCH_DIR"
-fp_lock
-git worktree remove --force "$SEAT_DIR"
-git worktree prune
-fp_unlock
-
 echo ""
 echo "Log saved: $LOG_DIR/$LOG_FILE"
 echo "Done on $HOST"
+# The EXIT trap tears the worktree down with this code in hand.
 exit "$AGENT_EXIT"
 WORKER
 } | remote_bash_s
 REMOTE_EXIT=$?
+set -e
 
 # Log path: expand on orchestrator for localhost so ledgers + collection work;
 # keep worker-side $HOME form for true remote hosts.
@@ -535,3 +565,5 @@ echo ""
 echo "=== Agent completed on $HOST ==="
 echo "Remote log: $HOST:$REMOTE_LOG_PATH"
 echo "Check: gh pr list -R $(echo $REPO_URL | sed 's/.*://' | sed 's/\.git//')"
+# dispatch.sh classifies the seat by this code (0 / 1 / 69 / 75 / 77).
+exit "$REMOTE_EXIT"
