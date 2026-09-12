@@ -292,6 +292,7 @@ DISPATCH_ID=$(printf '%q' "$DISPATCH_ID")
 FETCH_DIR="$FETCH_DIR"
 SEAT_DIR="$SEAT_DIR"
 KEEP_FAILED=$(printf '%q' "${FLEET_KEEP_FAILED_WORKTREES:-0}")
+SEAT_WAIT_POLL_S=$(printf '%q' "${SEAT_WAIT_POLL_S:-5}")
 FULL_TASK_B64=$(printf '%q' "$FULL_TASK_B64")
 $PROGRESS_ENV
 WORKER_ENV
@@ -382,6 +383,7 @@ seat_teardown() {
     [ "$SEAT_ADDED" = true ] || return 0
     cd "$FETCH_DIR" || return 0
     fp_lock
+    git worktree unlock "$SEAT_DIR" 2>/dev/null
     if [ "$rc" -ne 0 ] && [ "$KEEP_FAILED" = 1 ]; then
         echo "Seat exited $rc; keeping its worktree for inspection (FLEET_KEEP_FAILED_WORKTREES=1): $SEAT_DIR"
     else
@@ -397,10 +399,56 @@ trap 'seat_teardown 130; exit 130' INT
 trap 'seat_teardown 143; exit 143' TERM
 trap 'seat_teardown 129; exit 129' HUP
 
+# A branch can only be checked out in one worktree. Every seat locks its
+# worktree with its pid in the reason (`git worktree lock`), which is what a
+# later seat on the same branch reads: a live holder is waited for (the
+# fetch-point lock is released while sleeping so the holder can tear down),
+# a dead one (killed run, or a tree kept by FLEET_KEEP_FAILED_WORKTREES) is
+# cleared: a clean tree is removed, a tree with uncommitted work is moved aside
+# next to itself and pruned, so no work is destroyed and the branch is free.
+# Two seats on different branches never meet here and run side by side.
+branch_holder() {
+    git worktree list --porcelain \
+        | awk -v b="branch refs/heads/$BRANCH" '/^worktree /{w=substr($0,10)} $0==b{print w}'
+}
+holder_seat_pid() { # <worktree path> -> pid from the lock reason, or nothing
+    git worktree list --porcelain \
+        | awk -v w="worktree $1" '$0==w{f=1;next} /^worktree /{f=0} f && /^locked seat pid /{print $4}'
+}
+wait_for_branch() {
+    local holder pid aside
+    while :; do
+        holder=$(branch_holder)
+        [ -n "$holder" ] || return 0
+        if [ "$holder" = "$FETCH_DIR" ]; then
+            echo "ERROR: $BRANCH is checked out in the fetch point $FETCH_DIR with uncommitted changes; clean it by hand" >&2
+            return 1
+        fi
+        pid=$(holder_seat_pid "$holder")
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            echo "Branch $BRANCH is held by a live seat (pid $pid) in $holder; waiting ${SEAT_WAIT_POLL_S}s"
+            fp_unlock
+            sleep "$SEAT_WAIT_POLL_S"
+            fp_lock
+            continue
+        fi
+        git worktree unlock "$holder" 2>/dev/null || true
+        if git worktree remove "$holder" 2>/dev/null; then
+            echo "Removed the dead seat worktree that held $BRANCH: $holder"
+        else
+            aside="$holder.aside-$(date +%Y%m%d-%H%M%S)"
+            mv "$holder" "$aside"
+            git worktree prune
+            echo "Moved a dead seat worktree with uncommitted work aside: $aside"
+        fi
+    done
+}
+
 # The branch may already exist (producer pushed it; a critic reviews the same
 # branch next). From origin when it is there, else a new branch off origin/main.
 # A local branch left by an earlier seat is reused and fast-forwarded to origin.
 mkdir -p "$(dirname "$SEAT_DIR")"
+wait_for_branch
 if git rev-parse --verify -q "refs/heads/$BRANCH" >/dev/null; then
     git worktree add "$SEAT_DIR" "$BRANCH"
     if git rev-parse --verify -q "refs/remotes/origin/$BRANCH" >/dev/null; then
@@ -413,6 +461,7 @@ else
     git worktree add --no-track -b "$BRANCH" "$SEAT_DIR" origin/main
 fi
 SEAT_ADDED=true
+git worktree lock --reason "seat pid $$ dispatch $DISPATCH_ID" "$SEAT_DIR"
 fp_unlock
 cd "$SEAT_DIR"
 echo "Seat worktree: $SEAT_DIR ($(git rev-parse --short HEAD) on $BRANCH)"
