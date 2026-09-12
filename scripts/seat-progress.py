@@ -18,6 +18,9 @@ REDACTION LAW (docs/experience-data.md § Redaction law, do not weaken):
       (anything resolving outside the repo becomes the literal "outside-repo")
     - counts: files edited, commands run, tests run, commits made
     - one phase word: reading | reviewing | editing | testing | committing
+    - the PROGRAM NAME of the last shell command: its first token only, with
+      env assignments and sudo/nohup/time wrappers stripped, a path reduced to
+      its basename, and never an argument
   What never leaves it
     - prompts, task bodies, assistant or user message text, thinking
     - tool argument values of any kind, including command lines
@@ -41,6 +44,7 @@ Exit status is always 0: telemetry never fails a dispatch.
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -79,6 +83,55 @@ TEST_RE = re.compile(
 )
 COMMIT_RE = re.compile(r"(^|[;&|(]\s*|\s)git(\s+-[^\s]+)*\s+commit(\s|$)", re.IGNORECASE)
 
+# Wrapper words that stand in front of the real program: skipped so the Floor
+# says "make" instead of "sudo". Only these three, and only when they lead.
+WRAPPERS = ("sudo", "nohup", "time")
+# ``FOO=bar cmd``: the assignment is never the program, and its VALUE must not
+# leave this process either, so the whole token is dropped.
+ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# What a published program name may look like: one bare word. An option, a
+# variable, a redirect or a subshell is not a program name and yields nothing.
+PROGRAM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+PROGRAM_MAX = 40
+PROGRAM_TOKEN_SCAN = 8
+
+
+def program_name(command):
+    """Program name of one shell command. First token only, never an argument.
+
+    The reduction, in order:
+      ``FOO=bar cmd``        env assignments are dropped, values included
+      ``sudo|nohup|time cmd``leading wrappers are dropped
+      ``./scripts/x.sh``     a token that looks like a path becomes its basename,
+                             so no directory (inside or outside the repo) leaves
+      anything else          only a bare word is published; an option (``-u``),
+                             a subshell (``(cd``) or a variable yields ``None``
+
+    Returns None rather than a guess: the Floor would rather say nothing than
+    print an argument.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return None
+    try:
+        tokens = shlex.split(command, comments=False, posix=True)
+    except ValueError:
+        # Unbalanced quotes: tokenising is not reliable, so publish nothing
+        # instead of risking half an argument.
+        return None
+    for token in tokens[:PROGRAM_TOKEN_SCAN]:
+        if not token:
+            continue
+        if ENV_ASSIGN_RE.match(token):
+            continue
+        if token.lower() in WRAPPERS:
+            continue
+        if "/" in token:
+            token = os.path.basename(token.rstrip("/"))
+        if not PROGRAM_RE.match(token or ""):
+            return None
+        return token[:PROGRAM_MAX]
+    return None
+
 
 def repo_relative(raw):
     """Repo-relative path, or the literal OUTSIDE marker. Never absolute.
@@ -113,6 +166,7 @@ class Progress(object):
         self.commits = 0
         self.tool = None
         self.path = None
+        self.program = None         # program of the LAST shell command, sticky
         self.last_emit = 0.0
         self.dirty = False
         self.emitted = 0
@@ -155,6 +209,10 @@ class Progress(object):
             command = args.get("command")
             if isinstance(command, str) and command.strip():
                 self.commands += 1
+                # The program name is the only thing a command line contributes
+                # to the stream. It replaces the previous one even when it
+                # reduces to nothing, so the Floor never shows a stale program.
+                self.program = program_name(command)
                 if COMMIT_RE.search(command):
                     self.commits += 1
                 if TEST_RE.search(command):
@@ -163,7 +221,7 @@ class Progress(object):
         return True
 
     def fields(self):
-        """The whole payload. Four counts, a tool, a path, a phase word."""
+        """The whole payload. Four counts, a tool, a path, a phase, a program."""
         out = [
             "phase=%s" % self.phase(),
             "files_edited=%d" % len(self.edited),
@@ -179,6 +237,8 @@ class Progress(object):
             out.append("tool=%s" % self.tool)
         if self.path:
             out.append("path=%s" % self.path)
+        if self.program:
+            out.append("program=%s" % self.program)
         return out
 
 
