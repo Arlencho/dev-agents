@@ -186,12 +186,21 @@ brew install bash
 **One local dispatch per repo.** Every localhost seat checks out and pulls inside the same
 shared tree (`~/dev/<repo>`, see `scripts/run-remote.sh`), so two dispatches running at once
 fight over one index and one HEAD. Before the first wave, `dispatch.sh` takes a per-repo lock
-under `logs/dispatch-locks/<repo>.lock` whenever a localhost worker is in play. A second
-dispatch prints the holder's pid and plan and then queues (heartbeat line every 60s), or exits
-9 straight away with `--no-wait`. The lock is released on normal exit, on error, and on
-Ctrl-C / kill / hangup; a lock whose owner pid is gone is cleared automatically. Remote-only
-fleets never take it. Seats *within* one wave still share the tree: the real fix is a per-seat
-git worktree, tracked in issue #66.
+whenever a localhost worker is in play. A second dispatch prints the holder's pid and plan and
+then queues (heartbeat line every 60s), or exits 9 straight away with `--no-wait`.
+
+The lock is **machine-global, not per clone**: it lives at `~/dev/dispatch-locks/<repo>.lock`,
+the same per-user fleet base as `~/dev/agent-logs` and the `~/dev/<repo>` checkout it protects,
+keyed by repo name. Two clones of dev-agents on one host therefore contend for the same file
+instead of each holding a private one. Override the base with `FLEET_HOME` (or the directory
+with `LOCK_DIR`) if your fleet keeps its per-user state elsewhere.
+
+The lock is released on normal exit, on error, and on Ctrl-C / kill / hangup, including while a
+wave is still running: the wave wait and the retry backoff poll in short slices rather than
+blocking, so a signal is serviced within about a second instead of waiting for the seats. The
+run keeps its exit code through the close-out (130 interrupted, 143 terminated). A lock whose
+owner pid is gone is cleared automatically. Remote-only fleets never take it. Seats *within*
+one wave still share the tree: the real fix is a per-seat git worktree, tracked in issue #66.
 
 **Example: fast, parallel, hands-off dispatch:**
 ```bash

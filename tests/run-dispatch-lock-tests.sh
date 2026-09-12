@@ -38,6 +38,12 @@ fi
 SANDBOX=$(mktemp -d)
 trap 'rm -rf "$SANDBOX"' EXIT
 
+# The lock path now defaults to the per-user fleet base under $HOME, so point
+# HOME at the sandbox: a test that forgets to set FLEET_HOME must not be able to
+# touch the operator's real ~/dev.
+export HOME="$SANDBOX/home"
+mkdir -p "$HOME"
+
 # Harness: the extracted block plus the globals dispatch.sh sets before it.
 HARNESS="$SANDBOX/lock-harness.sh"
 {
@@ -46,7 +52,6 @@ HARNESS="$SANDBOX/lock-harness.sh"
     echo 'RED= ; GREEN= ; YELLOW= ; NC='
     echo 'REPO_URL="${REPO_URL:-git@github.com:Arlencho/dev-agents.git}"'
     echo 'PLAN_SOURCE="${PLAN_SOURCE:-wave-plans/test.plan}"'
-    echo 'LOGS_DIR="${LOGS_DIR:?LOGS_DIR required}"'
     echo 'NO_WAIT="${NO_WAIT:-false}"'
     echo 'WORKER_ARRAY=(${WORKER_ARRAY_SPEC:-"macbook-pro|localhost"})'
     printf '%s\n' "$LOCK_BLOCK"
@@ -56,10 +61,10 @@ HARNESS="$SANDBOX/lock-harness.sh"
 chmod +x "$HARNESS"
 
 export DISPATCH_LOCK_POLL_S=1
-LOCKS="$SANDBOX/logs/dispatch-locks"
+LOCKS="$SANDBOX/fleet-home/dispatch-locks"
 
 echo "== lock file identifies the holder pid and plan =="
-out=$(LOGS_DIR="$SANDBOX/logs" PLAN_SOURCE="wave-plans/alpha.plan" \
+out=$(FLEET_HOME="$SANDBOX/fleet-home" PLAN_SOURCE="wave-plans/alpha.plan" \
       "$HARNESS" 'dispatch_lock_acquire >/dev/null; sed -n "1p;2p" "$LOCK_FILE"' 2>/dev/null)
 holder_pid_recorded=$(printf '%s\n' "$out" | sed -n '1p')
 holder_plan=$(printf '%s\n' "$out" | sed -n '2p')
@@ -69,6 +74,17 @@ check_true "lock file is keyed by repo name" test -f "$LOCKS/dev-agents.lock"
 rm -f "$LOCKS/dev-agents.lock"
 
 echo ""
+echo "== the lock path is machine-global, not per clone =="
+# With no FLEET_HOME the lock must land under the per-user fleet base, the same
+# base as ~/dev/agent-logs and the ~/dev/<repo> checkout it protects. A path
+# inside this clone would give every clone on the host a private lock.
+default_lock=$(env -u FLEET_HOME "$HARNESS" 'echo "$LOCK_FILE"' 2>/dev/null)
+check "default lock path follows the per-user fleet base" \
+      "$HOME/dev/dispatch-locks/dev-agents.lock" "$default_lock"
+printf '%s' "$default_lock" | grep -q "^$REPO_DIR/"
+check "default lock path is outside the fleet checkout" "1" "$?"
+
+echo ""
 echo "== a second dispatch with --no-wait exits 9 and names the holder =="
 # Hold the lock with a live process (sleep) whose pid is written into the file.
 mkdir -p "$LOCKS"
@@ -76,7 +92,7 @@ sleep 30 &
 holder=$!
 printf '%s\nwave-plans/held.plan\n2026-09-12T00:00:00Z\n' "$holder" > "$LOCKS/dev-agents.lock"
 
-busy=$(LOGS_DIR="$SANDBOX/logs" NO_WAIT=true "$HARNESS" dispatch_lock_acquire 2>&1)
+busy=$(FLEET_HOME="$SANDBOX/fleet-home" NO_WAIT=true "$HARNESS" dispatch_lock_acquire 2>&1)
 busy_exit=$?
 check "--no-wait exit code" "9" "$busy_exit"
 printf '%s' "$busy" | grep -q "pid $holder" ; check "message names the holder pid" 0 "$?"
@@ -87,7 +103,7 @@ echo "== without --no-wait it queues, then takes the lock when freed =="
 ( sleep 2; rm -f "$LOCKS/dev-agents.lock" ) &
 freer=$!
 start=$(date +%s)
-LOGS_DIR="$SANDBOX/logs" "$HARNESS" dispatch_lock_acquire >/dev/null 2>&1
+FLEET_HOME="$SANDBOX/fleet-home" "$HARNESS" dispatch_lock_acquire >/dev/null 2>&1
 waited_exit=$?
 waited=$(( $(date +%s) - start ))
 wait "$freer" 2>/dev/null
@@ -104,17 +120,17 @@ sleep 0 &
 dead=$!
 wait "$dead" 2>/dev/null
 printf '%s\nwave-plans/crashed.plan\n2026-09-12T00:00:00Z\n' "$dead" > "$LOCKS/dev-agents.lock"
-stale=$(LOGS_DIR="$SANDBOX/logs" NO_WAIT=true "$HARNESS" dispatch_lock_acquire 2>&1)
+stale=$(FLEET_HOME="$SANDBOX/fleet-home" NO_WAIT=true "$HARNESS" dispatch_lock_acquire 2>&1)
 check "stale lock is taken over" "0" "$?"
 printf '%s' "$stale" | grep -q "stale" ; check "stale takeover is announced" 0 "$?"
 rm -f "$LOCKS/dev-agents.lock"
 
 echo ""
 echo "== release removes only our own lock =="
-LOGS_DIR="$SANDBOX/logs" "$HARNESS" 'dispatch_lock_acquire; dispatch_lock_release; [ -f "$LOCK_FILE" ]' >/dev/null 2>&1
+FLEET_HOME="$SANDBOX/fleet-home" "$HARNESS" 'dispatch_lock_acquire; dispatch_lock_release; [ -f "$LOCK_FILE" ]' >/dev/null 2>&1
 check "release removes the lock file" "1" "$?"
 printf '999999\nwave-plans/other.plan\n2026-09-12T00:00:00Z\n' > "$LOCKS/dev-agents.lock"
-LOGS_DIR="$SANDBOX/logs" "$HARNESS" 'LOCK_HELD=true; dispatch_lock_release' >/dev/null 2>&1
+FLEET_HOME="$SANDBOX/fleet-home" "$HARNESS" 'LOCK_HELD=true; dispatch_lock_release' >/dev/null 2>&1
 check_true "another pid's lock is left alone" test -f "$LOCKS/dev-agents.lock"
 rm -f "$LOCKS/dev-agents.lock"
 
@@ -165,7 +181,7 @@ signal_holder() { # <holder script> <signal> <group|direct>
     # and restores the default INT/TERM disposition before exec: a shell that
     # starts with a signal already ignored cannot trap it at all, and this has to
     # measure dispatch.sh rather than the way the suite spawned it.
-    READY_FILE="$ready" LOGS_DIR="$SANDBOX/logs" \
+    READY_FILE="$ready" FLEET_HOME="$SANDBOX/fleet-home" \
         perl -e '$SIG{INT} = "DEFAULT"; $SIG{TERM} = "DEFAULT"; setpgrp(0, 0); exec @ARGV or die $!' \
              -- "${BASH:-/bin/bash}" "$script" >"$SANDBOX/holder.$sig.$scope.log" 2>&1 &
     local holder=$!
@@ -221,7 +237,7 @@ echo "== the close-out trap keeps the exit code it was entered with =="
 # The EXIT trap runs last on every path, including after the INT / TERM traps
 # call exit 130 / 143 (asserted above). It must not report the status of its own
 # close-out work in place of the run's.
-LOGS_DIR="$SANDBOX/logs" "$HARNESS" \
+FLEET_HOME="$SANDBOX/fleet-home" "$HARNESS" \
     'fleet_close_dispatch() { :; }; dispatch_lock_acquire >/dev/null; dispatch_lock_arm_traps; exit 7' \
     >/dev/null 2>&1
 check "a failed run keeps its own exit code" "7" "$?"
@@ -230,10 +246,10 @@ rm -f "$LOCKS/dev-agents.lock"
 
 echo ""
 echo "== remote-only fleets take no lock =="
-WORKER_ARRAY_SPEC="mac-mini-1|192.168.1.50" LOGS_DIR="$SANDBOX/logs" \
+WORKER_ARRAY_SPEC="mac-mini-1|192.168.1.50" FLEET_HOME="$SANDBOX/fleet-home" \
     "$HARNESS" dispatch_lock_uses_localhost >/dev/null 2>&1
 check "no localhost worker → lock skipped" "1" "$?"
-WORKER_ARRAY_SPEC="macbook-pro|127.0.0.1" LOGS_DIR="$SANDBOX/logs" \
+WORKER_ARRAY_SPEC="macbook-pro|127.0.0.1" FLEET_HOME="$SANDBOX/fleet-home" \
     "$HARNESS" dispatch_lock_uses_localhost >/dev/null 2>&1
 check "127.0.0.1 counts as localhost" "0" "$?"
 

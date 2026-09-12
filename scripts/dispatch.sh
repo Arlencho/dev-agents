@@ -759,7 +759,15 @@ retry_task() {
 # Remote (ssh) workers are unaffected: they have their own machines and their
 # own checkouts, so the lock is taken only when a localhost worker is in play.
 # ---- dispatch-lock:begin (tests/run-dispatch-lock-tests.sh sources this block) ----
-LOCK_DIR="${LOCK_DIR:-$LOGS_DIR/dispatch-locks}"
+# Machine-global, not per fleet clone. What the lock protects is the single
+# shared checkout every localhost seat works in, $HOME/dev/<repo> (WORK_DIR in
+# scripts/run-remote.sh), so two dev-agents clones on one host must contend for
+# the same file; a path under this clone's logs/ would give each clone a private
+# lock and serialize nothing. FLEET_HOME is the per-user fleet base on a machine,
+# the one that already holds ~/dev/agent-logs, ~/dev/agent-runtime and the seat
+# checkouts. The locks sit beside them, keyed by repo name.
+FLEET_HOME="${FLEET_HOME:-$HOME/dev}"
+LOCK_DIR="${LOCK_DIR:-$FLEET_HOME/dispatch-locks}"
 LOCK_REPO_NAME=$(basename "$REPO_URL" .git)
 LOCK_FILE="$LOCK_DIR/${LOCK_REPO_NAME}.lock"
 LOCK_HELD=false
