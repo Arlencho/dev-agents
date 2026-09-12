@@ -613,6 +613,171 @@ grep -q 'elapsed_s' "$REPO_DIR/scripts/fleet-events.sh" \
   || bad "fleet-events treats elapsed_s as numeric on heartbeats"
 
 echo ""
+echo "== Part F: Ops Floor queue + day view =="
+
+bash -n "$REPO_DIR/scripts/queue.sh" && ok "queue.sh parses" || bad "queue.sh parses"
+test -x "$REPO_DIR/scripts/queue.sh" && ok "queue.sh is executable" || bad "queue.sh is executable"
+
+Q_FILE="$TMP/fleet-queue.json"
+QUEUE="$REPO_DIR/scripts/queue.sh"
+PLAN_DIR="$TMP/plans"
+mkdir -p "$PLAN_DIR"
+cat > "$PLAN_DIR/alpha.plan" <<'PLAN'
+# Alpha purpose taken from the plan header. Issue 1.
+1 | devops | do the alpha thing | feat/alpha
+PLAN
+cat > "$PLAN_DIR/beta.plan" <<'PLAN'
+# Beta purpose from the header.
+1 | go-backend | do the beta thing | feat/beta
+PLAN
+
+FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" add "$PLAN_DIR/alpha.plan" olympus-platform >/dev/null 2>&1 \
+  && ok "queue add exits 0" || bad "queue add exits 0"
+FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" add "$PLAN_DIR/beta.plan" dev-agents "beta declared purpose" >/dev/null 2>&1
+assert_py "queue file is fleet-queue/1 with both entries in order" "$Q_FILE" \
+  'd["schema"]=="fleet-queue/1" and [e["plan"] for e in d["entries"]]==["alpha.plan","beta.plan"]'
+assert_py "purpose defaults to the first comment line of the plan" "$Q_FILE" \
+  'd["entries"][0]["purpose"].startswith("Alpha purpose taken from the plan header")'
+assert_py "an explicit purpose wins over the header" "$Q_FILE" \
+  'd["entries"][1]["purpose"]=="beta declared purpose"'
+
+FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" mv "$PLAN_DIR/beta.plan" 1 >/dev/null 2>&1
+assert_py "mv reorders the queue" "$Q_FILE" \
+  '[e["plan"] for e in d["entries"]]==["beta.plan","alpha.plan"]'
+FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" start "$PLAN_DIR/alpha.plan" 20260912-090000-olympus-platform >/dev/null 2>&1
+assert_py "start marks running with the dispatch id, keeping position" "$Q_FILE" \
+  'd["entries"][1]["status"]=="running" and d["entries"][1]["dispatch_id"]=="20260912-090000-olympus-platform"'
+FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" settle "$PLAN_DIR/alpha.plan" completed >/dev/null 2>&1
+assert_py "settle records status and time" "$Q_FILE" \
+  'd["entries"][1]["status"]=="settled" and d["entries"][1]["settled_status"]=="completed" and d["entries"][1]["settled_at"]'
+if FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" rm "$PLAN_DIR/nope.plan" >/dev/null 2>&1; then
+  bad "rm of an unknown plan reports failure"
+else
+  ok "rm of an unknown plan reports failure"
+fi
+
+# Crash safety: parallel writers must not lose an entry.
+P_FILE="$TMP/fleet-queue-par.json"
+for i in 1 2 3 4 5 6 7 8; do
+  ( FLEET_QUEUE_FILE="$P_FILE" "$QUEUE" add "plan-$i.plan" "repo-$i" "purpose $i" >/dev/null 2>&1 ) &
+done
+wait
+assert_py "8 concurrent adds keep 8 entries (lock + atomic rename)" "$P_FILE" \
+  'len(d["entries"])==8 and len({e["plan"] for e in d["entries"]})==8'
+
+# A malformed queue is refused, never overwritten.
+BAD_FILE="$TMP/fleet-queue-bad.json"
+printf '{ not json\n' > "$BAD_FILE"
+if FLEET_QUEUE_FILE="$BAD_FILE" "$QUEUE" add x.plan r p >/dev/null 2>&1; then
+  bad "malformed queue is refused"
+else
+  ok "malformed queue is refused"
+fi
+[ "$(cat "$BAD_FILE")" = "{ not json" ] \
+  && ok "malformed queue is left untouched" || bad "malformed queue is left untouched"
+
+# FLEET_QUEUE=0 writes nothing at all.
+OPT_FILE="$TMP/fleet-queue-optout.json"
+FLEET_QUEUE=0 FLEET_QUEUE_FILE="$OPT_FILE" "$QUEUE" add x.plan r p >/dev/null 2>&1
+[ -f "$OPT_FILE" ] && bad "FLEET_QUEUE=0 writes nothing" || ok "FLEET_QUEUE=0 writes nothing"
+
+# ── projection: queue[] + today[] over a multi-dispatch day ────────────────
+DAY_DIR="$TMP/events-day"
+mkdir -p "$DAY_DIR"
+python3 - "$DAY_DIR" <<'DAYFIX'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+
+out = sys.argv[1]
+now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+
+
+def ts(delta_s):
+    return (now - timedelta(seconds=delta_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write(name, rows):
+    with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+        for i, row in enumerate(rows, 1):
+            row.update({"schema": "fleet-events/1", "seq": i, "dispatch_id": name[:-6]})
+            fh.write(json.dumps(row) + "\n")
+
+
+# landed today
+write("day-landed.jsonl", [
+    {"ts": ts(3000), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "alpha.plan"},
+    {"ts": ts(2990), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/alpha", "wave": 1, "provider": "claude"},
+    {"ts": ts(2400), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/alpha", "wave": 1, "status": "success", "exit": 0, "duration_s": 590},
+    {"ts": ts(2395), "event": "dispatch_end", "status": "completed",
+     "total": 1, "succeeded": 1, "failed": 0, "duration_s": 605},
+])
+# live now (this is the followed run)
+write("day-live-a.jsonl", [
+    {"ts": ts(120), "event": "dispatch_start", "mode": "wave",
+     "repo": "dev-agents", "plan": "beta.plan"},
+    {"ts": ts(110), "event": "seat_dispatch", "task_id": "0", "agent": "go-backend",
+     "branch": "feat/beta", "wave": 1, "provider": "claude"},
+])
+# live now (second, concurrent)
+write("day-live-b.jsonl", [
+    {"ts": ts(90), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "gamma.plan"},
+    {"ts": ts(80), "event": "seat_dispatch", "task_id": "0", "agent": "web-frontend",
+     "branch": "feat/gamma", "wave": 1, "provider": "kimi"},
+])
+# an older run in the same directory: must not land in today[]
+old = (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+write("day-old.jsonl", [
+    {"ts": old, "event": "dispatch_start", "mode": "wave", "repo": "dev-agents", "plan": "old.plan"},
+    {"ts": old, "event": "dispatch_end", "status": "completed", "total": 0, "succeeded": 0, "failed": 0},
+])
+DAYFIX
+printf 'day-live-a.jsonl\n' > "$DAY_DIR/latest"
+
+DAY_OUT="$TMP/out/live-day.json"
+python3 "$DESK_LIVE" --once --events-dir "$DAY_DIR" --queue-file "$Q_FILE" --out "$DAY_OUT" >/dev/null 2>&1 \
+  && ok "--once with a queue exits 0" || bad "--once with a queue exits 0"
+assert_py "queue[] carries only queued entries, in order" "$DAY_OUT" \
+  '[q["plan_basename"] for q in d["queue"]]==["beta.plan"] and d["queue"][0]["position"]==1'
+assert_py "queue entries carry purpose and repo" "$DAY_OUT" \
+  'd["queue"][0]["purpose"]=="beta declared purpose" and d["queue"][0]["repo"]=="dev-agents"'
+assert_py "queue_meta publishes the newest added_at as the declaration time" "$DAY_OUT" \
+  'd["queue_meta"]["declared"] is True and d["queue_meta"]["declared_at"] and d["queue_meta"]["total"]==2'
+assert_py "a queued plan is never reported as running" "$DAY_OUT" \
+  'all(q["status"]=="queued" for q in d["queue"])'
+assert_py "today[] holds only dispatches that ended on the local day" "$DAY_OUT" \
+  '[t["dispatch_id"] for t in d["today"]]==["day-landed"]'
+assert_py "today entry carries status, duration and the branches created" "$DAY_OUT" \
+  'd["today"][0]["status"]=="settled" and d["today"][0]["duration_s"]==605 and d["today"][0]["branches"]==["feat/alpha"]'
+assert_py "today purpose comes from the queue when the plan is known" "$DAY_OUT" \
+  'd["today"][0]["purpose"].startswith("Alpha purpose") and d["today"][0]["purpose_source"]=="queue"'
+assert_py "every stream of the day is read, not only the newest" "$DAY_OUT" \
+  'd["today_meta"]["streams_read"]==4 and sorted(d["today_meta"]["live"])==["day-live-a","day-live-b"]'
+assert_py "concurrent live dispatches both show seats" "$DAY_OUT" \
+  'sorted(s["dispatch_id"] for s in d["seats"])==["day-live-a","day-live-b"]'
+assert_py "the followed run stays the subject of the page" "$DAY_OUT" \
+  'd["dispatch_id"]=="day-live-a" and d["multi_dispatch"]["followed"]=="day-live-a" and d["multi_dispatch"]["merged_seats"]==1'
+assert_py "merged seats are labelled as foreign to the followed run" "$DAY_OUT" \
+  'all(s.get("foreign") is True for s in d["seats"] if s["dispatch_id"]!="day-live-a")'
+
+# A malformed queue degrades to an empty queue plus a warning, never a crash.
+BAD_OUT="$TMP/out/live-badqueue.json"
+python3 "$DESK_LIVE" --once --events-dir "$DAY_DIR" --queue-file "$BAD_FILE" --out "$BAD_OUT" >/dev/null 2>&1 \
+  && ok "a malformed queue still projects" || bad "a malformed queue still projects"
+assert_py "malformed queue is an empty queue plus a warning" "$BAD_OUT" \
+  'd["queue"]==[] and any("queue file" in w for w in d["warnings"])'
+
+# Replay must not carry today's queue into a historical scrub.
+REPLAY_OUT="$TMP/out/live-replay-queue.json"
+python3 "$DESK_LIVE" --once --events-dir "$DAY_DIR" --queue-file "$Q_FILE" \
+  --dispatch-id day-landed --replay --out "$REPLAY_OUT" >/dev/null 2>&1
+assert_py "replay carries no live queue or day view" "$REPLAY_OUT" \
+  'd["view"]=="replay" and d["queue"]==[] and d["today"]==[]'
+
+echo ""
 echo "----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 echo "----------------------------------------"

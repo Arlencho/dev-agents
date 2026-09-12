@@ -41,6 +41,8 @@ EVENT_SCHEMA_PREFIX = "fleet-events/"
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DEFAULT_EVENTS_DIR = os.path.join(REPO_DIR, "logs", "fleet-events")
+DEFAULT_QUEUE_FILE = os.environ.get(
+    "FLEET_QUEUE_FILE", os.path.join(REPO_DIR, "logs", "fleet-queue.json"))
 DEFAULT_SITE_DIR = os.path.join(REPO_DIR, "site", "experience")
 DEFAULT_PORT = 8777
 DEFAULT_INTERVAL = 2.0
@@ -48,6 +50,8 @@ STALE_AFTER = 120     # seconds without an event → STALE chrome
 OFFLINE_AFTER = 900   # seconds without an event → OFFLINE chrome
 QUIET_AFTER = 90      # running stream with no new events → waiting_on quiet_stream
 RECENT_EVENTS = 50    # tail kept in the projection (already redaction-safe)
+QUEUE_SCHEMA = "fleet-queue/1"
+DAY_SCAN_WINDOW_S = 48 * 3600   # mtime prefilter when scanning the day streams
 
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -181,6 +185,15 @@ def empty_projection(now=None, reason="no dispatch has emitted events yet"):
                       "stale_after_s": STALE_AFTER, "offline_after_s": OFFLINE_AFTER},
         "events_seen": 0,
         "recent_events": [],
+        # Declared intent (logs/fleet-queue.json), never observed motion: the
+        # Floor labels this block as declared and never calls a queued plan
+        # running. Filled by build(); [] here so the key always exists.
+        "queue": [],
+        "queue_meta": {"source": None, "declared": False, "declared_at": None,
+                       "total": 0, "queued": 0, "running": 0, "settled": 0},
+        # Day view: one entry per dispatch that ENDED on this local calendar day.
+        "today": [],
+        "today_meta": {"date": None, "streams_read": 0, "live": [], "ended": 0},
         "warnings": [],
         "view": "live",  # "live" | "replay" — replay never paints a green LIVE LED
         "replay": None,
@@ -231,6 +244,264 @@ def truncate_events(events, as_of_seq=None):
     if has_seq:
         return [e for e in events if isinstance(e.get("seq"), int) and e["seq"] <= cut]
     return events[:cut]
+
+
+# ── queue (declared) ────────────────────────────────────────────────────────
+
+def read_queue(path):
+    """Read logs/fleet-queue.json (fleet-queue/1). Returns (entries, warnings).
+
+    Never raises: a missing file is an empty queue, a malformed one is a warning
+    and an empty queue. The desk must never fail because intent was not written.
+    """
+    if not path or not os.path.isfile(path):
+        return [], []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return [], ["queue file %s is unreadable or malformed" % rel(path)]
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+        return [], ["queue file %s is not a %s document" % (rel(path), QUEUE_SCHEMA)]
+    if data.get("schema") != QUEUE_SCHEMA:
+        return [], ["queue file %s carries schema %r, expected %s"
+                    % (rel(path), data.get("schema"), QUEUE_SCHEMA)]
+    return [e for e in data["entries"] if isinstance(e, dict)], []
+
+
+def queue_view(entries):
+    """Queued entries only, in declared order. A running plan is not 'up next'."""
+    out = []
+    position = 0
+    for entry in entries:
+        if (entry.get("status") or "queued") != "queued":
+            continue
+        position += 1
+        plan = str(entry.get("plan") or "")
+        out.append({
+            "position": position,
+            "plan": plan,
+            "plan_basename": os.path.basename(plan),
+            "repo": entry.get("repo") or None,
+            "purpose": entry.get("purpose") or None,
+            "added_at": entry.get("added_at") or None,
+            "status": "queued",
+        })
+    return out
+
+
+def queue_meta(entries, path):
+    """Provenance for the queue block: who declared it and when it last changed."""
+    tally = {"queued": 0, "running": 0, "settled": 0}
+    newest = None
+    for entry in entries:
+        status = entry.get("status") or "queued"
+        tally[status] = tally.get(status, 0) + 1
+        added = entry.get("added_at")
+        if isinstance(added, str) and (newest is None or added > newest):
+            newest = added
+    return {
+        "source": rel(path) if path else None,
+        "declared": bool(entries),
+        "declared_at": newest,
+        "total": len(entries),
+        "queued": tally.get("queued", 0),
+        "running": tally.get("running", 0),
+        "settled": tally.get("settled", 0),
+    }
+
+
+def queue_purpose_index(entries):
+    """plan basename -> {purpose, repo, plan} so the day view can name a run."""
+    index = {}
+    for entry in entries:
+        plan = str(entry.get("plan") or "")
+        base = os.path.basename(plan)
+        if base and base not in index:
+            index[base] = {"plan": plan,
+                           "purpose": entry.get("purpose") or None,
+                           "repo": entry.get("repo") or None}
+    return index
+
+
+# ── day view (every stream of the local calendar day) ───────────────────────
+
+_DAY_CACHE = {}   # path -> (mtime, size, summary); settled streams parse once
+
+
+def local_date(dt_utc):
+    """Local calendar date of a naive-UTC timestamp (the operator's day)."""
+    if dt_utc is None:
+        return None
+    return dt_utc.replace(tzinfo=timezone.utc).astimezone().date()
+
+
+def summarize_stream(path):
+    """One dispatch, folded to the facts the day view needs. Cached by mtime."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    key = (stat.st_mtime, stat.st_size)
+    cached = _DAY_CACHE.get(path)
+    if cached and cached[0] == key:
+        return cached[1]
+
+    events, _malformed = read_events(path)
+    if not events:
+        _DAY_CACHE[path] = (key, None)
+        return None
+
+    summary = {
+        "dispatch_id": os.path.basename(path)[:-6],
+        "source": rel(path),
+        "repo": None, "plan": None, "mode": "wave",
+        "started_at": None, "ended_at": None,
+        "status": "running", "end_status": None,
+        "duration_s": None, "seats": 0, "succeeded": None, "failed": None,
+        "branches": [],
+    }
+    seat_ids = set()
+    for ev in events:
+        if ev.get("dispatch_id"):
+            summary["dispatch_id"] = ev["dispatch_id"]
+        kind = ev.get("event")
+        if kind == "dispatch_start":
+            summary["repo"] = ev.get("repo")
+            summary["plan"] = ev.get("plan")
+            summary["started_at"] = ev.get("ts")
+            if ev.get("mode"):
+                summary["mode"] = ev["mode"]
+        elif kind in ("seat_dispatch", "seat_exit"):
+            if ev.get("task_id") is not None:
+                seat_ids.add(str(ev["task_id"]))
+            branch = ev.get("branch")
+            if branch and branch not in summary["branches"]:
+                summary["branches"].append(branch)
+        elif kind == "dispatch_end":
+            summary["ended_at"] = ev.get("ts")
+            summary["end_status"] = ev.get("status")
+            summary["status"] = "settled" if ev.get("status") == "completed" else (
+                ev.get("status") or "settled")
+            if isinstance(ev.get("duration_s"), int):
+                summary["duration_s"] = ev["duration_s"]
+            for key_name in ("succeeded", "failed"):
+                if isinstance(ev.get(key_name), int):
+                    summary[key_name] = ev[key_name]
+    summary["seats"] = len(seat_ids)
+    _DAY_CACHE[path] = (key, summary)
+    return summary
+
+
+def day_streams(events_dir, now):
+    """Stream summaries that could belong to the local day (mtime prefiltered)."""
+    try:
+        names = sorted(n for n in os.listdir(events_dir) if n.endswith(".jsonl"))
+    except OSError:
+        return []
+    cutoff = time.time() - DAY_SCAN_WINDOW_S
+    out = []
+    for name in names:
+        path = os.path.join(events_dir, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                continue
+        except OSError:
+            continue
+        summary = summarize_stream(path)
+        if summary:
+            out.append(summary)
+    return out
+
+
+def today_view(events_dir, now, entries):
+    """Every dispatch that ENDED on this local calendar day, plus the live ones.
+
+    Reads every stream file of the day, not only the newest, so concurrent
+    dispatches all appear. Purpose and plan path come from the queue when the
+    basename matches; the stream only ever carries a basename.
+    """
+    today = local_date(now)
+    index = queue_purpose_index(entries)
+    landed, live = [], []
+    summaries = day_streams(events_dir, now)
+    for summary in summaries:
+        ended = parse_ts(summary.get("ended_at"))
+        started = parse_ts(summary.get("started_at"))
+        known = index.get(os.path.basename(summary.get("plan") or "")) or {}
+        if ended is not None and local_date(ended) == today:
+            landed.append({
+                "dispatch_id": summary["dispatch_id"],
+                "source": summary["source"],
+                "plan": known.get("plan") or summary.get("plan"),
+                "plan_basename": os.path.basename(summary.get("plan") or ""),
+                "repo": summary.get("repo") or known.get("repo"),
+                "purpose": known.get("purpose"),
+                "purpose_source": "queue" if known.get("purpose") else "none",
+                "status": summary.get("status"),
+                "end_status": summary.get("end_status"),
+                "duration_s": summary.get("duration_s"),
+                "started_at": summary.get("started_at"),
+                "ended_at": summary.get("ended_at"),
+                "seats": summary.get("seats"),
+                "succeeded": summary.get("succeeded"),
+                "failed": summary.get("failed"),
+                "branches": summary.get("branches") or [],
+            })
+        elif ended is None and started is not None and local_date(started) == today:
+            live.append(summary)
+    landed.sort(key=lambda r: r.get("ended_at") or "", reverse=True)
+    live.sort(key=lambda r: r.get("started_at") or "")
+    meta = {
+        "date": today.isoformat(),
+        "streams_read": len(summaries),
+        "live": [s["dispatch_id"] for s in live],
+        "ended": len(landed),
+    }
+    return landed, live, meta
+
+
+def merge_live_seats(proj, events_dir, now, live_summaries):
+    """Show the seats of every live dispatch when more than one is running.
+
+    The single-dispatch follow is unchanged: the resolved stream stays the
+    subject of the page (status, wave, waiting_on, event tail). This only adds
+    the seats of the other dispatches that are live on the same day, each tagged
+    with its dispatch_id, so a second run is never invisible.
+    """
+    primary = proj.get("dispatch_id")
+    for seat in proj.get("seats") or []:
+        seat.setdefault("dispatch_id", primary)
+    others = [s for s in live_summaries if s["dispatch_id"] != primary]
+    if not others:
+        return proj
+    merged = 0
+    for summary in others:
+        path = os.path.join(events_dir, summary["dispatch_id"] + ".jsonl")
+        if not os.path.isfile(path):
+            continue
+        events, malformed = read_events(path)
+        if not events:
+            continue
+        side = project(events, now=now, source=rel(path), malformed=malformed)
+        for seat in side.get("seats") or []:
+            seat["dispatch_id"] = side.get("dispatch_id") or summary["dispatch_id"]
+            seat["foreign"] = True     # not the followed run: honest label
+            proj["seats"].append(seat)
+            merged += 1
+    if merged:
+        counts = {"queued": 0, "in_flight": 0, "blocked": 0, "settled": 0,
+                  "total": len(proj["seats"])}
+        for seat in proj["seats"]:
+            pipe = seat.get("pipeline") or "queued"
+            counts[pipe] = counts.get(pipe, 0) + 1
+        proj["counts"] = counts
+        proj["multi_dispatch"] = {
+            "live": [s["dispatch_id"] for s in live_summaries],
+            "followed": primary,
+            "merged_seats": merged,
+        }
+    return proj
 
 
 def list_runs(events_dir):
@@ -554,17 +825,41 @@ def project(events, now=None, source=None, malformed=0):
     return out
 
 
-def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False):
+def attach_queue_and_day(proj, events_dir, queue_file, now):
+    """Fold declared intent (queue) and the local day into a projection.
+
+    Both are independent of which stream is followed: an idle desk with armed
+    plans still shows them, and a desk following one run still lists every
+    dispatch that ended today. Replay projections get neither, because a
+    historical scrub must not carry today's queue.
+    """
+    entries, warnings = read_queue(queue_file)
+    proj["queue"] = queue_view(entries)
+    proj["queue_meta"] = queue_meta(entries, queue_file)
+    landed, live, meta = today_view(events_dir, now, entries)
+    proj["today"] = landed
+    proj["today_meta"] = meta
+    for warning in warnings:
+        proj.setdefault("warnings", []).append(warning)
+    merge_live_seats(proj, events_dir, now, live)
+    return proj
+
+
+def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False,
+          queue_file=None):
     """Resolve the current stream and project it (never raises on missing data).
 
     Phase C: pass ``as_of_seq`` and/or ``replay=True`` to get a historical
     projection. Replay always sets ``view=replay`` so the Floor cannot paint a
     green LIVE LED for the past.
     """
+    now = now or utcnow()
+    queue_file = DEFAULT_QUEUE_FILE if queue_file is None else queue_file
     path, resolved_id = resolve_stream(events_dir, dispatch_id)
     if not path:
-        return empty_projection(
+        proj = empty_projection(
             now, reason="no event stream in %s — run a dispatch (FLEET_EVENTS=1)" % rel(events_dir))
+        return attach_queue_and_day(proj, events_dir, queue_file, now)
     events, malformed = read_events(path)
     total = len(events)
     if as_of_seq is not None:
@@ -578,7 +873,8 @@ def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False):
         # Use the cut seq (or full length when replaying the whole settled run).
         cut = as_of_seq if as_of_seq is not None else total
         mark_replay(proj, cut, total)
-    return proj
+        return proj
+    return attach_queue_and_day(proj, events_dir, queue_file, now)
 
 
 def write_projection(proj, out_path):
@@ -603,7 +899,7 @@ def serve(args, out_path):
     stop = threading.Event()
 
     def refresh():
-        proj = build(args.events_dir, args.dispatch_id)
+        proj = build(args.events_dir, args.dispatch_id, queue_file=args.queue_file)
         payload = json.dumps(proj)
         if payload != state["json"]:
             state["json"] = payload
@@ -740,6 +1036,8 @@ def main(argv=None):
         description="Fleet Desk Ops Floor: tail dispatch events → live.json (+ optional local server)")
     parser.add_argument("--events-dir", default=DEFAULT_EVENTS_DIR,
                         help="directory of *.jsonl event streams (default: logs/fleet-events)")
+    parser.add_argument("--queue-file", default=DEFAULT_QUEUE_FILE,
+                        help="declared queue to fold in (default: logs/fleet-queue.json)")
     parser.add_argument("--site-dir", default=DEFAULT_SITE_DIR,
                         help="static site root to serve (default: site/experience)")
     parser.add_argument("--out", default=None,
@@ -775,7 +1073,8 @@ def main(argv=None):
 
     if args.once or args.watch:
         proj = build(args.events_dir, args.dispatch_id,
-                     as_of_seq=args.as_of_seq, replay=args.replay)
+                     as_of_seq=args.as_of_seq, replay=args.replay,
+                     queue_file=args.queue_file)
         write_projection(proj, out_path)
         if args.print_json:
             print(json.dumps(proj, indent=2))
@@ -791,7 +1090,8 @@ def main(argv=None):
                 time.sleep(args.interval)
                 write_projection(
                     build(args.events_dir, args.dispatch_id,
-                          as_of_seq=args.as_of_seq, replay=args.replay),
+                          as_of_seq=args.as_of_seq, replay=args.replay,
+                          queue_file=args.queue_file),
                     out_path)
         except KeyboardInterrupt:
             print("\ndesk-live: stopped")
