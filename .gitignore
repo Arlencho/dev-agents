@@ -22,6 +22,7 @@ learnings/*.jsonl
 # Rate-cap sentinel runtime state (per-machine)
 logs/provider-state/
 
+
 # Fleet Desk Phase B live event streams (per-machine runtime truth, never history)
 logs/fleet-events/
 
@@ -35,3 +36,6 @@ site/experience/
 # Python bytecode from the Fleet Desk generator
 __pycache__/
 *.pyc
+
+# Agent working notes: written at the repo root every run, never history
+handoff.md

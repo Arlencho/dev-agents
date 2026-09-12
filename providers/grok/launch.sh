@@ -30,17 +30,24 @@ command -v grok >/dev/null 2>&1 || {
 }
 
 ROLES_DIR="${ROLES_DIR:-$SCRIPT_DIR/../../roles}"
-CHARTER_FILE="$ROLES_DIR/$ROLE.md"
+# Decision: the catch-all seat gets a real charter (roles/claude.md) rather than
+# a special case here, so every dispatched role name resolves to a file.
+# Resolve the charter explicitly anyway: a role with no file under roles/ must
+# leave CHARTER_FILE empty and quoted, never a half-built word the shell runs.
+CHARTER_FILE=""
+if [ -n "${ROLE:-}" ] && [ -n "${ROLES_DIR:-}" ] && [ -f "$ROLES_DIR/$ROLE.md" ]; then
+    CHARTER_FILE="$ROLES_DIR/$ROLE.md"
+fi
 
 PROMPT="$TASK"
-if [ -f "$CHARTER_FILE" ]; then
+if [ -n "$CHARTER_FILE" ]; then
     PROMPT="## Your Role Charter
 $(strip_frontmatter "$CHARTER_FILE")
 
 ## Task
 $TASK"
 else
-    echo "WARNING: charter $CHARTER_FILE not found — running without role charter" >&2
+    echo "WARNING: no charter for role '$ROLE' under $ROLES_DIR, running without a role charter" >&2
 fi
 
 # Claude tier / product aliases are meaningless here; pass through vendor-native

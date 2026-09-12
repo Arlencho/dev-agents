@@ -54,7 +54,42 @@ else
 fi
 rm -f "$ARGV_LOG"
 
-echo "== row 15: plan-critic.sh skips (exit 3) when grok CLI absent =="
+echo "== row 15: a role with no charter runs without one instead of crashing =="
+# The catch-all seat used to reach the vendor launchers with no roles/<role>.md
+# behind it; the half-built charter path was executed as a command
+# ("=/…/roles/claude.md: No such file or directory", exit 127 mid-launcher).
+EMPTY_ROLES=$(mktemp -d)
+for vendor in kimi grok; do
+    got=$(SHIM_MODE=success ROLES_DIR="$EMPTY_ROLES" run_launcher "$vendor" claude "do the thing")
+    check "$vendor / charterless role" 0 "$got"
+done
+NOCHARTER_ERR=$(SHIM_MODE=success ROLES_DIR="$EMPTY_ROLES" PATH="$SHIMS:$PATH" \
+    "$REPO_DIR/providers/kimi/launch.sh" claude "do the thing" 2>&1 >/dev/null)
+if echo "$NOCHARTER_ERR" | grep -q "no charter for role 'claude'" \
+   && ! echo "$NOCHARTER_ERR" | grep -q "No such file or directory"; then
+    echo "  ok   charterless role warns instead of running a bogus command"; pass=$((pass+1))
+else
+    echo "  FAIL charterless role did not warn cleanly: $NOCHARTER_ERR"; fail=$((fail+1))
+fi
+rmdir "$EMPTY_ROLES"
+
+echo "== row 16: the catch-all seat has a charter of its own =="
+if [ -f "$REPO_DIR/roles/claude.md" ]; then
+    echo "  ok   roles/claude.md exists"; pass=$((pass+1))
+else
+    echo "  FAIL roles/claude.md missing"; fail=$((fail+1))
+fi
+ARGV_LOG2="$(mktemp)"
+SHIM_MODE=success SHIM_ARGV_LOG="$ARGV_LOG2" PATH="$SHIMS:$PATH" \
+    ROLES_DIR="$REPO_DIR/roles" "$REPO_DIR/providers/kimi/launch.sh" claude "sweep the queue" >/dev/null 2>&1
+if tr '\0' '\n' < "$ARGV_LOG2" | grep -qF "Your Role Charter"; then
+    echo "  ok   catch-all charter reaches the prompt"; pass=$((pass+1))
+else
+    echo "  FAIL catch-all charter missing from prompt argv"; fail=$((fail+1))
+fi
+rm -f "$ARGV_LOG2"
+
+echo "== row 17: plan-critic.sh skips (exit 3) when grok CLI absent =="
 got=$(PATH="/usr/bin:/bin" "$REPO_DIR/providers/grok/plan-critic.sh" "$REPO_DIR/README.md" >/dev/null 2>&1; echo $?)
 check "plan-critic / no-grok" 3 "$got"
 
