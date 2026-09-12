@@ -196,3 +196,9 @@ worktree-sweep-install: ## Install the daily worktree sweep backstop (launchd, s
 
 worktree-sweep-uninstall: ## Remove the daily worktree sweep backstop
 	@./scripts/worktree-sweep-uninstall.sh
+
+seat-worktree-sweep: ## List per-seat worktrees and dispatch runtimes under ~/dev older than a day (dry run)
+	@./scripts/seat-worktree-sweep.sh
+
+seat-worktree-sweep-apply: ## Remove per-seat worktrees and dispatch runtimes under ~/dev older than a day
+	@./scripts/seat-worktree-sweep.sh --apply
