@@ -63,6 +63,25 @@
     return isNaN(d.getTime()) ? String(ts || "—") : d.toUTCString().slice(17, 25) + "Z";
   }
 
+  /* Plain-words durations for sentences: minutes, never "12m05s". */
+  function fmtMin(secs) {
+    if (typeof secs !== "number" || !isFinite(secs) || secs < 0) return "—";
+    var s = Math.floor(secs);
+    if (s < 60) return "under a minute";
+    if (s < 3600) return Math.round(s / 60) + " min";
+    var h = Math.floor(s / 3600);
+    var m = Math.round((s % 3600) / 60);
+    return m ? h + " h " + m + " min" : h + " h";
+  }
+
+  function fmtAgo(secs) {
+    if (typeof secs !== "number" || !isFinite(secs) || secs < 0) return "—";
+    var s = Math.floor(secs);
+    if (s < 60) return s + " s ago";
+    if (s < 3600) return Math.round(s / 60) + " min ago";
+    return Math.floor(s / 3600) + " h ago";
+  }
+
   /* Live: trust timestamps. Replay: never claim live. */
   function liveState(d) {
     if (d && (d.view === "replay" || (d.replay && d.replay.watermark === "REPLAY"))) {
@@ -211,6 +230,56 @@
     }).join("");
   }
 
+  /* Top line in plain words, from the summary object: how many running, how
+     many up next, how many landed today, when the last event arrived. A
+     replay carries no summary, so the line goes away instead of guessing. */
+  function renderSummary(d) {
+    var el = $("floor-summary");
+    if (!el) return;
+    var s = d.summary;
+    var parts = [];
+    if (s && typeof s === "object") {
+      if (typeof s.running === "number") parts.push(s.running + " running");
+      if (typeof s.queued === "number") parts.push(s.queued + " up next");
+      if (typeof s.landed_today === "number") parts.push(s.landed_today + " landed today");
+      if (typeof s.last_event_age_s === "number") parts.push("last event " + fmtAgo(s.last_event_age_s));
+    }
+    if (!parts.length) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    el.hidden = false;
+    el.textContent = parts.join(" · ");
+  }
+
+  /* The LED states explained in place, one short sentence for the state that
+     applies right now. Replay needs none: its watermark already says what it
+     is, and that copy is not touched here. */
+  function renderStateNote(d, st) {
+    var el = $("floor-state-note");
+    if (!el) return;
+    var stale = (d.staleness && d.staleness.stale_after_s) || 120;
+    var offline = (d.staleness && d.staleness.offline_after_s) || 900;
+    var txt = "";
+    if (st.state === "live") {
+      txt = "Live: events are arriving, so this page shows what is happening now.";
+    } else if (st.state === "stale") {
+      txt = "Stale: no new event for over " + fmtMin(stale) +
+        ", so the page shows the last known state and the clocks stay frozen.";
+    } else if (st.state === "offline") {
+      txt = "Offline: no new event for over " + fmtMin(offline) +
+        ", so everything below is history, not the present.";
+    }
+    if (!txt) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    el.hidden = false;
+    el.textContent = txt;
+  }
+
   function renderCounts(d) {
     var c = d.counts || {};
     var ids = { in_flight: "pipe-inflight", blocked: "pipe-blocked", settled: "pipe-settled" };
@@ -260,12 +329,44 @@
       '<span class="mono faint">' + esc(counts) + "</span></div>";
   }
 
-  /* The now view: what every live seat is doing, why, and for how long.
-     Purpose and task come from the plan file (projection side), elapsed ticks
-     in the browser from the seat_dispatch timestamp, and a seat whose last sign
-     of life is older than the quiet threshold wears the watermark badge. */
+  /* The now view: one running seat reads as one plain sentence, built from the
+     seats[].now object the projection folds for exactly this. Every field is
+     independently nullable, so a missing fact drops its clause instead of
+     printing a guess. Ids and schema words (branch, attempt) are demoted to a
+     dim secondary line. The ticking timer and the quiet badge keep their
+     rules: the clock only runs on a live stream, quiet wears violet. */
+  function nowSentence(now) {
+    var role = esc(now.role || "this seat");
+    var doing = now.phase
+      ? "is " + esc(now.phase) + (now.program ? " (" + esc(now.program) + ")" : "")
+      : "is at work";
+    var s = "<strong>" + role + "</strong> " + doing;
+    var purpose = String(now.purpose || "").replace(/[.\s]+$/, "");
+    if (purpose) s += " on " + esc(purpose);
+    if (typeof now.wave === "number") {
+      s += ", wave " + now.wave +
+        (typeof now.wave_total === "number" ? " of " + now.wave_total : "");
+    }
+    if (typeof now.elapsed_s === "number") s += ", " + fmtMin(now.elapsed_s);
+    if (typeof now.heartbeat_age_s === "number") s += ", heartbeat " + fmtAgo(now.heartbeat_age_s);
+    return s + ".";
+  }
+
   function nowRow(seat) {
     var quiet = seat.quiet === true;
+    var quietBadge = quiet
+      ? '<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>' : "";
+    var timer = '<span class="timer mono" data-elapsed-from="' + esc(seat.started_at || "") + '">' +
+      fmtDur(seat.elapsed_s) + "</span>";
+    if (seat.now && typeof seat.now === "object") {
+      return '<li class="nowrow' + (quiet ? " quiet" : "") + '">' +
+        '<div class="nowhead">' + seatPill(seat) + quietBadge + timer + "</div>" +
+        '<div class="nowsent">' + nowSentence(seat.now) + "</div>" +
+        '<div class="nowmeta"><span class="mono faint">' + esc(seat.branch || "branch not reported") + "</span>" +
+        '<span class="faint">attempt ' + esc(seat.attempt || 1) + "</span></div></li>";
+    }
+    /* Older projection or replay: seats[].now is null, so fall back to the
+       plan-header layout rather than inventing a present-tense sentence. */
     var wave = (typeof seat.wave === "number")
       ? ("wave " + seat.wave + (seat.wave_total ? " of " + seat.wave_total : ""))
       : "wave not reported";
@@ -275,10 +376,7 @@
       : "no heartbeat yet";
     return '<li class="nowrow' + (quiet ? " quiet" : "") + '">' +
       '<div class="nowhead"><span class="role">' + esc(seat.agent || seat.task_id) + "</span>" +
-      seatPill(seat) +
-      (quiet ? '<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>' : "") +
-      '<span class="timer mono" data-elapsed-from="' + esc(seat.started_at || "") + '">' +
-      fmtDur(seat.elapsed_s) + "</span></div>" +
+      seatPill(seat) + quietBadge + timer + "</div>" +
       '<div class="nowpurpose">' + esc(seat.plan_purpose || "purpose not declared in the plan header") + "</div>" +
       '<div class="nowtask">' + esc(seat.task || "task line not resolvable from the plan on this machine") + "</div>" +
       activityLine(seat) +
@@ -298,7 +396,8 @@
       live.forEach(function (s) { if (s.dispatch_id) runs[s.dispatch_id] = 1; });
       var n = Object.keys(runs).length;
       note.textContent = live.length
-        ? live.length + " live seat(s) across " + (n || 1) + " dispatch(es)"
+        ? live.length + (live.length === 1 ? " seat live" : " seats live") +
+          " across " + (n || 1) + ((n || 1) === 1 ? " dispatch" : " dispatches")
         : "no seat is live";
     }
     box.innerHTML = live.length
@@ -379,6 +478,10 @@
       return;
     }
     box.innerHTML = items.map(function (t) {
+      /* Outcome in words, failed visibly distinct from landed. */
+      var word = t.status === "settled" ? "landed"
+        : t.status === "failed" ? "failed"
+        : t.status === "aborted" ? "aborted" : (t.status || "unknown");
       var cls = t.status === "settled" ? "st st-done"
         : (t.status === "aborted" || t.status === "failed") ? "st st-fail" : "st st-unk";
       var branches = (t.branches || []).map(function (b) {
@@ -389,8 +492,8 @@
         esc(t.purpose || t.plan_basename || t.dispatch_id) + "</span>" +
         '<span class="tmeta"><span class="vendor">' + esc(t.repo || "repo not reported") + "</span> " +
         (branches || '<span class="faint">no branch reported</span>') + "</span></span>" +
-        '<span class="' + cls + '">' + esc(t.status || "unknown") + "</span>" +
-        '<span class="timer mono">' + fmtDur(t.duration_s) + "</span></li>";
+        '<span class="' + cls + '">' + esc(word) + "</span>" +
+        '<span class="timer mono">' + fmtMin(t.duration_s) + "</span></li>";
     }).join("");
   }
 
@@ -632,8 +735,10 @@
     // Hard honesty: never green LIVE when view says replay.
     if (d.view === "replay" && st.state === "live") st = { state: "replay", age: st.age };
     elapsedLive = st.state === "live";
+    renderSummary(d);
     renderWatermark(st, d);
     renderAmbient(d, st);
+    renderStateNote(d, st);
     renderWaiting(d);
     renderCounts(d);
     renderNow(d);

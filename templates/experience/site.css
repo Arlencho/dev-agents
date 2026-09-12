@@ -413,6 +413,13 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 .led.off { background: var(--faint); }
 .ambient .msg { font-size: 13px; }
 .ambient .meta { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+/* The LED state explained in place, one short sentence on its own row. */
+.ambient .state-note { flex-basis: 100%; font-size: 12px; color: var(--muted); }
+.ambient .state-note[hidden] { display: none; }
+
+/* Top line in plain words (issue 69): counts from the summary object only. */
+.floor-summary { margin: -4px 0 14px; font-size: 14px; }
+.floor-summary[hidden] { display: none; }
 
 .waiting {
   display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
@@ -544,6 +551,9 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 .nowhead .timer { margin-left: auto; font-size: 12px; color: var(--muted); }
 .nowpurpose { color: var(--muted); line-height: 1.35; }
 .nowtask { line-height: 1.4; }
+/* One running seat as one plain sentence (issue 69); ids stay on the dim
+   .nowmeta line below it. */
+.nowsent { line-height: 1.45; }
 .nowmeta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; }
 /* One line of live activity: the phase word wears the in-flight pill, then the
    tool, the repo-relative path, and the counts the stream reported. */

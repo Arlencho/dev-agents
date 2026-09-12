@@ -798,6 +798,30 @@ class Renderer:
         return f"{m // 60}h{m % 60:02d}m"
 
     @staticmethod
+    def _fmt_min(secs: Any) -> str:
+        """Plain-words duration for sentences: minutes, never ``12m05s``."""
+        if not isinstance(secs, (int, float)) or isinstance(secs, bool) or secs < 0:
+            return "—"
+        s = int(secs)
+        if s < 60:
+            return "under a minute"
+        if s < 3600:
+            return f"{round(s / 60)} min"
+        h, m = s // 3600, round((s % 3600) / 60)
+        return f"{h} h {m} min" if m else f"{h} h"
+
+    @staticmethod
+    def _fmt_ago(secs: Any) -> str:
+        if not isinstance(secs, (int, float)) or isinstance(secs, bool) or secs < 0:
+            return "—"
+        s = int(secs)
+        if s < 60:
+            return f"{s} s ago"
+        if s < 3600:
+            return f"{round(s / 60)} min ago"
+        return f"{s // 3600} h ago"
+
+    @staticmethod
     def _live_state(live: Dict[str, Any]) -> Tuple[str, Optional[int]]:
         """live/stale/offline/replay derived at BUILD time.
 
@@ -998,24 +1022,117 @@ class Renderer:
                 f'<span class="faint">{" ".join(what) or "no tool reported yet"}</span>'
                 f'<span class="mono faint">{esc(counts)}</span></div>')
 
-    def _live_now_card(self, live: Dict[str, Any]) -> str:
-        """The now view: what every live seat is doing, why, and for how long.
+    @staticmethod
+    def _is_num(v: Any) -> bool:
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
 
-        Purpose and task come from the plan file through the projection (first
-        comment line, first sentence of the seat line capped at 120 chars), never
-        from the event stream and never the whole task body. Elapsed is a build
-        stamp here; assets/floor.js ticks the same element every second from
-        data-elapsed-from. A seat whose last sign of life is older than the quiet
-        threshold wears the watermark badge.
+    def _now_sentence(self, now: Dict[str, Any]) -> str:
+        """One running seat as one plain sentence (mirrored in floor.js).
+
+        Built only from the seats[].now object the projection folds for this.
+        Every field is independently nullable, so a missing fact drops its
+        clause instead of printing a guess. Ids never enter the sentence.
+        """
+        role = esc(now.get("role") or "this seat")
+        phase = now.get("phase")
+        if phase:
+            doing = f"is {esc(phase)}"
+            if now.get("program"):
+                doing += f" ({esc(now['program'])})"
+        else:
+            doing = "is at work"
+        s = f"<strong>{role}</strong> {doing}"
+        purpose = str(now.get("purpose") or "").rstrip(". \t")
+        if purpose:
+            s += f" on {esc(purpose)}"
+        if self._is_num(now.get("wave")):
+            s += f", wave {now['wave']}"
+            if self._is_num(now.get("wave_total")):
+                s += f" of {now['wave_total']}"
+        if self._is_num(now.get("elapsed_s")):
+            s += f", {self._fmt_min(now['elapsed_s'])}"
+        if self._is_num(now.get("heartbeat_age_s")):
+            s += f", heartbeat {self._fmt_ago(now['heartbeat_age_s'])}"
+        return s + "."
+
+    def _floor_summary_html(self, live: Dict[str, Any]) -> str:
+        """Top line in plain words from the summary object (issue 69).
+
+        A replay carries no summary, so the line stays hidden instead of
+        guessing; floor.js fills the same element on every poll.
+        """
+        s = live.get("summary")
+        parts = []
+        if isinstance(s, dict):
+            if self._is_num(s.get("running")):
+                parts.append(f"{s['running']} running")
+            if self._is_num(s.get("queued")):
+                parts.append(f"{s['queued']} up next")
+            if self._is_num(s.get("landed_today")):
+                parts.append(f"{s['landed_today']} landed today")
+            if self._is_num(s.get("last_event_age_s")):
+                parts.append(f"last event {self._fmt_ago(s['last_event_age_s'])}")
+        if not parts:
+            return '<p class="floor-summary" id="floor-summary" hidden></p>'
+        return f'<p class="floor-summary" id="floor-summary">{esc(" · ".join(parts))}</p>'
+
+    def _floor_state_note_html(self, live: Dict[str, Any], state: str) -> str:
+        """The LED state explained in place, one short sentence when it applies.
+
+        Replay needs none: its watermark already says what it is, and that copy
+        is not touched here. floor.js recomputes the same sentence on every
+        poll from the staleness thresholds the projection publishes.
+        """
+        staleness = live.get("staleness") or {}
+        stale = staleness.get("stale_after_s") or 120
+        offline = staleness.get("offline_after_s") or 900
+        txt = ""
+        if state == "live":
+            txt = "Live: events are arriving, so this page shows what is happening now."
+        elif state == "stale":
+            txt = (f"Stale: no new event for over {self._fmt_min(stale)}, so the page "
+                   "shows the last known state and the clocks stay frozen.")
+        elif state == "offline":
+            txt = (f"Offline: no new event for over {self._fmt_min(offline)}, so "
+                   "everything below is history, not the present.")
+        if not txt:
+            return '<span class="state-note" id="floor-state-note" hidden></span>'
+        return f'<span class="state-note" id="floor-state-note">{esc(txt)}</span>'
+
+    def _live_now_card(self, live: Dict[str, Any]) -> str:
+        """The now view: one running seat reads as one plain sentence.
+
+        The sentence comes from seats[].now (projection side); elapsed ticks in
+        the browser from the seat_dispatch timestamp, and a seat whose last
+        sign of life is older than the quiet threshold wears the watermark
+        badge. A seat with now=null (older projection, replay) keeps the older
+        plan-header layout rather than an invented present tense.
         """
         seats = [s for s in (live.get("seats") or []) if s.get("status") == "running"]
         runs = {s.get("dispatch_id") for s in seats if s.get("dispatch_id")}
-        note = (f"{len(seats)} live seat(s) across {len(runs) or 1} dispatch(es)"
+        n_runs = len(runs) or 1
+        note = (f"{len(seats)} {'seat' if len(seats) == 1 else 'seats'} live across "
+                f"{n_runs} {'dispatch' if n_runs == 1 else 'dispatches'}"
                 if seats else "no seat is live")
         if seats:
             rows = []
             for s in seats:
                 quiet = s.get("quiet") is True
+                quiet_badge = ('<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>'
+                               if quiet else "")
+                timer = (f'<span class="timer mono" data-elapsed-from="{esc(s.get("started_at") or "")}">'
+                         f'{self._fmt_dur(s.get("elapsed_s"))}</span>')
+                now = s.get("now")
+                if isinstance(now, dict):
+                    rows.append(
+                        f'<li class="nowrow{" quiet" if quiet else ""}">'
+                        f'<div class="nowhead">{self._seat_pill(s)}{quiet_badge}{timer}</div>'
+                        f'<div class="nowsent">{self._now_sentence(now)}</div>'
+                        f'<div class="nowmeta"><span class="mono faint">'
+                        f'{esc(s.get("branch") or "branch not reported")}</span>'
+                        f'<span class="faint">attempt {esc(s.get("attempt") or 1)}</span></div></li>'
+                    )
+                    continue
                 wave = (f'wave {s["wave"]}' + (f' of {s["wave_total"]}' if s.get("wave_total") else "")
                         if isinstance(s.get("wave"), int) else "wave not reported")
                 if s.get("last_heartbeat_ts"):
@@ -1027,11 +1144,7 @@ class Renderer:
                 rows.append(
                     f'<li class="nowrow{" quiet" if quiet else ""}">'
                     f'<div class="nowhead"><span class="role">{esc(s.get("agent") or s.get("task_id"))}</span>'
-                    f'{self._seat_pill(s)}'
-                    + ('<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>'
-                       if quiet else "")
-                    + f'<span class="timer mono" data-elapsed-from="{esc(s.get("started_at") or "")}">'
-                    f'{self._fmt_dur(s.get("elapsed_s"))}</span></div>'
+                    f'{self._seat_pill(s)}{quiet_badge}{timer}</div>'
                     f'<div class="nowpurpose">{esc(s.get("plan_purpose") or "purpose not declared in the plan header")}</div>'
                     f'<div class="nowtask">{esc(s.get("task") or "task line not resolvable from the plan on this machine")}</div>'
                     + self._live_activity_line(s)
@@ -1115,6 +1228,9 @@ class Renderer:
             rows = []
             for t in today:
                 status = t.get("status") or "unknown"
+                # Outcome in words, failed visibly distinct from landed.
+                word = {"settled": "landed", "failed": "failed",
+                        "aborted": "aborted"}.get(status, status)
                 cls = ("st st-done" if status == "settled"
                        else "st st-fail" if status in ("aborted", "failed")
                        else "st st-unk")
@@ -1127,8 +1243,8 @@ class Renderer:
                     f'{esc(t.get("purpose") or t.get("plan_basename") or t.get("dispatch_id"))}</span>'
                     f'<span class="tmeta"><span class="vendor">{esc(t.get("repo") or "repo not reported")}</span> '
                     f"{branches}</span></span>"
-                    f'<span class="{cls}">{esc(status)}</span>'
-                    f'<span class="timer mono">{esc(self._fmt_dur(t.get("duration_s")))}</span></li>'
+                    f'<span class="{cls}">{esc(word)}</span>'
+                    f'<span class="timer mono">{esc(self._fmt_min(t.get("duration_s")))}</span></li>'
                 )
             rows_html = "".join(rows)
         else:
@@ -1226,12 +1342,14 @@ class Renderer:
       Settled runs open the Phase C <strong>REPLAY</strong> scrubber (never a green LIVE LED).
       Law: <span class="mono">docs/proposals/fleet-desk-v2-SYNTHESIS.md</span>.</p>
     </div>
+    <p class="floor-summary" id="floor-summary" hidden></p>
     {self._floor_chrome_regions()}
 
     <div class="ambient">
       <span class="led off" id="floor-led" aria-hidden="true"></span>
       <span class="msg" id="floor-msg"><strong>offline</strong> — no live run in this build</span>
       <span class="meta" id="floor-meta">fleet-events: none · age —</span>
+      <span class="state-note" id="floor-state-note" hidden></span>
     </div>
 
     <div class="waiting">
@@ -1375,6 +1493,7 @@ class Renderer:
       stream are shown — live state never enters <span class="mono">index.json</span>.
       Settled runs: enter <strong>REPLAY</strong> to scrub history with an honesty watermark.</p>
     </div>
+    {self._floor_summary_html(live)}
     {self._floor_chrome_regions()}
     {wm_static}
 
@@ -1382,6 +1501,7 @@ class Renderer:
       <span class="{led_html}" id="floor-led" aria-hidden="true"></span>
       <span class="msg" id="floor-msg"><strong>{esc(status)}</strong> — dispatch <span class="mono">{esc(live.get("dispatch_id") or "—")}</span>{msg_extra}</span>
       <span class="meta" id="floor-meta">{esc(live.get("source") or "live.json")} · last event {esc(age_txt)} · snapshot {esc(live.get("generated_at") or "—")}</span>
+      {self._floor_state_note_html(live, state)}
     </div>
 
     <div class="waiting">
