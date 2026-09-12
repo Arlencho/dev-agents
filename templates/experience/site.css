@@ -583,6 +583,15 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 .qpurpose, .tpurpose { line-height: 1.35; }
 .qmeta, .tmeta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; }
 .tlist .timer { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+/* The outcome word is a fixed column: when the purpose wraps to two lines at
+   400px the word keeps its place at the right edge instead of dropping to
+   its own row, so a scan for outcomes reads straight down. */
+.tlist > li.trow {
+  display: grid; grid-template-columns: minmax(0, 1fr) 6rem auto;
+  column-gap: 10px; align-items: center;
+}
+.trow > .tout { justify-self: stretch; text-align: center; }
+.trow > .timer { margin-left: 0; justify-self: end; white-space: nowrap; }
 
 .waiting .witem { margin: 0 0 4px; font-size: 12.5px; }
 .waiting .witem:last-child { margin-bottom: 0; }
