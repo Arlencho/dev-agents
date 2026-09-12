@@ -595,7 +595,13 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
   column-gap: 10px; align-items: center;
 }
 .trow > .tout { justify-self: stretch; text-align: center; }
-.trow > .timer { margin-left: 0; justify-self: end; white-space: nowrap; }
+.trow > .timer { margin-left: 0; justify-self: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Phone width: the two fixed tracks were starving the purpose column (round
+   three critic: 79 px and 7 lines at 390). Narrow them so the purpose keeps
+   at least 120 px; both stay fixed so the outcome edge is still straight. */
+@media (max-width: 600px) {
+  .tlist > li.trow { grid-template-columns: minmax(0, 1fr) 3.75rem 4.25rem; }
+}
 
 .waiting .witem { margin: 0 0 4px; font-size: 12.5px; }
 .waiting .witem:last-child { margin-bottom: 0; }
