@@ -413,6 +413,13 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 .led.off { background: var(--faint); }
 .ambient .msg { font-size: 13px; }
 .ambient .meta { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+/* The LED state explained in place, one short sentence on its own row. */
+.ambient .state-note { flex-basis: 100%; font-size: 12px; color: var(--muted); }
+.ambient .state-note[hidden] { display: none; }
+
+/* Top line in plain words (issue 69): counts from the summary object only. */
+.floor-summary { margin: -4px 0 14px; font-size: 14px; }
+.floor-summary[hidden] { display: none; }
 
 .waiting {
   display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
@@ -544,6 +551,9 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 .nowhead .timer { margin-left: auto; font-size: 12px; color: var(--muted); }
 .nowpurpose { color: var(--muted); line-height: 1.35; }
 .nowtask { line-height: 1.4; }
+/* One running seat as one plain sentence (issue 69); ids stay on the dim
+   .nowmeta line below it. */
+.nowsent { line-height: 1.45; }
 .nowmeta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; }
 /* One line of live activity: the phase word wears the in-flight pill, then the
    tool, the repo-relative path, and the counts the stream reported. */
@@ -573,6 +583,29 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 .qpurpose, .tpurpose { line-height: 1.35; }
 .qmeta, .tmeta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; }
 .tlist .timer { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+/* The outcome word and the timer are both fixed columns: when the purpose
+   wraps to two lines at 400px the word keeps its place at the right edge
+   instead of dropping to its own row, and a timer column that sized to its
+   text ("7 min" vs "12 min") moved the word's right edge between rows. Two
+   fixed columns and a scan for outcomes reads straight down. The timer track
+   fits the longest value fmtMin prints ("under a minute"); anything longer
+   right-aligns and overflows left into the gap, never the page width. */
+.tlist > li.trow {
+  display: grid; grid-template-columns: minmax(0, 1fr) 6rem 6rem;
+  column-gap: 10px; align-items: center;
+}
+.trow > .tout { justify-self: stretch; text-align: center; }
+.trow > .timer { margin-left: 0; justify-self: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Phone width: the two fixed tracks were starving the purpose column (round
+   three critic: 79 px and 7 lines at 390). Narrow them so the purpose keeps
+   at least 120 px; both stay fixed so the outcome edge is still straight. */
+@media (max-width: 600px) {
+  .tlist > li.trow { grid-template-columns: minmax(0, 1fr) 3.75rem 4.25rem; }
+  /* The narrowed timer track is shorter than the longest value fmtMin prints
+     (under a minute), so on a phone the timer wraps inside its own track
+     instead of overflowing left across the outcome badge. */
+  .trow > .timer { white-space: normal; text-align: right; overflow-wrap: normal; }
+}
 
 .waiting .witem { margin: 0 0 4px; font-size: 12.5px; }
 .waiting .witem:last-child { margin-bottom: 0; }

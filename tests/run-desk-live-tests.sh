@@ -8,6 +8,9 @@
 #   Part C: scripts/dispatch.sh wiring guards (no task text ever emitted)
 #   Part G: scripts/seat-progress.py reader (pass-through, counts, redaction)
 #   Part H: live-activity wiring (launcher stream, reader placement, Floor)
+#   Part I: the plain sentence (issue 69): program-name reduction in the
+#           reader (credential shapes redacted), seats[].now per live seat,
+#           the top-line summary, today[].outcome
 #
 # Offline by design: nothing here binds a socket or touches the network.
 #
@@ -643,6 +646,20 @@ assert_py "purpose defaults to the first comment line of the plan" "$Q_FILE" \
 assert_py "an explicit purpose wins over the header" "$Q_FILE" \
   'd["entries"][1]["purpose"]=="beta declared purpose"'
 
+# The default purpose is the first PROSE line: a machine directive is not why a
+# run exists, and the Floor prints this line as the reason (issue 69). Its own
+# queue file, so the order the projection asserts below is untouched.
+cat > "$PLAN_DIR/gamma.plan" <<'PLAN'
+# DISPATCH: ./scripts/dispatch.sh git@example.invalid:x/y.git plan --auto
+#
+# Gamma purpose, the line a person would read out loud.
+1 | devops | do the gamma thing | feat/gamma
+PLAN
+H_FILE="$TMP/fleet-queue-header.json"
+FLEET_QUEUE_FILE="$H_FILE" "$QUEUE" add "$PLAN_DIR/gamma.plan" dev-agents >/dev/null 2>&1
+assert_py "a machine directive is never the default purpose" "$H_FILE" \
+  'd["entries"][0]["purpose"]=="Gamma purpose, the line a person would read out loud."'
+
 FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" mv "$PLAN_DIR/beta.plan" 1 >/dev/null 2>&1
 assert_py "mv reorders the queue" "$Q_FILE" \
   '[e["plan"] for e in d["entries"]]==["beta.plan","alpha.plan"]'
@@ -1071,6 +1088,291 @@ grep -q 'seat_progress' "$REPO_DIR/docs/experience-data.md" \
   && ok "seat_progress is documented in the data contract" \
   || bad "seat_progress is documented in the data contract"
 
+echo ""
+echo "== Part I: the plain sentence (program name, seats[].now, summary) =="
+
+# ── the token reduction, straight on the reader's own function ─────────────
+# assert_program <name> <command> <expected|NONE>
+assert_program() {
+  local name="$1" command="$2" expected="$3"
+  if python3 - "$READER" "$command" "$expected" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("seat_progress", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+got = mod.program_name(sys.argv[2])
+want = None if sys.argv[3] == "NONE" else sys.argv[3]
+if got != want:
+    sys.stderr.write("program_name(%r) = %r, expected %r\n" % (sys.argv[2], got, want))
+    sys.exit(1)
+PY
+  then ok "$name"; else bad "$name"; fi
+}
+
+assert_program "a plain program reduces to itself" "make test" "make"
+assert_program "an env assignment is not the program" "FOO=bar BAZ=1 make test" "make"
+assert_program "sudo, nohup and time are wrappers, not programs" \
+  "sudo nohup time systemctl restart nginx" "systemctl"
+assert_program "a path reduces to its basename" "/usr/local/bin/python3 -m pytest" "python3"
+assert_program "a repo-relative path reduces to its basename too" \
+  "./scripts/deploy.sh --prod" "deploy.sh"
+assert_program "an operator path leaves only the basename" \
+  "/Users/someone/secret/tool.sh run" "tool.sh"
+assert_program "an option is never published as a program" "sudo -u deploy ./x.sh" "NONE"
+assert_program "an unparseable command publishes nothing" "echo 'unbalanced" "NONE"
+assert_program "an empty command publishes nothing" "   " "NONE"
+assert_program "a token-shaped basename is written as the literal redacted" \
+  "sudo /Users/someone/.ssh/ghp_abcdefghijklmnopqrstuvwxyz012345" "redacted"
+assert_program "an api-key-shaped basename is redacted too" \
+  "./sk-abcdefghijklmnopqrstuvwxyz --verify" "redacted"
+assert_program "a long token is redacted whole, never truncated to a prefix" \
+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c" "redacted"
+
+# ── end to end: the program reaches the stream, its arguments never do ────
+P_REPO="$TMP/program-repo"
+mkdir -p "$P_REPO"
+P_IN="$TMP/program-in.jsonl"
+cat > "$P_IN" <<'STREAM'
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"FOO=LEAKCANARY-ENV sudo /usr/local/bin/deploy.sh --token LEAKCANARY-ARG"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"make LEAKCANARY-TARGET"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"/Users/someone/.ssh/ghp_LEAKCANARYabcdefghijklmnopqrstuv"}}]}}
+STREAM
+P_EVENTS="$TMP/events-program"
+mkdir -p "$P_EVENTS"
+P_FILE="$P_EVENTS/20260101-000000-program.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":1,"ts":"2026-01-01T00:00:00Z","dispatch_id":"20260101-000000-program","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"p.plan"}' > "$P_FILE"
+printf '%s\n' '{"schema":"fleet-events/1","seq":2,"ts":"2026-01-01T00:00:01Z","dispatch_id":"20260101-000000-program","event":"seat_dispatch","task_id":"3","agent":"devops","branch":"feat/x","wave":1,"provider":"local","worker":"localhost","attempt":1}' >> "$P_FILE"
+FLEET_EVENTS_SH="$EMITTER" FLEET_EVENTS_FILE="$P_FILE" \
+  FLEET_DISPATCH_ID="20260101-000000-program" \
+  SEAT_TASK_ID=3 SEAT_AGENT=devops SEAT_REPO_DIR="$P_REPO" \
+  SEAT_PROGRESS_INTERVAL_S=999 \
+  python3 "$READER" < "$P_IN" > /dev/null 2>/dev/null \
+  && ok "the reader still exits 0 with program names on" \
+  || bad "the reader still exits 0 with program names on"
+assert_jsonl "the program name of the last shell command travels" "$P_FILE" \
+  '[r.get("program") for r in K["seat_progress"]][:3]==["deploy.sh","make","redacted"]'
+if grep -q "LEAKCANARY" "$P_FILE"; then
+  bad "no env value, argument or absolute path travels with the program"
+else
+  ok "no env value, argument or absolute path travels with the program"
+fi
+
+# ── the sentence and the top line, over one day of real-shaped streams ────
+I_PLAN="$PLAN_DIR/floor.plan"
+cat > "$I_PLAN" <<'PLAN'
+# DISPATCH: ./scripts/dispatch.sh git@example.invalid:x/y.git plan --auto
+# Make the Floor readable without a legend. Issue 69.
+1 | devops | Project the sentence. | feat/floor-a
+2 | web-frontend | Draw the sentence. | feat/floor-b
+3 | devops | Prove it with real streams. | feat/floor-c
+PLAN
+I_HEADER_PLAN="$PLAN_DIR/header-only.plan"
+cat > "$I_HEADER_PLAN" <<'PLAN'
+# Purpose that only the plan file knows. Issue 69.
+1 | devops | Do the thing. | feat/header-a
+PLAN
+
+I_Q="$TMP/floor-queue.json"
+python3 - "$I_Q" "$I_PLAN" "$I_HEADER_PLAN" <<'IQ'
+import json, sys
+out, plan, header_plan = sys.argv[1], sys.argv[2], sys.argv[3]
+def entry(p, status, purpose, dispatch_id=None):
+    return {"plan": p, "repo": "olympus-platform", "purpose": purpose,
+            "added_at": "2026-09-12T00:00:00Z", "status": status,
+            "dispatch_id": dispatch_id, "settled_at": None, "settled_status": None}
+json.dump({"schema": "fleet-queue/1", "updated_at": "2026-09-12T00:00:00Z", "entries": [
+    entry(plan, "running", "Make the Floor readable without a legend. Issue 69.", "floor-a"),
+    entry(header_plan, "running", "", "floor-b"),
+    entry("next-one.plan", "queued", "First up next."),
+    entry("next-two.plan", "queued", "Second up next."),
+]}, open(out, "w"), indent=2)
+IQ
+
+I_DIR="$TMP/events-floor"
+mkdir -p "$I_DIR"
+python3 - "$I_DIR" <<'IFIX'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+
+out = sys.argv[1]
+now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+
+
+def ts(d):
+    return (now - timedelta(seconds=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write(name, rows):
+    with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+        for i, row in enumerate(rows, 1):
+            row.update({"schema": "fleet-events/1", "seq": i, "dispatch_id": name[:-6]})
+            fh.write(json.dumps(row) + "\n")
+
+
+# one dispatch that ended today
+write("floor-landed.jsonl", [
+    {"ts": ts(400), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "floor.plan"},
+    {"ts": ts(390), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/landed", "wave": 1, "provider": "local"},
+    {"ts": ts(130), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/landed", "wave": 1, "status": "success", "exit": 0, "duration_s": 260},
+    {"ts": ts(120), "event": "dispatch_end", "status": "completed",
+     "total": 1, "succeeded": 1, "failed": 0, "duration_s": 280},
+])
+# a run that died by itself: the seat failed, the dispatcher's exit trap closed it
+write("floor-failed.jsonl", [
+    {"ts": ts(700), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "floor.plan"},
+    {"ts": ts(690), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/failed", "wave": 1, "provider": "local"},
+    {"ts": ts(300), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/failed", "wave": 1, "status": "failed", "exit": 1, "duration_s": 390},
+    {"ts": ts(299), "event": "dispatch_end", "status": "aborted",
+     "total": 1, "succeeded": 0, "failed": 1},
+])
+# a run the operator stopped: a seat still in flight when the close-out came
+write("floor-aborted.jsonl", [
+    {"ts": ts(600), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "floor.plan"},
+    {"ts": ts(590), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/aborted", "wave": 1, "provider": "local"},
+    {"ts": ts(400), "event": "dispatch_end", "status": "aborted",
+     "total": 1, "succeeded": 0, "failed": 0, "duration_s": 200},
+])
+# a run that reached the normal close-out with one seat failed
+write("floor-completed-fail.jsonl", [
+    {"ts": ts(560), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "floor.plan"},
+    {"ts": ts(550), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/cf-a", "wave": 1, "provider": "local"},
+    {"ts": ts(549), "event": "seat_dispatch", "task_id": "1", "agent": "devops",
+     "branch": "feat/cf-b", "wave": 1, "provider": "local"},
+    {"ts": ts(500), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/cf-a", "wave": 1, "status": "success", "exit": 0, "duration_s": 50},
+    {"ts": ts(480), "event": "seat_exit", "task_id": "1", "agent": "devops",
+     "branch": "feat/cf-b", "wave": 1, "status": "failed", "exit": 2, "duration_s": 69},
+    {"ts": ts(470), "event": "dispatch_end", "status": "completed",
+     "total": 2, "succeeded": 1, "failed": 1, "duration_s": 90},
+])
+# the followed run: one seat running with activity, one seat already settled
+write("floor-a.jsonl", [
+    {"ts": ts(900), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "floor.plan"},
+    {"ts": ts(899), "event": "dispatch_plan", "waves": 3, "seats": 3},
+    {"ts": ts(898), "event": "wave_start", "wave": 2, "seats": 2, "mode": "wave"},
+    {"ts": ts(890), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/floor-a", "wave": 2, "provider": "local", "model": "local", "attempt": 1},
+    {"ts": ts(880), "event": "seat_dispatch", "task_id": "1", "agent": "web-frontend",
+     "branch": "feat/floor-b", "wave": 2, "provider": "local", "attempt": 1},
+    {"ts": ts(300), "event": "seat_exit", "task_id": "1", "agent": "web-frontend",
+     "branch": "feat/floor-b", "wave": 2, "status": "success", "exit": 0, "duration_s": 580},
+    {"ts": ts(20), "event": "seat_progress", "task_id": "0", "agent": "devops",
+     "phase": "testing", "tool": "Bash", "path": "tests/run-desk-live-tests.sh",
+     "program": "make", "files_edited": 2, "commands_run": 9, "tests_run": 1,
+     "commits_made": 0},
+    {"ts": ts(10), "event": "seat_heartbeat", "task_id": "0", "agent": "devops",
+     "branch": "feat/floor-a", "wave": 2, "elapsed_s": 880},
+])
+# a second live dispatch, on the plan whose queue purpose is empty
+write("floor-b.jsonl", [
+    {"ts": ts(200), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "header-only.plan"},
+    {"ts": ts(190), "event": "seat_dispatch", "task_id": "5", "agent": "devops",
+     "branch": "feat/header-a", "wave": 1, "provider": "local", "attempt": 1},
+])
+IFIX
+printf 'floor-a.jsonl\n' > "$I_DIR/latest"
+
+I_OUT="$TMP/out/live-floor.json"
+python3 "$DESK_LIVE" --once --events-dir "$I_DIR" --queue-file "$I_Q" --out "$I_OUT" >/dev/null 2>&1 \
+  && ok "--once projects the sentence and the top line" \
+  || bad "--once projects the sentence and the top line"
+
+assert_py "summary counts the seats running right now, across live dispatches" "$I_OUT" \
+  'd["summary"]["running"]==2'
+assert_py "summary counts the plans declared queued" "$I_OUT" 'd["summary"]["queued"]==2'
+assert_py "summary counts the dispatches that landed today" "$I_OUT" \
+  'd["summary"]["landed_today"]==4'
+assert_py "summary carries the last event timestamp, never a precomputed age" "$I_OUT" \
+  'isinstance(d["summary"]["last_event_ts"], str) '\
+'and d["summary"]["last_event_ts"]==d["last_event_ts"] and "last_event_age_s" not in d["summary"]'
+assert_py "the summary counts agree with the blocks they summarise" "$I_OUT" \
+  'd["summary"]["queued"]==len(d["queue"]) and d["summary"]["landed_today"]==len(d["today"]) '\
+'and d["summary"]["running"]==len([s for s in d["seats"] if s["status"]=="running"])'
+
+assert_py "a live seat carries role, phase and program in one object" "$I_OUT" \
+  'S["0"]["now"]["role"]=="devops" and S["0"]["now"]["phase"]=="testing" '\
+'and S["0"]["now"]["program"]=="make"'
+assert_py "the sentence takes its purpose from the queue entry" "$I_OUT" \
+  'S["0"]["now"]["purpose"].startswith("Make the Floor readable") '\
+'and S["0"]["now"]["purpose_source"]=="queue"'
+assert_py "the sentence says wave x of N, N from the plan file" "$I_OUT" \
+  'S["0"]["now"]["wave"]==2 and S["0"]["now"]["wave_total"]==3'
+assert_py "the sentence carries elapsed and the age of the last sign of life" "$I_OUT" \
+  'S["0"]["now"]["elapsed_s"]>=880 and S["0"]["now"]["heartbeat_age_s"]<90'
+assert_py "the purpose falls back to the plan header when the queue has none" "$I_OUT" \
+  'S["5"]["now"]["purpose"].startswith("Purpose that only the plan file knows") '\
+'and S["5"]["now"]["purpose_source"]=="plan"'
+assert_py "a machine directive is never published as a purpose" "$I_OUT" \
+  'all("DISPATCH" not in (s["now"]["purpose"] or "") for s in d["seats"] if s["now"])'
+assert_py "a seat that is not running has no sentence" "$I_OUT" \
+  'S["1"]["status"]=="success" and S["1"]["now"] is None'
+assert_py "the sentence never carries an absolute path" "$I_OUT" \
+  'all(not str(s["now"]).count("/Users/") for s in d["seats"] if s["now"])'
+
+# The outcome word: derived from the seat exits and the close-out, one per run.
+assert_py "today names the outcome landed when every seat succeeded" "$I_OUT" \
+  '{t["dispatch_id"]: t["outcome"] for t in d["today"]}["floor-landed"]=="landed"'
+assert_py "a seat failure that ended the run by itself reads failed, not aborted" "$I_OUT" \
+  '{t["dispatch_id"]: t["outcome"] for t in d["today"]}["floor-failed"]=="failed"'
+assert_py "a completed close-out with a failure counted reads failed" "$I_OUT" \
+  '{t["dispatch_id"]: t["outcome"] for t in d["today"]}["floor-completed-fail"]=="failed"'
+assert_py "a run stopped with a seat still in flight reads aborted" "$I_OUT" \
+  '{t["dispatch_id"]: t["outcome"] for t in d["today"]}["floor-aborted"]=="aborted"'
+assert_py "today keeps status beside outcome for compatibility" "$I_OUT" \
+  '{t["dispatch_id"]: t["status"] for t in d["today"]}=={"floor-landed":"settled",'\
+'"floor-failed":"aborted","floor-aborted":"aborted","floor-completed-fail":"settled"}'
+
+# A replay has no present tense: no summary, no sentence.
+I_REPLAY="$TMP/out/live-floor-replay.json"
+python3 "$DESK_LIVE" --once --events-dir "$I_DIR" --queue-file "$I_Q" \
+  --dispatch-id floor-a --replay --out "$I_REPLAY" >/dev/null 2>&1
+assert_py "a replay carries neither summary nor sentence" "$I_REPLAY" \
+  'd["view"]=="replay" and d["summary"] is None '\
+'and all(s["now"] is None for s in d["seats"])'
+# mark_replay walks the seats itself, so a caller that attached now first
+# cannot leak a present-tense sentence into a historical scrub.
+if python3 - "$DESK_LIVE" "$I_OUT" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("desk_live", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+proj = json.load(open(sys.argv[2]))
+assert any(s["now"] for s in proj["seats"]), "fixture has no live sentence"
+mod.mark_replay(proj, 5, 5)
+sys.exit(0 if proj["summary"] is None and all(s["now"] is None for s in proj["seats"]) else 1)
+PY
+then ok "mark_replay clears every seat's sentence itself"; else bad "mark_replay clears every seat's sentence itself"; fi
+
+# An idle desk still answers the header question honestly.
+I_EMPTY="$TMP/events-empty-floor"
+mkdir -p "$I_EMPTY"
+I_IDLE="$TMP/out/live-floor-idle.json"
+python3 "$DESK_LIVE" --once --events-dir "$I_EMPTY" --queue-file "$I_Q" --out "$I_IDLE" >/dev/null 2>&1
+assert_py "an idle desk reports 0 running, the queue it has, and no age" "$I_IDLE" \
+  'd["status"]=="idle" and d["summary"]["running"]==0 and d["summary"]["queued"]==2 '\
+'and d["summary"]["landed_today"]==0 and d["summary"]["last_event_ts"] is None'
+
+grep -q 'program name of the last shell command' "$REPO_DIR/docs/experience-data.md" \
+  && ok "the program name is documented in the event envelope" \
+  || bad "the program name is documented in the event envelope"
+grep -q 'landed_today' "$REPO_DIR/docs/experience-data.md" \
+  && ok "the summary object is documented in the live schema" \
+  || bad "the summary object is documented in the live schema"
+grep -q 'seats\[\].now' "$REPO_DIR/docs/experience-data.md" \
+  && ok "the per-seat sentence is documented in the live schema" \
+  || bad "the per-seat sentence is documented in the live schema"
 echo ""
 echo "----------------------------------------"
 echo "  passed: $pass   failed: $fail"

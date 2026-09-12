@@ -382,7 +382,7 @@ One JSON object per line, appended, never rewritten. Every line carries:
 | `human_resume` | the operator answered | `kind`, `wave`, `answer` (`continue`\|`abort`) |
 | `wave_end` | a wave closes | `wave`, `seats`, `succeeded`, `failed` |
 | `seat_log` | log collected | `task_id`, `agent`, `log` (**filename only**) |
-| `seat_progress` | the seat's live stream moved (see below) | `task_id`, `agent`, `tool`, `path` (**repo-relative, or the literal `outside-repo`**), `files_edited`, `commands_run`, `tests_run`, `commits_made`, `phase` |
+| `seat_progress` | the seat's live stream moved (see below) | `task_id`, `agent`, `tool`, `path` (**repo-relative, or the literal `outside-repo`**), `program` (**program name of the last shell command, never its arguments**), `files_edited`, `commands_run`, `tests_run`, `commits_made`, `phase` |
 | `dispatch_end` | run closes (also on Ctrl-C, via trap) | `status` (`completed`\|`aborted`), `total`, `succeeded`, `failed`, `duration_s` |
 
 `seat_exit.status` ∈ `success` · `failed` · `blocked` (guardrails, exit 77) ·
@@ -466,10 +466,36 @@ classification are untouched.
 | `tests_run` | int | commands that ran a test suite so far |
 | `commits_made` | int | commands that made a commit so far |
 | `phase` | string | `reading` · `reviewing` · `editing` · `testing` · `committing` |
+| `program` | string | **Program name of the last shell command** the seat ran: its first token only (see the reduction below). Omitted while the seat has run no command, and omitted again when the command reduces to nothing publishable |
 
 `phase` is derived from the counts alone, as a monotone ladder (commits, else
 tests, else edits, else commands, else nothing yet). It says how far the seat
 has got, not what its last keystroke was.
+
+#### Program name (the only thing a command line contributes)
+
+A devops seat spends most of its life in `Bash`, so `tool` alone reads as
+nothing. `program` is the **program name of the last shell command**, so the
+Floor can say *"testing (make)"* instead of *"Bash"*. It is reduced in the
+reader, in this order, and a command that survives none of it publishes nothing:
+
+| Command | `program` | Rule |
+|---------|-----------|------|
+| `make test` | `make` | first token only, never an argument |
+| `FOO=bar BAZ=1 make test` | `make` | leading env assignments are dropped, **values included** |
+| `sudo nohup time systemctl restart nginx` | `systemctl` | the wrappers `sudo`, `nohup`, `time` are dropped when they lead |
+| `/usr/local/bin/python3 -m pytest` | `python3` | a token that looks like a path is reduced to its **basename**, so no directory leaves the reader, inside the repo or outside it |
+| `./scripts/deploy.sh --prod` | `deploy.sh` | same rule, same basename |
+| `sudo -u deploy ./x.sh` | *(omitted)* | an option is not a program name; the reader says nothing rather than publishing an argument |
+| `echo 'unbalanced` | *(omitted)* | unparseable quoting is not tokenised on a guess |
+| `sudo ~/.ssh/ghp_<token>` | `redacted` | a basename shaped like a credential is replaced by the literal word `redacted` **before it is written**, whole, never a truncated prefix. Same shapes as the Almanac scrub (`scripts/experience_data.py`): `ghp_`/`github_pat_`, `sk-`, `xox?-`, `AKIA`, a JWT. The Floor learns that a command ran, never which |
+| `A=1 B=2 C=3 D=4 E=5 F=6 G=7 H=8 make` | *(omitted)* | the reader inspects at most the first **eight** tokens (assignments and wrappers included); a program buried deeper publishes nothing rather than a guess |
+
+The name is **sticky per seat**: it describes the last shell command, so it
+survives the reads and edits that follow, and a later command replaces it even
+when that command reduces to nothing. Published names are one bare word of at
+most 40 chars (`[A-Za-z0-9][A-Za-z0-9._+-]*`); `desk_live.py` re-applies that
+shape, so a hand-written stream line cannot put a path on the page either.
 
 **Cadence:** one event on **every tool call**, plus **at most one event per 15
 seconds** (`SEAT_PROGRESS_INTERVAL_S`) while the stream moves without tool
@@ -503,8 +529,9 @@ unwritable stream) degrades the same way.
 | `status` | string | `idle` · `running` · `settled` · `aborted` |
 | `reason` | string | why it is idle (teaches the next command) |
 | `wave` | object | `{current, total}` |
-| `seats[]` | array | one per `task_id`: `agent`, `branch`, `wave`, `provider`, `worker`, `model`, `status`, `pipeline`, `exit`, `attempt`, `started_at`, `ended_at`, `duration_s`, `elapsed_s` (running), `providers_tried[]`, `failovers[]`, `ratecapped`, `log`, `activity` (newest `seat_progress`: `{ts, phase, tool, path, files_edited, commands_run, tests_run, commits_made}`, else `null`) |
+| `seats[]` | array | one per `task_id`: `agent`, `branch`, `wave`, `provider`, `worker`, `model`, `status`, `pipeline`, `exit`, `attempt`, `started_at`, `ended_at`, `duration_s`, `elapsed_s` (running), `providers_tried[]`, `failovers[]`, `ratecapped`, `log`, `activity` (newest `seat_progress`: `{ts, phase, tool, path, program, files_edited, commands_run, tests_run, commits_made}`, else `null`), `now` (one sentence worth of facts for a **running** seat, else `null`; see below) |
 | `counts` | object | pipeline counts: `queued`, `in_flight`, `blocked`, `settled`, `total` |
+| `summary` | object | The Floor's top line in plain counts: `running`, `queued`, `landed_today`, plus `last_event_ts`. **`null` on a replay** (see below) |
 | `waiting_on[]` | array | first-class strip: open human gates, then rate-capped seats, else the longest-running seat. Each entry has `kind` (`human_gate`\|`ratecap`\|`seat`), `label`, `since` |
 | `last_event_ts` | string | newest event timestamp seen |
 | `staleness` | object | `{seconds, state, stale_after_s: 120, offline_after_s: 900}`; `state` ∈ `live` · `stale` · `offline` · `none` · **`replay`** (Phase C) |
@@ -624,11 +651,27 @@ missing.
 |-----|------|---------|
 | `queue[]` | array | Entries with status `queued`, **in declared order**: `position`, `plan`, `plan_basename`, `repo`, `purpose`, `added_at`, `status` (always `queued`) |
 | `queue_meta` | object | `{source, declared, declared_at, total, queued, running, settled}`. `declared_at` is the `added_at` of the **newest** entry and stamps the Floor block |
-| `today[]` | array | One entry per dispatch whose **`dispatch_end` falls on the local calendar day**: `dispatch_id`, `source`, `plan`, `plan_basename`, `repo`, `purpose` (+ `purpose_source`: `queue` or `none`), `status` (`settled` · `aborted`), `end_status`, `duration_s`, `started_at`, `ended_at`, `seats`, `succeeded`, `failed`, `branches[]` |
+| `today[]` | array | One entry per dispatch whose **`dispatch_end` falls on the local calendar day**: `dispatch_id`, `source`, `plan`, `plan_basename`, `repo`, `purpose` (+ `purpose_source`: `queue` or `none`), `status` (`settled` · `aborted`, kept for compatibility), `outcome` (`landed` · `failed` · `aborted`, see below), `end_status`, `duration_s`, `started_at`, `ended_at`, `seats`, `succeeded`, `failed`, `branches[]` |
 | `today_meta` | object | `{date, streams_read, live[], ended}`: the local day, how many streams were read, which dispatch ids are still live |
 | `multi_dispatch` | object | Present only when a second dispatch is live on the day: `{live[], followed, merged_seats}` |
 | `seats[].dispatch_id` | string | Which run a seat belongs to |
 | `seats[].foreign` | bool | `true` when the seat comes from a live dispatch other than the followed one |
+
+`today[].outcome` is the word the page prints for a finished run. `status`
+only mirrors the close-out (`settled` for `completed`, else the close-out
+status as written), and `dispatch.sh` writes `aborted` from its exit trap
+whenever it does not reach the normal close-out, so `status` alone cannot tell
+an operator's Ctrl-C from a run that died by itself after a seat failed. The
+seat exits can, so `outcome` is derived from both (a seat's **last**
+`seat_exit` counts, so a retry overrides):
+
+* `landed`: the close-out is `completed`, every seat's last `seat_exit` is
+  `success`, and the dispatcher counted no failure;
+* `failed`: at least one seat's last `seat_exit` is not `success` and every
+  dispatched seat has exited, so the run ended by itself. A `completed`
+  close-out with a failure counted is `failed` too;
+* `aborted`: anything else: the dispatcher was stopped while a seat was still
+  in flight, or before the normal close-out with nothing having failed.
 
 ### The now view (`seats[]` additions + `plan_context`)
 
@@ -641,7 +684,7 @@ from it: the header, the seat's own line, the wave count.
 | Key | Type | Meaning |
 |-----|------|---------|
 | `plan_context` | object | `{plan, purpose, waves, seats}` for the followed run |
-| `seats[].plan_purpose` | string | First comment line of the seat's plan |
+| `seats[].plan_purpose` | string | First **prose** comment line of the seat's plan header. A machine directive (`DISPATCH:`, `Law:`, `Schema:`, `Protocol:`, `Usage:`, `Ref:`/`Refs:`, `Generated by`) is skipped, the same rule as `now.purpose` and `scripts/queue.sh` |
 | `seats[].task` | string | **First sentence** of that seat's line in the plan, cut at 120 chars. Never the whole task body |
 | `seats[].wave_total` | int | Wave count of the plan, so a seat reads "wave 2 of 3" |
 | `seats[].attempt` | int | Attempt number from `seat_dispatch` |
@@ -684,6 +727,58 @@ the dashed "declared, not observed" treatment, and **Landed today** lists
 purpose, status, duration and the branches created. `make experience` rebuilds
 `data/`, so write the projection after it (`make desk-live-once`, or leave
 `make desk-live` running and the page repaints itself).
+
+### The plain sentence (`seats[].now`) and the top line (`summary`)
+
+The Floor has to read like sentences, not like a schema (issue 69). A page
+should not join three objects to write one line, so every fact one sentence
+needs is projected in **one place per live seat**, and the four numbers of the
+header in **one object**. Neither is new truth: both are folds of the stream,
+the queue and the plan file documented above.
+
+`seats[].now` is present for a seat whose `status` is `running`, and `null`
+otherwise (a settled or `unknown` seat has no present tense):
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `role` | string | The seat's role name (`agent`), the subject of the sentence |
+| `phase` | string\|null | Phase word of the newest `seat_progress`, `null` before any arrived |
+| `program` | string\|null | Program name of the seat's last shell command (reduction above), `null` when it ran none |
+| `purpose` | string\|null | Why this run exists: the **queue entry's** purpose when the plan is armed, else the **plan header**, cut to its first sentence (≤ 120 chars). `null` when neither is on this machine |
+| `purpose_source` | string | `queue` · `plan` · `none`: which of the two spoke, so the page never implies a purpose it invented |
+| `wave` | int\|null | The seat's wave, from `seat_dispatch` |
+| `wave_total` | int\|null | Wave count **of the plan file**, so the sentence reads "wave 2 of 3" |
+| `elapsed_s` | int\|null | Seconds since `seat_dispatch` |
+| `heartbeat_age_s` | int\|null | Seconds since the last sign of life (heartbeat, else `seat_dispatch`) |
+
+`summary` is the header line, over the whole local day, not only the followed run:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `running` | int | Seats with `status: running`, **across every live dispatch** of the day (the followed run plus any `foreign` seats) |
+| `queued` | int | Plans the queue declares `queued` (`queue_meta.queued`); intent, never motion |
+| `landed_today` | int | Dispatches that ended on this local calendar day (`len(today)`), landed and aborted alike |
+| `last_event_ts` | string\|null | Timestamp of the newest event (the same value as the top-level `last_event_ts`); `null` when no event has ever arrived. A timestamp, never a precomputed age: the page computes the age live from it, so the header ticks with the rest of the chrome and cannot disagree with the state note once the watcher is gone |
+
+Rules the projector enforces:
+
+* a seat that is not running carries `now: null`, because the sentence is present
+  tense and is never written for a finished seat;
+* every field of `now` is independently nullable, so the page drops that clause
+  instead of printing a guess;
+* the queue wins over the plan header for `purpose` (it is what the orchestrator
+  declared for this run) and `purpose_source` always says which one was used;
+* a plan header line that is a **machine directive** (`DISPATCH:`, `Law:`,
+  `Schema:`, `Protocol:`, `Usage:`, `Ref:`/`Refs:`, `Generated by …`) or that
+  carries no letters is never a purpose: the first prose comment wins. The same
+  rule lives in `scripts/queue.sh`, so the queue and the Floor cannot disagree
+  about why a run exists;
+* `summary` counts only what the other blocks already publish, so the header can
+  always be reconciled against them (`running` = running seats, `queued` =
+  `len(queue)`, `landed_today` = `len(today)`);
+* **a replay carries neither**: `summary` is `null` and every `now` is `null`,
+  for the same reason replay carries no `queue[]` or `today[]`: a historical
+  scrub must not borrow the present.
 
 ### Phase C — replay API
 

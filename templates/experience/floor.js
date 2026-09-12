@@ -63,6 +63,38 @@
     return isNaN(d.getTime()) ? String(ts || "—") : d.toUTCString().slice(17, 25) + "Z";
   }
 
+  /* Plain-words durations for sentences: minutes, never "12m05s". */
+  function fmtMin(secs) {
+    if (typeof secs !== "number" || !isFinite(secs) || secs < 0) return "-";
+    var s = Math.floor(secs);
+    if (s < 60) return "under a minute";
+    if (s < 3600) return Math.round(s / 60) + " min";
+    var h = Math.floor(s / 3600);
+    var m = Math.round((s % 3600) / 60);
+    return m ? h + " h " + m + " min" : h + " h";
+  }
+
+  /* Ages floor, never round: at 101 s the top line must still read "1 min
+     ago", because the LED and the state note flip at "over 2 min". A rounded
+     "2 min ago" under a live LED is two clocks disagreeing. */
+  function fmtAgo(secs) {
+    if (typeof secs !== "number" || !isFinite(secs) || secs < 0) return "-";
+    var s = Math.floor(secs);
+    if (s < 60) return s + " s ago";
+    if (s < 3600) return Math.floor(s / 60) + " min ago";
+    return Math.floor(s / 3600) + " h ago";
+  }
+
+  /* Seconds between two ISO timestamps, or null when either side is missing
+     or unparsable: the degraded sentence speaks only in timestamps the
+     projection carries, and drops a clause rather than printing a guess. */
+  function secsBetween(laterTs, earlierTs) {
+    var a = new Date(laterTs || "").getTime();
+    var b = new Date(earlierTs || "").getTime();
+    if (isNaN(a) || isNaN(b)) return null;
+    return Math.max(0, Math.round((a - b) / 1000));
+  }
+
   /* Live: trust timestamps. Replay: never claim live. */
   function liveState(d) {
     if (d && (d.view === "replay" || (d.replay && d.replay.watermark === "REPLAY"))) {
@@ -211,6 +243,64 @@
     }).join("");
   }
 
+  /* Top line in plain words, from the summary object: how many running, how
+     many up next, how many landed today, when the last event arrived. The age
+     is the liveState age (computed in the browser from last_event_ts), the
+     same clock the rest of the chrome reads, so this line can never disagree
+     with the state note. Off a live stream the line says so in place and the
+     running count is qualified as of the last event. A replay carries no
+     summary, so the line goes away instead of guessing. */
+  function renderSummary(d, st) {
+    var el = $("floor-summary");
+    if (!el) return;
+    var s = d.summary;
+    var parts = [];
+    if (s && typeof s === "object") {
+      var degraded = st && (st.state === "stale" || st.state === "offline");
+      if (typeof s.running === "number") {
+        parts.push(s.running + " running" + (degraded ? " at last event" : ""));
+      }
+      if (typeof s.queued === "number") parts.push(s.queued + " up next");
+      if (typeof s.landed_today === "number") parts.push(s.landed_today + " landed today");
+      if (st && typeof st.age === "number") parts.push("last event " + fmtAgo(st.age));
+      if (degraded) parts.push("stream " + st.state);
+    }
+    if (!parts.length) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    el.hidden = false;
+    el.textContent = parts.join(" · ");
+  }
+
+  /* The LED states explained in place, one short sentence for the state that
+     applies right now. Replay needs none: its watermark already says what it
+     is, and that copy is not touched here. */
+  function renderStateNote(d, st) {
+    var el = $("floor-state-note");
+    if (!el) return;
+    var stale = (d.staleness && d.staleness.stale_after_s) || 120;
+    var offline = (d.staleness && d.staleness.offline_after_s) || 900;
+    var txt = "";
+    if (st.state === "live") {
+      txt = "Live: events are arriving, so this page shows what is happening now.";
+    } else if (st.state === "stale") {
+      txt = "Stale: no new event for over " + fmtMin(stale) +
+        ", so the page shows the last known state and the clocks stay frozen.";
+    } else if (st.state === "offline") {
+      txt = "Offline: no new event for over " + fmtMin(offline) +
+        ", so everything below is history, not the present.";
+    }
+    if (!txt) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    el.hidden = false;
+    el.textContent = txt;
+  }
+
   function renderCounts(d) {
     var c = d.counts || {};
     var ids = { in_flight: "pipe-inflight", blocked: "pipe-blocked", settled: "pipe-settled" };
@@ -260,12 +350,79 @@
       '<span class="mono faint">' + esc(counts) + "</span></div>";
   }
 
-  /* The now view: what every live seat is doing, why, and for how long.
-     Purpose and task come from the plan file (projection side), elapsed ticks
-     in the browser from the seat_dispatch timestamp, and a seat whose last sign
-     of life is older than the quiet threshold wears the watermark badge. */
-  function nowRow(seat) {
+  /* The now view: one running seat reads as the purpose on its own line,
+     then one short status clause of nouns, built from the seats[].now object
+     the projection folds for exactly this. Every field is independently
+     nullable, so a missing fact drops its clause instead of printing a guess.
+     Ids and schema words (branch, attempt) are demoted to a dim secondary
+     line. The elapsed clock is the clause itself: it ticks in plain minutes
+     while the stream is live and freezes with the rest of the page off it,
+     so one fact never wears two clocks. The quiet badge keeps its rule:
+     quiet wears violet. */
+  function nowPurpose(now) {
+    var purpose = String(now.purpose || "").replace(/[.\s]+$/, "");
+    return purpose ? '<div class="nowpurpose">' + esc(purpose) + ".</div>" : "";
+  }
+
+  /* Status clause: role, phase with its program, wave, elapsed, heartbeat.
+     Off a live stream the clause degrades with the page: the phase goes past
+     tense, and both clocks stop at the last event. The numbers then come from
+     the timestamps the projection carries (elapsed = last_event_ts minus
+     started_at, heartbeat = last_event_ts minus last_heartbeat_ts), never
+     from the projection's own run time: a seat's elapsed at the last event
+     cannot depend on when the projection ran. A missing timestamp drops its
+     clause. */
+  function nowStatus(now, st, seat, lastEventTs) {
+    var degraded = st && (st.state === "stale" || st.state === "offline");
+    var parts = ["<strong>" + esc(now.role || "this seat") + "</strong>"];
+    if (now.phase) {
+      var phase = esc(now.phase) + (now.program ? " with " + esc(now.program) : "");
+      parts.push(degraded ? "was " + phase : phase);
+    } else {
+      parts.push(degraded ? "was at work" : "at work");
+    }
+    if (typeof now.wave === "number") {
+      parts.push("wave " + now.wave +
+        (typeof now.wave_total === "number" ? " of " + now.wave_total : ""));
+    }
+    if (degraded) {
+      var elapsedAt = secsBetween(lastEventTs, seat.started_at);
+      if (elapsedAt != null) {
+        parts.push(fmtMin(elapsedAt) + " in at the last event");
+      }
+      var heartbeatAt = secsBetween(lastEventTs, seat.last_heartbeat_ts);
+      if (heartbeatAt != null) {
+        parts.push("last heartbeat " + fmtAgo(heartbeatAt).replace(/ ago$/, "") +
+          " before the last event");
+      }
+    } else {
+      if (typeof now.elapsed_s === "number") {
+        parts.push('running <span data-elapsed-from="' + esc(seat.started_at || "") +
+          '" data-elapsed-min="1">' + fmtMin(now.elapsed_s) + "</span>");
+      }
+      if (typeof now.heartbeat_age_s === "number") {
+        parts.push("heartbeat " + fmtAgo(now.heartbeat_age_s));
+      }
+    }
+    return parts.join(", ") + ".";
+  }
+
+  function nowRow(seat, st, lastEventTs) {
     var quiet = seat.quiet === true;
+    var quietBadge = quiet
+      ? '<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>' : "";
+    if (seat.now && typeof seat.now === "object") {
+      return '<li class="nowrow' + (quiet ? " quiet" : "") + '">' +
+        '<div class="nowhead">' + seatPill(seat) + quietBadge + "</div>" +
+        nowPurpose(seat.now) +
+        '<div class="nowsent">' + nowStatus(seat.now, st, seat, lastEventTs) + "</div>" +
+        '<div class="nowmeta"><span class="mono faint">' + esc(seat.branch || "branch not reported") + "</span>" +
+        '<span class="faint">attempt ' + esc(seat.attempt || 1) + "</span></div></li>";
+    }
+    /* Older projection or replay: seats[].now is null, so fall back to the
+       plan-header layout rather than inventing a present-tense sentence. */
+    var timer = '<span class="timer mono" data-elapsed-from="' + esc(seat.started_at || "") + '">' +
+      fmtDur(seat.elapsed_s) + "</span>";
     var wave = (typeof seat.wave === "number")
       ? ("wave " + seat.wave + (seat.wave_total ? " of " + seat.wave_total : ""))
       : "wave not reported";
@@ -275,10 +432,7 @@
       : "no heartbeat yet";
     return '<li class="nowrow' + (quiet ? " quiet" : "") + '">' +
       '<div class="nowhead"><span class="role">' + esc(seat.agent || seat.task_id) + "</span>" +
-      seatPill(seat) +
-      (quiet ? '<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>' : "") +
-      '<span class="timer mono" data-elapsed-from="' + esc(seat.started_at || "") + '">' +
-      fmtDur(seat.elapsed_s) + "</span></div>" +
+      seatPill(seat) + quietBadge + timer + "</div>" +
       '<div class="nowpurpose">' + esc(seat.plan_purpose || "purpose not declared in the plan header") + "</div>" +
       '<div class="nowtask">' + esc(seat.task || "task line not resolvable from the plan on this machine") + "</div>" +
       activityLine(seat) +
@@ -288,7 +442,7 @@
       '<span class="faint">' + esc(beat) + "</span></div></li>";
   }
 
-  function renderNow(d) {
+  function renderNow(d, st) {
     var box = $("floor-now-list");
     if (!box) return;
     var live = (d.seats || []).filter(function (s) { return s.status === "running"; });
@@ -297,12 +451,17 @@
       var runs = {};
       live.forEach(function (s) { if (s.dispatch_id) runs[s.dispatch_id] = 1; });
       var n = Object.keys(runs).length;
+      /* "Live" is a liveness claim like any other on this page: off a live
+         stream it is qualified with "at last event", same as Landed today. */
+      var degraded = st && (st.state === "stale" || st.state === "offline");
       note.textContent = live.length
-        ? live.length + " live seat(s) across " + (n || 1) + " dispatch(es)"
+        ? live.length + (live.length === 1 ? " seat live" : " seats live") +
+          (degraded ? " at last event" : "") +
+          " across " + (n || 1) + ((n || 1) === 1 ? " dispatch" : " dispatches")
         : "no seat is live";
     }
     box.innerHTML = live.length
-      ? live.map(nowRow).join("")
+      ? live.map(function (s) { return nowRow(s, st, d.last_event_ts); }).join("")
       : '<li class="muted">No seat is live. The Floor shows motion only while a dispatch is running.</li>';
     tickElapsed();
   }
@@ -310,14 +469,17 @@
   /* One ticker for the page: elapsed counts up every second from the timestamp
      the stream recorded, so a live seat never looks frozen between polls.
      Off a live stream it does not run at all: a clock still climbing while the
-     LED says offline is a liveness claim the projection cannot back. */
+     LED says offline is a liveness claim the projection cannot back. Spans
+     marked data-elapsed-min tick in plain minutes (the seat status clause),
+     the rest in the compact timer format. */
   function tickElapsed() {
     if (!elapsedLive) return;
     var nodes = document.querySelectorAll("[data-elapsed-from]");
     for (var i = 0; i < nodes.length; i++) {
       var from = new Date(nodes[i].getAttribute("data-elapsed-from") || "").getTime();
       if (isNaN(from)) continue;
-      nodes[i].textContent = fmtDur(Math.max(0, Math.round((Date.now() - from) / 1000)));
+      var secs = Math.max(0, Math.round((Date.now() - from) / 1000));
+      nodes[i].textContent = nodes[i].getAttribute("data-elapsed-min") ? fmtMin(secs) : fmtDur(secs);
     }
   }
 
@@ -379,8 +541,18 @@
       return;
     }
     box.innerHTML = items.map(function (t) {
-      var cls = t.status === "settled" ? "st st-done"
-        : (t.status === "aborted" || t.status === "failed") ? "st st-fail" : "st st-unk";
+      /* Outcome in words from the projection's today[].outcome (landed,
+         failed, aborted), which reads the seat exits; status alone cannot
+         tell a failed run from an operator stop. Older projections without
+         outcome fall back to the status map. Failed and aborted wear
+         different pills so a scan of the column tells them apart. */
+      var word = t.outcome ||
+        (t.status === "settled" ? "landed"
+        : t.status === "failed" ? "failed"
+        : t.status === "aborted" ? "aborted" : (t.status || "unknown"));
+      var cls = word === "landed" ? "st st-done"
+        : word === "failed" ? "st st-fail"
+        : word === "aborted" ? "st st-warn" : "st st-unk";
       var branches = (t.branches || []).map(function (b) {
         return '<span class="mono faint">' + esc(b) + "</span>";
       }).join(" ");
@@ -389,8 +561,8 @@
         esc(t.purpose || t.plan_basename || t.dispatch_id) + "</span>" +
         '<span class="tmeta"><span class="vendor">' + esc(t.repo || "repo not reported") + "</span> " +
         (branches || '<span class="faint">no branch reported</span>') + "</span></span>" +
-        '<span class="' + cls + '">' + esc(t.status || "unknown") + "</span>" +
-        '<span class="timer mono">' + fmtDur(t.duration_s) + "</span></li>";
+        '<span class="' + cls + ' tout">' + esc(word) + "</span>" +
+        '<span class="timer mono">' + fmtMin(t.duration_s) + "</span></li>";
     }).join("");
   }
 
@@ -632,11 +804,13 @@
     // Hard honesty: never green LIVE when view says replay.
     if (d.view === "replay" && st.state === "live") st = { state: "replay", age: st.age };
     elapsedLive = st.state === "live";
+    renderSummary(d, st);
     renderWatermark(st, d);
     renderAmbient(d, st);
+    renderStateNote(d, st);
     renderWaiting(d);
     renderCounts(d);
-    renderNow(d);
+    renderNow(d, st);
     renderQueue(d);
     renderToday(d, st);
     if (d.mode === "conductor") renderSpine(d); else renderLanes(d);

@@ -798,6 +798,50 @@ class Renderer:
         return f"{m // 60}h{m % 60:02d}m"
 
     @staticmethod
+    def _fmt_min(secs: Any) -> str:
+        """Plain-words duration for sentences: minutes, never ``12m05s``."""
+        if not isinstance(secs, (int, float)) or isinstance(secs, bool) or secs < 0:
+            return "-"
+        s = int(secs)
+        if s < 60:
+            return "under a minute"
+        if s < 3600:
+            return f"{round(s / 60)} min"
+        h, m = s // 3600, round((s % 3600) / 60)
+        return f"{h} h {m} min" if m else f"{h} h"
+
+    @staticmethod
+    def _fmt_ago(secs: Any) -> str:
+        """Ages floor, never round: at 101 s the top line must still read
+        ``1 min ago``, because the LED and the state note flip at "over 2
+        min". A rounded "2 min ago" under a live LED is two clocks
+        disagreeing."""
+        if not isinstance(secs, (int, float)) or isinstance(secs, bool) or secs < 0:
+            return "-"
+        s = int(secs)
+        if s < 60:
+            return f"{s} s ago"
+        if s < 3600:
+            return f"{s // 60} min ago"
+        return f"{s // 3600} h ago"
+
+    @staticmethod
+    def _secs_between(later_ts: Any, earlier_ts: Any) -> Optional[int]:
+        """Seconds between two ISO timestamps, None when either is missing.
+
+        The degraded sentence speaks only in timestamps the projection
+        carries, and drops a clause rather than printing a guess.
+        """
+        if not isinstance(later_ts, str) or not isinstance(earlier_ts, str):
+            return None
+        try:
+            later = datetime.strptime(later_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            earlier = datetime.strptime(earlier_ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        return max(0, int((later - earlier).total_seconds()))
+
+    @staticmethod
     def _live_state(live: Dict[str, Any]) -> Tuple[str, Optional[int]]:
         """live/stale/offline/replay derived at BUILD time.
 
@@ -998,24 +1042,160 @@ class Renderer:
                 f'<span class="faint">{" ".join(what) or "no tool reported yet"}</span>'
                 f'<span class="mono faint">{esc(counts)}</span></div>')
 
-    def _live_now_card(self, live: Dict[str, Any]) -> str:
-        """The now view: what every live seat is doing, why, and for how long.
+    @staticmethod
+    def _is_num(v: Any) -> bool:
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
 
-        Purpose and task come from the plan file through the projection (first
-        comment line, first sentence of the seat line capped at 120 chars), never
-        from the event stream and never the whole task body. Elapsed is a build
-        stamp here; assets/floor.js ticks the same element every second from
-        data-elapsed-from. A seat whose last sign of life is older than the quiet
-        threshold wears the watermark badge.
+    @staticmethod
+    def _now_purpose(now: Dict[str, Any]) -> str:
+        """The purpose on its own line (mirrored in floor.js).
+
+        A first-time reader must see where the reason ends and the status
+        begins: purposes carry colons and commas of their own, so the purpose
+        never shares a line with the status clause.
+        """
+        purpose = str(now.get("purpose") or "").rstrip(". \t")
+        return f'<div class="nowpurpose">{esc(purpose)}.</div>' if purpose else ""
+
+    def _now_status(self, now: Dict[str, Any], state: str, seat: Dict[str, Any],
+                    last_event_ts: Any) -> str:
+        """One running seat as one short status clause of nouns (mirrored in floor.js).
+
+        Built only from the seats[].now object the projection folds for this.
+        Every field is independently nullable, so a missing fact drops its
+        clause instead of printing a guess. Ids never enter the clause. Off a
+        live stream the clause degrades with the page: the phase goes past
+        tense, and both clocks stop at the last event. The numbers then come
+        from the timestamps the projection carries (elapsed = last_event_ts
+        minus started_at, heartbeat = last_event_ts minus last_heartbeat_ts),
+        never from the projection's own run time: a seat's elapsed at the
+        last event cannot depend on when the projection ran. A missing
+        timestamp drops its clause.
+        """
+        degraded = state in ("stale", "offline")
+        parts = [f"<strong>{esc(now.get('role') or 'this seat')}</strong>"]
+        phase = now.get("phase")
+        if phase:
+            p = esc(phase)
+            if now.get("program"):
+                p += f" with {esc(now['program'])}"
+            parts.append(f"was {p}" if degraded else p)
+        else:
+            parts.append("was at work" if degraded else "at work")
+        if self._is_num(now.get("wave")):
+            w = f"wave {now['wave']}"
+            if self._is_num(now.get("wave_total")):
+                w += f" of {now['wave_total']}"
+            parts.append(w)
+        if degraded:
+            elapsed_at = self._secs_between(last_event_ts, seat.get("started_at"))
+            if elapsed_at is not None:
+                parts.append(f"{self._fmt_min(elapsed_at)} in at the last event")
+            heartbeat_at = self._secs_between(last_event_ts, seat.get("last_heartbeat_ts"))
+            if heartbeat_at is not None:
+                ago = self._fmt_ago(heartbeat_at)
+                parts.append(f"last heartbeat {ago[:-4] if ago.endswith(' ago') else ago} "
+                             "before the last event")
+        else:
+            if self._is_num(now.get("elapsed_s")):
+                parts.append(
+                    f'running <span data-elapsed-from="{esc(seat.get("started_at") or "")}" '
+                    f'data-elapsed-min="1">{self._fmt_min(now["elapsed_s"])}</span>'
+                )
+            if self._is_num(now.get("heartbeat_age_s")):
+                parts.append(f"heartbeat {self._fmt_ago(now['heartbeat_age_s'])}")
+        return ", ".join(parts) + "."
+
+    def _floor_summary_html(self, live: Dict[str, Any], state: str, age: Optional[int]) -> str:
+        """Top line in plain words from the summary object (issue 69).
+
+        The age is the build-time value of the same clock floor.js recomputes
+        from last_event_ts on every poll, so the snapshot prints what the page
+        would show at build time and the two lines can never disagree. Off a
+        live stream the line says so in place and the running count is
+        qualified as of the last event. A replay carries no summary, so the
+        line stays hidden instead of guessing.
+        """
+        s = live.get("summary")
+        parts = []
+        if isinstance(s, dict):
+            degraded = state in ("stale", "offline")
+            if self._is_num(s.get("running")):
+                parts.append(f"{s['running']} running" + (" at last event" if degraded else ""))
+            if self._is_num(s.get("queued")):
+                parts.append(f"{s['queued']} up next")
+            if self._is_num(s.get("landed_today")):
+                parts.append(f"{s['landed_today']} landed today")
+            if isinstance(age, int):
+                parts.append(f"last event {self._fmt_ago(age)}")
+            if degraded:
+                parts.append(f"stream {state}")
+        if not parts:
+            return '<p class="floor-summary" id="floor-summary" hidden></p>'
+        return f'<p class="floor-summary" id="floor-summary">{esc(" · ".join(parts))}</p>'
+
+    def _floor_state_note_html(self, live: Dict[str, Any], state: str) -> str:
+        """The LED state explained in place, one short sentence when it applies.
+
+        Replay needs none: its watermark already says what it is, and that copy
+        is not touched here. floor.js recomputes the same sentence on every
+        poll from the staleness thresholds the projection publishes.
+        """
+        staleness = live.get("staleness") or {}
+        stale = staleness.get("stale_after_s") or 120
+        offline = staleness.get("offline_after_s") or 900
+        txt = ""
+        if state == "live":
+            txt = "Live: events are arriving, so this page shows what is happening now."
+        elif state == "stale":
+            txt = (f"Stale: no new event for over {self._fmt_min(stale)}, so the page "
+                   "shows the last known state and the clocks stay frozen.")
+        elif state == "offline":
+            txt = (f"Offline: no new event for over {self._fmt_min(offline)}, so "
+                   "everything below is history, not the present.")
+        if not txt:
+            return '<span class="state-note" id="floor-state-note" hidden></span>'
+        return f'<span class="state-note" id="floor-state-note">{esc(txt)}</span>'
+
+    def _live_now_card(self, live: Dict[str, Any], state: str) -> str:
+        """The now view: purpose on its own line, then one short status clause.
+
+        The clause comes from seats[].now (projection side); its elapsed span
+        ticks in the browser from the seat_dispatch timestamp while the stream
+        is live, and a seat whose last sign of life is older than the quiet
+        threshold wears the watermark badge. A seat with now=null (older
+        projection, replay) keeps the older plan-header layout rather than an
+        invented present tense. "Live" in the note is a liveness claim, so off
+        a live stream it is qualified with "at last event".
         """
         seats = [s for s in (live.get("seats") or []) if s.get("status") == "running"]
         runs = {s.get("dispatch_id") for s in seats if s.get("dispatch_id")}
-        note = (f"{len(seats)} live seat(s) across {len(runs) or 1} dispatch(es)"
+        n_runs = len(runs) or 1
+        degraded = state in ("stale", "offline")
+        note = (f"{len(seats)} {'seat' if len(seats) == 1 else 'seats'} live"
+                f"{' at last event' if degraded else ''} across "
+                f"{n_runs} {'dispatch' if n_runs == 1 else 'dispatches'}"
                 if seats else "no seat is live")
         if seats:
             rows = []
             for s in seats:
                 quiet = s.get("quiet") is True
+                quiet_badge = ('<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>'
+                               if quiet else "")
+                now = s.get("now")
+                if isinstance(now, dict):
+                    rows.append(
+                        f'<li class="nowrow{" quiet" if quiet else ""}">'
+                        f'<div class="nowhead">{self._seat_pill(s)}{quiet_badge}</div>'
+                        + self._now_purpose(now)
+                        + f'<div class="nowsent">{self._now_status(now, state, s, live.get("last_event_ts"))}</div>'
+                        f'<div class="nowmeta"><span class="mono faint">'
+                        f'{esc(s.get("branch") or "branch not reported")}</span>'
+                        f'<span class="faint">attempt {esc(s.get("attempt") or 1)}</span></div></li>'
+                    )
+                    continue
+                timer = (f'<span class="timer mono" data-elapsed-from="{esc(s.get("started_at") or "")}">'
+                         f'{self._fmt_dur(s.get("elapsed_s"))}</span>')
                 wave = (f'wave {s["wave"]}' + (f' of {s["wave_total"]}' if s.get("wave_total") else "")
                         if isinstance(s.get("wave"), int) else "wave not reported")
                 if s.get("last_heartbeat_ts"):
@@ -1027,11 +1207,7 @@ class Renderer:
                 rows.append(
                     f'<li class="nowrow{" quiet" if quiet else ""}">'
                     f'<div class="nowhead"><span class="role">{esc(s.get("agent") or s.get("task_id"))}</span>'
-                    f'{self._seat_pill(s)}'
-                    + ('<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>'
-                       if quiet else "")
-                    + f'<span class="timer mono" data-elapsed-from="{esc(s.get("started_at") or "")}">'
-                    f'{self._fmt_dur(s.get("elapsed_s"))}</span></div>'
+                    f'{self._seat_pill(s)}{quiet_badge}{timer}</div>'
                     f'<div class="nowpurpose">{esc(s.get("plan_purpose") or "purpose not declared in the plan header")}</div>'
                     f'<div class="nowtask">{esc(s.get("task") or "task line not resolvable from the plan on this machine")}</div>'
                     + self._live_activity_line(s)
@@ -1114,10 +1290,17 @@ class Renderer:
         if today:
             rows = []
             for t in today:
-                status = t.get("status") or "unknown"
-                cls = ("st st-done" if status == "settled"
-                       else "st st-fail" if status in ("aborted", "failed")
-                       else "st st-unk")
+                # Outcome in words from the projection's today[].outcome
+                # (landed, failed, aborted), which reads the seat exits;
+                # status alone cannot tell a failed run from an operator
+                # stop. Older projections without outcome fall back to the
+                # status map. Failed and aborted wear different pills so a
+                # scan of the column tells them apart.
+                word = t.get("outcome") or {
+                    "settled": "landed", "failed": "failed", "aborted": "aborted",
+                }.get(t.get("status") or "", t.get("status") or "unknown")
+                cls = {"landed": "st st-done", "failed": "st st-fail",
+                       "aborted": "st st-warn"}.get(word, "st st-unk")
                 branches = " ".join(
                     f'<span class="mono faint">{esc(b)}</span>' for b in (t.get("branches") or [])
                 ) or '<span class="faint">no branch reported</span>'
@@ -1127,8 +1310,8 @@ class Renderer:
                     f'{esc(t.get("purpose") or t.get("plan_basename") or t.get("dispatch_id"))}</span>'
                     f'<span class="tmeta"><span class="vendor">{esc(t.get("repo") or "repo not reported")}</span> '
                     f"{branches}</span></span>"
-                    f'<span class="{cls}">{esc(status)}</span>'
-                    f'<span class="timer mono">{esc(self._fmt_dur(t.get("duration_s")))}</span></li>'
+                    f'<span class="{cls} tout">{esc(word)}</span>'
+                    f'<span class="timer mono">{esc(self._fmt_min(t.get("duration_s")))}</span></li>'
                 )
             rows_html = "".join(rows)
         else:
@@ -1226,12 +1409,14 @@ class Renderer:
       Settled runs open the Phase C <strong>REPLAY</strong> scrubber (never a green LIVE LED).
       Law: <span class="mono">docs/proposals/fleet-desk-v2-SYNTHESIS.md</span>.</p>
     </div>
+    <p class="floor-summary" id="floor-summary" hidden></p>
     {self._floor_chrome_regions()}
 
     <div class="ambient">
       <span class="led off" id="floor-led" aria-hidden="true"></span>
       <span class="msg" id="floor-msg"><strong>offline</strong> — no live run in this build</span>
       <span class="meta" id="floor-meta">fleet-events: none · age —</span>
+      <span class="state-note" id="floor-state-note" hidden></span>
     </div>
 
     <div class="waiting">
@@ -1375,6 +1560,7 @@ class Renderer:
       stream are shown — live state never enters <span class="mono">index.json</span>.
       Settled runs: enter <strong>REPLAY</strong> to scrub history with an honesty watermark.</p>
     </div>
+    {self._floor_summary_html(live, state, age)}
     {self._floor_chrome_regions()}
     {wm_static}
 
@@ -1382,6 +1568,7 @@ class Renderer:
       <span class="{led_html}" id="floor-led" aria-hidden="true"></span>
       <span class="msg" id="floor-msg"><strong>{esc(status)}</strong> — dispatch <span class="mono">{esc(live.get("dispatch_id") or "—")}</span>{msg_extra}</span>
       <span class="meta" id="floor-meta">{esc(live.get("source") or "live.json")} · last event {esc(age_txt)} · snapshot {esc(live.get("generated_at") or "—")}</span>
+      {self._floor_state_note_html(live, state)}
     </div>
 
     <div class="waiting">
@@ -1395,7 +1582,7 @@ class Renderer:
       <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">{cn("blocked")}</span></div><div class="desc">failed · rate-capped · unknown</div></div>
       <div class="pipe done"><div class="ph">Settled <span class="n" id="pipe-settled">{cn("settled")}</span></div><div class="desc">record lands in the <a href="../work/index.html">Almanac</a></div></div>
     </div>
-{self._live_now_card(live)}
+{self._live_now_card(live, state)}
 {self._live_queue_card(live)}
 {self._live_today_card(live, state)}
 

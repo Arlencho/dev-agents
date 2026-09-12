@@ -214,6 +214,10 @@ def empty_projection(now=None, reason="no dispatch has emitted events yet"):
         # Day view: one entry per dispatch that ENDED on this local calendar day.
         "today": [],
         "today_meta": {"date": None, "streams_read": 0, "live": [], "ended": 0},
+        # The one line at the top of the Floor, in plain counts. Filled by
+        # build(); zeros here so the key always exists (a replay sets it None).
+        "summary": {"running": 0, "queued": 0, "landed_today": 0,
+                    "last_event_ts": None},
         "warnings": [],
         "view": "live",  # "live" | "replay" — replay never paints a green LIVE LED
         "replay": None,
@@ -240,6 +244,12 @@ def mark_replay(proj, as_of_seq, total_events):
     seqs = [e.get("seq") for e in (proj.get("recent_events") or []) if isinstance(e.get("seq"), int)]
     if as_of_seq is not None and isinstance(as_of_seq, int):
         max_seq = max(max_seq, as_of_seq)
+    # `summary` and `seats[].now` are statements about the present. A
+    # historical scrub has no present, so both stay empty rather than
+    # borrowing today's counts.
+    proj["summary"] = None
+    for seat in proj.get("seats") or []:
+        seat["now"] = None
     proj["replay"] = {
         "as_of_seq": as_of_seq,
         "total_events": total_events,
@@ -374,6 +384,34 @@ def local_date(dt_utc):
     return dt_utc.replace(tzinfo=timezone.utc).astimezone().date()
 
 
+def run_outcome(end_status, exits, failed):
+    """One word for how a finished dispatch ended: landed, failed or aborted.
+
+    The close-out status alone cannot tell the two bad endings apart:
+    dispatch.sh writes ``aborted`` from its exit trap whenever it does not reach
+    the normal close-out, for an operator's Ctrl-C and for a run that died by
+    itself after a seat failed alike. The seat exits can. An operator stop
+    leaves a seat without a seat_exit; a run that ended by itself has an exit
+    for every seat it dispatched. ``exits`` maps task_id to the status of that
+    seat's LAST seat_exit (None while it has none), so a retry overrides.
+
+      landed    close-out ``completed``, every seat's last exit ``success``,
+                and the dispatcher counted no failure
+      failed    at least one seat's last exit is not ``success`` and every
+                dispatched seat has exited (the run ended by itself); or a
+                ``completed`` close-out that is not clean
+      aborted   anything else: stopped while a seat was still in flight, or
+                before the normal close-out with nothing having failed
+    """
+    unexited = [t for t, st in exits.items() if st is None]
+    not_ok = [t for t, st in exits.items() if st is not None and st != "success"]
+    if end_status == "completed":
+        return "landed" if not not_ok and not unexited and not failed else "failed"
+    if not_ok and not unexited:
+        return "failed"
+    return "aborted"
+
+
 def summarize_stream(path):
     """One dispatch, folded to the facts the day view needs. Cached by mtime."""
     try:
@@ -397,9 +435,10 @@ def summarize_stream(path):
         "started_at": None, "ended_at": None,
         "status": "running", "end_status": None,
         "duration_s": None, "seats": 0, "succeeded": None, "failed": None,
-        "branches": [],
+        "outcome": None, "branches": [],
     }
     seat_ids = set()
+    exits = {}          # task_id -> status of its last seat_exit, None until one
     for ev in events:
         if ev.get("dispatch_id"):
             summary["dispatch_id"] = ev["dispatch_id"]
@@ -412,7 +451,12 @@ def summarize_stream(path):
                 summary["mode"] = ev["mode"]
         elif kind in ("seat_dispatch", "seat_exit"):
             if ev.get("task_id") is not None:
-                seat_ids.add(str(ev["task_id"]))
+                task_id = str(ev["task_id"])
+                seat_ids.add(task_id)
+                if kind == "seat_exit":
+                    exits[task_id] = ev.get("status") or "failed"
+                else:
+                    exits[task_id] = None
             branch = ev.get("branch")
             if branch and branch not in summary["branches"]:
                 summary["branches"].append(branch)
@@ -427,6 +471,8 @@ def summarize_stream(path):
                 if isinstance(ev.get(key_name), int):
                     summary[key_name] = ev[key_name]
     summary["seats"] = len(seat_ids)
+    if summary["ended_at"] is not None:
+        summary["outcome"] = run_outcome(summary["end_status"], exits, summary["failed"])
     _DAY_CACHE[path] = (key, summary)
     return summary
 
@@ -477,6 +523,7 @@ def today_view(events_dir, now, entries):
                 "purpose": known.get("purpose"),
                 "purpose_source": "queue" if known.get("purpose") else "none",
                 "status": summary.get("status"),
+                "outcome": summary.get("outcome"),
                 "end_status": summary.get("end_status"),
                 "duration_s": summary.get("duration_s"),
                 "started_at": summary.get("started_at"),
@@ -598,6 +645,22 @@ def activity_path(value):
     return text
 
 
+def program_name(value):
+    """A progress program name as the Floor may render it: one bare word.
+
+    The reader already reduced the command to its first token and a path to
+    its basename. The projector refuses to trust that twice: anything that is
+    not a bare word (a path, an option, an argument) is dropped here too, so a
+    hand-written stream line cannot put an operator path on the page.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    text = scrub_text(value, 40)
+    if "/" in text or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$", text):
+        return None
+    return text
+
+
 def seat_activity(ev, ts):
     """Newest seat_progress folded into the seat object as `activity`."""
     phase = ev.get("phase")
@@ -607,6 +670,8 @@ def seat_activity(ev, ts):
         "phase": phase if phase in PHASES else None,
         "tool": scrub_text(tool, 40) if tool else None,
         "path": activity_path(ev.get("path")),
+        # Program name of the seat's last shell command (writer-reduced).
+        "program": program_name(ev.get("program")),
     }
     for key in ("files_edited", "commands_run", "tests_run", "commits_made"):
         value = ev.get(key)
@@ -622,6 +687,20 @@ def first_sentence(value, limit=TASK_MAX):
     if match:
         text = match.group(1)
     return scrub_text(text, limit)
+
+
+# A plan header carries machine directives as well as prose. The purpose the
+# Floor prints is what a person would read out loud, so a directive line is
+# skipped and the first prose comment wins. Same rule as scripts/queue.sh
+# (is_machine_header), so the queue and the Floor never disagree about why a
+# run exists.
+MACHINE_HEADER_RE = re.compile(
+    r"^(dispatch|law|schema|protocol|usage|ref|refs|generated by)\b[: ]", re.IGNORECASE)
+
+
+def is_machine_header(body):
+    """True when this plan comment line is a directive, not a purpose."""
+    return bool(MACHINE_HEADER_RE.match(body)) or not re.search(r"[A-Za-z]", body)
 
 
 def resolve_plan_path(plan_name, queue_entries):
@@ -651,6 +730,9 @@ def resolve_plan_path(plan_name, queue_entries):
 def parse_plan(path):
     """Fold a plan file into {purpose, waves, seats[]}. Mirrors dispatch.sh.
 
+    ``purpose`` is the first PROSE comment line of the header (see
+    is_machine_header): the same line scripts/queue.sh would have stored.
+
     Plan line: ``[wave] | agent | task | [branch]``. The branch is only the last
     field and only when it looks like a branch slug, exactly as dispatch.sh
     decides, so seat index and branch line up with what the stream reports.
@@ -672,7 +754,7 @@ def parse_plan(path):
         if stripped.startswith("#"):
             if not purpose:
                 body = stripped.lstrip("#").strip()
-                if body:
+                if body and not is_machine_header(body):
                     purpose = scrub_text(body)
             continue
         lines.append(stripped)
@@ -751,6 +833,73 @@ def attach_plan_context(proj, queue_entries, plan_cache=None):
         seat["wave_total"] = plan["waves"]
         if match:
             seat["task"] = match["task"] or None
+    return proj
+
+
+# ── the plain sentence (one per live seat) + the top line ────────────────────
+#
+# Issue 69: the Floor must read like sentences, not like a schema. The page
+# should never have to join three objects to say
+#
+#   "devops is testing (make), wave 2 of 3 of 'the queue and the day view',
+#    14 min in, last sign of life 20 s ago"
+#
+# so every fact that sentence needs is projected in ONE place per live seat,
+# and the four numbers of the header in ONE object. Nothing here is new truth:
+# it is the stream, the queue and the plan file, already folded above.
+
+def seat_now(seat, proj, purpose_index):
+    """Everything the page needs for one sentence about one live seat.
+
+    Purpose comes from the queue entry the orchestrator declared, else the
+    plan header, and says which of the two it was. A missing fact is None, so
+    the page drops that clause instead of printing a guess.
+    """
+    activity = seat.get("activity") or {}
+    plan = os.path.basename(str(seat.get("plan") or proj.get("plan") or ""))
+    declared = (purpose_index.get(plan) or {}).get("purpose")
+    purpose, source = None, "none"
+    if declared:
+        purpose, source = declared, "queue"
+    elif seat.get("plan_purpose"):
+        purpose, source = seat["plan_purpose"], "plan"
+    return {
+        "role": seat.get("agent"),
+        "phase": activity.get("phase"),
+        "program": activity.get("program"),
+        "purpose": first_sentence(purpose) if purpose else None,
+        "purpose_source": source,
+        "wave": seat.get("wave"),
+        "wave_total": seat.get("wave_total"),
+        "elapsed_s": seat.get("elapsed_s"),
+        "heartbeat_age_s": seat.get("heartbeat_age_s"),
+    }
+
+
+def attach_now(proj, queue_entries):
+    """Give every RUNNING seat its sentence, and the page its top line.
+
+    A seat that is not running gets ``now: null``: the sentence is present
+    tense, and a settled or unknown seat has no present.
+
+    ``last_event_ts`` is a timestamp, never a precomputed age: the page
+    computes the age live from it, so the header ticks with the rest of the
+    chrome and cannot disagree with the state note when the watcher is gone.
+    """
+    purpose_index = queue_purpose_index(queue_entries)
+    running = 0
+    for seat in proj.get("seats") or []:
+        if seat.get("status") != "running":
+            seat["now"] = None
+            continue
+        running += 1
+        seat["now"] = seat_now(seat, proj, purpose_index)
+    proj["summary"] = {
+        "running": running,
+        "queued": (proj.get("queue_meta") or {}).get("queued") or 0,
+        "landed_today": len(proj.get("today") or []),
+        "last_event_ts": proj.get("last_event_ts"),
+    }
     return proj
 
 
@@ -843,6 +992,8 @@ def _seat(state, task_id):
             "heartbeat_age_s": None,
             "activity": None,
             "quiet": False,
+            # One sentence worth of facts, filled for RUNNING seats only.
+            "now": None,
             "plan_purpose": None,
             "task": None,
             "wave_total": None,
@@ -1127,6 +1278,8 @@ def attach_queue_and_day(proj, events_dir, queue_file, now):
         proj.setdefault("warnings", []).append(warning)
     merge_live_seats(proj, events_dir, now, live)
     attach_plan_context(proj, entries)
+    # Last: the sentence needs the queue, the plan context and every live seat.
+    attach_now(proj, entries)
     return proj
 
 

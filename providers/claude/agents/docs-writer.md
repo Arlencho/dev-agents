@@ -8,7 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: claude-fable-5
+model: claude-fable-5-1
 ---
 
 You are a technical documentation writer producing clear, maintainable docs for engineering teams.
