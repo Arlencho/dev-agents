@@ -27,6 +27,8 @@ fi
 #   --retries N                Max retries per task (default: 2)
 #   --retry-on-different-worker Retry failed tasks on a different worker
 #   --skip-auth-preflight      Skip vendor session preflight (not recommended)
+#   --no-wait                  Exit 9 instead of queueing when another dispatch
+#                              already holds this repo's localhost lock
 #
 # Example plan.txt:
 #   1 | go-backend | implement payment service | feat/payments-svc
@@ -81,6 +83,8 @@ usage() {
     echo "  --review                     Run autoplan review before dispatching"
     echo "  --retry-on-different-worker  Retry failed tasks on a different worker"
     echo "  --skip-auth-preflight        Skip vendor CLI session preflight (default: on)"
+    echo "  --no-wait                    Do not queue behind another dispatch on this repo;"
+    echo "                               exit 9 immediately if the localhost lock is held"
     echo ""
     echo "Plan file format:"
     echo "  [wave] | agent | task description | [branch-name]"
@@ -103,6 +107,7 @@ MAX_RETRIES=2
 RETRY_DIFFERENT_WORKER=false
 REVIEW_PLAN=false
 SKIP_AUTH_PREFLIGHT=false
+NO_WAIT=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -124,6 +129,10 @@ while [ $# -gt 0 ]; do
             ;;
         --skip-auth-preflight)
             SKIP_AUTH_PREFLIGHT=true
+            shift
+            ;;
+        --no-wait)
+            NO_WAIT=true
             shift
             ;;
         --help|-h)
@@ -731,6 +740,118 @@ retry_task() {
 }
 
 # --------------------------------------------------
+# Local dispatch lock (one dispatch per repo on localhost workers)
+# --------------------------------------------------
+# Every localhost seat runs its git checkout in the SAME shared tree:
+# run-remote.sh sets WORK_DIR="$HOME/dev/<repo>" and each seat does
+# `cd "$WORK_DIR"; git fetch; git checkout main; git pull; git checkout <branch>`
+# there (scripts/run-remote.sh:120 and :245-262). Two dispatches running side
+# by side therefore fight over one index and one HEAD: the second checkout
+# yanks the first agent's branch away mid-edit.
+#
+# This lock serializes whole dispatches, which removes the cross-dispatch
+# collision only. Seats inside one wave still share the tree. The real fix is
+# a per-seat git worktree in run-remote.sh: see issue #66.
+#
+# Remote (ssh) workers are unaffected: they have their own machines and their
+# own checkouts, so the lock is taken only when a localhost worker is in play.
+# ---- dispatch-lock:begin (tests/run-dispatch-lock-tests.sh sources this block) ----
+LOCK_DIR="${LOCK_DIR:-$LOGS_DIR/dispatch-locks}"
+LOCK_REPO_NAME=$(basename "$REPO_URL" .git)
+LOCK_FILE="$LOCK_DIR/${LOCK_REPO_NAME}.lock"
+LOCK_HELD=false
+# Distinct from 1 so a caller can tell "another dispatch is running" apart from
+# "this dispatch failed".
+LOCK_BUSY_EXIT=9
+# Poll granularity while queueing. The heartbeat below stays at 60s regardless;
+# only the tests shorten this.
+LOCK_POLL_S="${DISPATCH_LOCK_POLL_S:-5}"
+
+dispatch_lock_uses_localhost() {
+    local w wname whost
+    for w in "${WORKER_ARRAY[@]}"; do
+        IFS='|' read -r wname whost <<< "$w"
+        case "$whost" in
+            localhost|127.0.0.1) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Atomic create-or-fail: noclobber makes ">" fail when the file already exists.
+dispatch_lock_try_acquire() {
+    mkdir -p "$LOCK_DIR"
+    if ( set -o noclobber; printf '%s\n%s\n%s\n' \
+            "$$" "$PLAN_SOURCE" "$(date -u +%FT%TZ)" > "$LOCK_FILE" ) 2>/dev/null; then
+        LOCK_HELD=true
+        return 0
+    fi
+    return 1
+}
+
+# Release only our own lock, once, and never a lock another pid has since taken.
+dispatch_lock_release() {
+    [ "${LOCK_HELD:-false}" = true ] || return 0
+    LOCK_HELD=false
+    local owner
+    owner=$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || echo "")
+    [ "$owner" = "$$" ] && rm -f "$LOCK_FILE"
+    return 0
+}
+
+# Block until this dispatch owns the repo lock. Exits $LOCK_BUSY_EXIT instead of
+# queueing when --no-wait was given.
+dispatch_lock_acquire() {
+    local holder_pid holder_plan holder_since waited
+    while ! dispatch_lock_try_acquire; do
+        holder_pid=$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || echo "")
+        holder_plan=$(sed -n '2p' "$LOCK_FILE" 2>/dev/null || echo "unknown plan")
+        holder_since=$(sed -n '3p' "$LOCK_FILE" 2>/dev/null || echo "unknown time")
+
+        # A lock file with no live owner is the residue of a killed dispatch.
+        if [ -z "$holder_pid" ] || ! kill -0 "$holder_pid" 2>/dev/null; then
+            echo -e "${YELLOW}Clearing stale $LOCK_REPO_NAME dispatch lock (pid ${holder_pid:-unknown} is gone).${NC}"
+            rm -f "$LOCK_FILE"
+            continue
+        fi
+
+        echo -e "${YELLOW}Another dispatch holds the $LOCK_REPO_NAME lock: pid $holder_pid running plan '$holder_plan' (since $holder_since).${NC}"
+        if [ "${NO_WAIT:-false}" = true ]; then
+            echo -e "${RED}--no-wait given: not queueing behind it. Exiting $LOCK_BUSY_EXIT.${NC}" >&2
+            exit "$LOCK_BUSY_EXIT"
+        fi
+        echo "Waiting for it to finish. Ctrl-C to give up, or re-run with --no-wait to fail fast."
+
+        waited=0
+        while kill -0 "$holder_pid" 2>/dev/null && [ -f "$LOCK_FILE" ] \
+              && [ "$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || echo "")" = "$holder_pid" ]; do
+            sleep "$LOCK_POLL_S"
+            waited=$(( waited + LOCK_POLL_S ))
+            if [ "$waited" -ge 60 ]; then
+                echo "  still waiting on pid $holder_pid, plan '$holder_plan' ($(date -u +%FT%TZ))"
+                waited=0
+            fi
+        done
+    done
+    return 0
+}
+# ---- dispatch-lock:end ----
+
+if dispatch_lock_uses_localhost; then
+    dispatch_lock_acquire
+    echo -e "${GREEN}Holding the $LOCK_REPO_NAME dispatch lock${NC} (pid $$, $LOCK_FILE)"
+    echo ""
+
+    # Re-arm the close-out traps so the lock is released on every exit path:
+    # normal end, `set -e` abort, Ctrl-C, kill, and hangup. dispatch_lock_release
+    # is idempotent, so the explicit call at the end of the run is harmless here.
+    trap 'dispatch_lock_release; fleet_close_dispatch aborted' EXIT
+    trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 130' INT
+    trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 143' TERM
+    trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 129' HUP
+fi
+
+# --------------------------------------------------
 # Execute waves
 # --------------------------------------------------
 TOTAL_TASKS=${#TASK_AGENT[@]}
@@ -1118,7 +1239,8 @@ for i in "${!TASK_AGENT[@]}"; do
 done
 
 fleet_close_dispatch completed
-trap - EXIT INT TERM
+dispatch_lock_release
+trap - EXIT INT TERM HUP
 
 echo ""
 echo -e "Total duration: ${OVERALL_DURATION}s"

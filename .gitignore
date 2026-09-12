@@ -22,6 +22,9 @@ learnings/*.jsonl
 # Rate-cap sentinel runtime state (per-machine)
 logs/provider-state/
 
+# Per-repo dispatch locks (per-machine runtime state, one file per repo)
+logs/dispatch-locks/
+
 # Fleet Desk Phase B live event streams (per-machine runtime truth, never history)
 logs/fleet-events/
 
