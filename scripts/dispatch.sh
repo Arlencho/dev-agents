@@ -719,7 +719,7 @@ retry_task() {
     local delay=${BACKOFF_DELAYS[$delay_idx]:-30}
 
     echo -e "  ${YELLOW}Retrying${NC} task $idx ($agent) in ${delay}s [attempt $((attempt + 1))/$((MAX_RETRIES + 1))]..." >&2
-    sleep "$delay"
+    dispatch_sleep_interruptible "$delay"
 
     local exclude=""
     if [ "$RETRY_DIFFERENT_WORKER" = true ]; then
@@ -835,20 +835,54 @@ dispatch_lock_acquire() {
     done
     return 0
 }
+
+# Blocking builtins defer traps. `wait` hands the shell to the kernel until the
+# child exits, and a long `sleep` does the same, so a signal that arrives first
+# is only serviced once the block returns: Ctrl-C during a wave could leave the
+# lock file behind for as long as the seats keep running. Poll in short slices
+# instead, so a queued INT/TERM trap runs at most one slice late and the lock is
+# released while the seats are still live.
+DISPATCH_WAIT_SLICE_S="${DISPATCH_WAIT_SLICE_S:-1}"
+
+# Wait for one background seat and return its exit status. bash keeps the status
+# of a finished background job until `wait` claims it, so the trailing wait is
+# exact even though the poll loop already saw the pid disappear.
+dispatch_wait_interruptible() {
+    local pid="$1"
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep "$DISPATCH_WAIT_SLICE_S"
+    done
+    wait "$pid" 2>/dev/null
+}
+
+# Same reason, for fixed delays such as the retry backoff: one long sleep would
+# hold a pending trap for its whole duration.
+dispatch_sleep_interruptible() {
+    local total="$1"
+    local slept=0
+    while [ "$slept" -lt "$total" ]; do
+        sleep "$DISPATCH_WAIT_SLICE_S"
+        slept=$(( slept + DISPATCH_WAIT_SLICE_S ))
+    done
+}
+
+# Close-out traps for a run that holds the lock: release it on every exit path
+# (normal end, `set -e` abort, Ctrl-C, kill, hangup). dispatch_lock_release is
+# idempotent, so the explicit call at the end of the run is harmless here.
+# A function rather than inline traps so the lock suite can arm the real thing.
+dispatch_lock_arm_traps() {
+    trap 'dispatch_lock_release; fleet_close_dispatch aborted' EXIT
+    trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 130' INT
+    trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 143' TERM
+    trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 129' HUP
+}
 # ---- dispatch-lock:end ----
 
 if dispatch_lock_uses_localhost; then
     dispatch_lock_acquire
     echo -e "${GREEN}Holding the $LOCK_REPO_NAME dispatch lock${NC} (pid $$, $LOCK_FILE)"
     echo ""
-
-    # Re-arm the close-out traps so the lock is released on every exit path:
-    # normal end, `set -e` abort, Ctrl-C, kill, and hangup. dispatch_lock_release
-    # is idempotent, so the explicit call at the end of the run is harmless here.
-    trap 'dispatch_lock_release; fleet_close_dispatch aborted' EXIT
-    trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 130' INT
-    trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 143' TERM
-    trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 129' HUP
+    dispatch_lock_arm_traps
 fi
 
 # --------------------------------------------------
@@ -917,22 +951,17 @@ for wave_num in "${SORTED_WAVES[@]}"; do
                             elapsed_s="$helapsed"
                     fi
                 done
-                # Sleep in short chunks so we notice seat exit without full-interval lag.
+                # Sleep in short slices so we notice seat exit without
+                # full-interval lag, and so Ctrl-C is serviced mid-wave.
                 slept=0
-                while [ "$slept" -lt "$heartbeat_s" ]; do
-                    if ! kill -0 "$pid" 2>/dev/null; then
-                        break
-                    fi
-                    sleep 5
-                    slept=$((slept + 5))
+                while [ "$slept" -lt "$heartbeat_s" ] && kill -0 "$pid" 2>/dev/null; do
+                    sleep "$DISPATCH_WAIT_SLICE_S"
+                    slept=$(( slept + DISPATCH_WAIT_SLICE_S ))
                 done
             done
-            wait "$pid"
-            status=$?
-        else
-            wait "$pid"
-            status=$?
         fi
+        dispatch_wait_interruptible "$pid"
+        status=$?
         set -e
 
         end_time=$(date +%s)
@@ -999,7 +1028,7 @@ for wave_num in "${SORTED_WAVES[@]}"; do
 
                 TASK_START[$idx]=$(date +%s)
                 set +e
-                wait "$retry_pid"
+                dispatch_wait_interruptible "$retry_pid"
                 retry_status=$?
                 set -e
 

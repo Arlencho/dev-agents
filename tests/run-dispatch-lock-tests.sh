@@ -20,7 +20,7 @@ check() { # <name> <expected> <actual>
     fi
 }
 
-check_true() { # <name> <command...>  — the command must succeed
+check_true() { # <name> <command...>  the command must succeed
     local name="$1"; shift
     if "$@"; then
         printf '  ok   %s\n' "$name"; pass=$((pass+1))
@@ -117,6 +117,104 @@ printf '999999\nwave-plans/other.plan\n2026-09-12T00:00:00Z\n' > "$LOCKS/dev-age
 LOGS_DIR="$SANDBOX/logs" "$HARNESS" 'LOCK_HELD=true; dispatch_lock_release' >/dev/null 2>&1
 check_true "another pid's lock is left alone" test -f "$LOCKS/dev-agents.lock"
 rm -f "$LOCKS/dev-agents.lock"
+
+echo ""
+echo "== signals release the lock while a wave is blocked =="
+# Shape under test: a dispatch that holds the lock and is blocked the way a live
+# wave blocks (waiting on seats, or sitting in the retry backoff). The holders
+# reuse the extracted block verbatim, so the traps, the wait helper and the
+# sleep helper are the ones dispatch.sh actually runs.
+
+new_holder() { # <file>  harness preamble + take the lock + arm the real traps
+    sed '/^eval "\$@"$/d' "$HARNESS" > "$1"
+    cat >> "$1" <<'PROLOGUE'
+fleet_close_dispatch() { :; }   # stand-in for the event ledger the traps close
+dispatch_lock_acquire
+dispatch_lock_arm_traps
+PROLOGUE
+}
+
+WAVE_HOLDER="$SANDBOX/holder-wave.sh"
+new_holder "$WAVE_HOLDER"
+cat >> "$WAVE_HOLDER" <<'HOLDER'
+# A seat that ignores INT and TERM, so the wave cannot end by itself: the lock
+# can only disappear because a trap ran.
+perl -e '$SIG{INT} = "IGNORE"; $SIG{TERM} = "IGNORE"; sleep 120' &
+: > "$READY_FILE"
+dispatch_wait_interruptible "$!"
+HOLDER
+
+BACKOFF_HOLDER="$SANDBOX/holder-backoff.sh"
+new_holder "$BACKOFF_HOLDER"
+cat >> "$BACKOFF_HOLDER" <<'HOLDER'
+# The retry backoff shape: a fixed delay with no seat to watch. One blocking
+# sleep here would hold a pending trap for the whole delay.
+: > "$READY_FILE"
+dispatch_sleep_interruptible 30
+HOLDER
+
+# Runs a holder and signals it once it is blocked.
+# Echoes "<exit code> <present|removed> <seconds until it exited>".
+signal_holder() { # <holder script> <signal> <group|direct>
+    local script="$1" sig="$2" scope="$3"
+    local ready="$SANDBOX/ready.$sig.$scope"
+    local target rc waited=0 start
+    rm -f "$ready" "$LOCKS/dev-agents.lock"
+
+    # perl gives the holder a process group of its own (as leader, so pgid = pid)
+    # and restores the default INT/TERM disposition before exec: a shell that
+    # starts with a signal already ignored cannot trap it at all, and this has to
+    # measure dispatch.sh rather than the way the suite spawned it.
+    READY_FILE="$ready" LOGS_DIR="$SANDBOX/logs" \
+        perl -e '$SIG{INT} = "DEFAULT"; $SIG{TERM} = "DEFAULT"; setpgrp(0, 0); exec @ARGV or die $!' \
+             -- "${BASH:-/bin/bash}" "$script" >"$SANDBOX/holder.$sig.$scope.log" 2>&1 &
+    local holder=$!
+
+    while [ ! -f "$ready" ] && [ "$waited" -lt 100 ]; do sleep 0.1; waited=$((waited + 1)); done
+    if [ ! -f "$ready" ]; then
+        kill -KILL -"$holder" 2>/dev/null
+        wait "$holder" 2>/dev/null
+        echo "no-start absent 0"
+        return
+    fi
+
+    # group: what a TTY Ctrl-C sends. direct: what a wrapper or a supervisor sends.
+    [ "$scope" = group ] && target="-$holder" || target="$holder"
+    start=$(date +%s)
+    kill -"$sig" "$target" 2>/dev/null
+
+    waited=0
+    while kill -0 "$holder" 2>/dev/null && [ "$waited" -lt 100 ]; do sleep 0.1; waited=$((waited + 1)); done
+    if kill -0 "$holder" 2>/dev/null; then
+        kill -KILL -"$holder" 2>/dev/null
+        wait "$holder" 2>/dev/null
+        echo "timeout $([ -f "$LOCKS/dev-agents.lock" ] && echo present || echo removed) 10"
+        return
+    fi
+
+    wait "$holder"; rc=$?
+    kill -KILL -"$holder" 2>/dev/null   # sweep any seat the trap left behind
+    echo "$rc $([ -f "$LOCKS/dev-agents.lock" ] && echo present || echo removed) $(( $(date +%s) - start ))"
+}
+
+if command -v perl >/dev/null 2>&1; then
+    read -r int_rc int_lock _ <<< "$(signal_holder "$WAVE_HOLDER" INT group)"
+    check "process-group SIGINT during a wave frees the lock" "removed" "$int_lock"
+    check "interrupted run exits 130" "130" "$int_rc"
+
+    read -r term_rc term_lock _ <<< "$(signal_holder "$WAVE_HOLDER" TERM group)"
+    check "process-group SIGTERM during a wave frees the lock" "removed" "$term_lock"
+    check "terminated run exits 143" "143" "$term_rc"
+
+    # A blocking sleep would park the trap for the full 30s delay.
+    read -r delay_rc delay_lock delay_s <<< "$(signal_holder "$BACKOFF_HOLDER" INT direct)"
+    check "SIGINT during the retry backoff frees the lock" "removed" "$delay_lock"
+    check "backoff does not defer the trap" "130" "$delay_rc"
+    check_true "lock freed within 5s, not after the 30s delay" test "$delay_s" -le 5
+    rm -f "$LOCKS/dev-agents.lock"
+else
+    echo "  skip perl is not available: cannot isolate a process group for the signal tests"
+fi
 
 echo ""
 echo "== remote-only fleets take no lock =="
