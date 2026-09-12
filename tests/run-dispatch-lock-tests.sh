@@ -217,6 +217,18 @@ else
 fi
 
 echo ""
+echo "== the close-out trap keeps the exit code it was entered with =="
+# The EXIT trap runs last on every path, including after the INT / TERM traps
+# call exit 130 / 143 (asserted above). It must not report the status of its own
+# close-out work in place of the run's.
+LOGS_DIR="$SANDBOX/logs" "$HARNESS" \
+    'fleet_close_dispatch() { :; }; dispatch_lock_acquire >/dev/null; dispatch_lock_arm_traps; exit 7' \
+    >/dev/null 2>&1
+check "a failed run keeps its own exit code" "7" "$?"
+check_true "and the lock is still released" test ! -f "$LOCKS/dev-agents.lock"
+rm -f "$LOCKS/dev-agents.lock"
+
+echo ""
 echo "== remote-only fleets take no lock =="
 WORKER_ARRAY_SPEC="mac-mini-1|192.168.1.50" LOGS_DIR="$SANDBOX/logs" \
     "$HARNESS" dispatch_lock_uses_localhost >/dev/null 2>&1

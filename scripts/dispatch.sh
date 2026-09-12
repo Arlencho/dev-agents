@@ -466,11 +466,14 @@ fleet_close_dispatch() {
 # EXIT covers normal and error exits; the INT/TERM traps make the close-out
 # ordering explicit on Ctrl-C / kill and pin the conventional 130/143 exit
 # codes instead of relying on the shell's signal-death behavior (whether an
-# EXIT trap runs on fatal signals varies by shell and version — measured here:
-# bash 3.2 and 5.3 both run it, but nothing guarantees it). The
-# FLEET_DISPATCH_CLOSED guard keeps the later EXIT trap a no-op after a
-# signal close-out.
-trap 'fleet_close_dispatch aborted' EXIT
+# EXIT trap runs on fatal signals varies by shell and version: bash 3.2 and 5.3
+# both run it, but nothing guarantees it). The FLEET_DISPATCH_CLOSED guard keeps
+# the later EXIT trap a no-op after a signal close-out.
+#
+# The EXIT trap captures the status it was entered with and exits with it again,
+# so the close-out cannot report success over a run that was interrupted (130),
+# terminated (143) or failed. Wrappers read that code.
+trap 'dispatch_rc=$?; fleet_close_dispatch aborted; exit "$dispatch_rc"' EXIT
 trap 'fleet_close_dispatch aborted; exit 130' INT
 trap 'fleet_close_dispatch aborted; exit 143' TERM
 
@@ -871,7 +874,7 @@ dispatch_sleep_interruptible() {
 # idempotent, so the explicit call at the end of the run is harmless here.
 # A function rather than inline traps so the lock suite can arm the real thing.
 dispatch_lock_arm_traps() {
-    trap 'dispatch_lock_release; fleet_close_dispatch aborted' EXIT
+    trap 'dispatch_rc=$?; dispatch_lock_release; fleet_close_dispatch aborted; exit "$dispatch_rc"' EXIT
     trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 130' INT
     trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 143' TERM
     trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 129' HUP
