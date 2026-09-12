@@ -7,7 +7,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: opus
+model: claude-fable-5-1
 ---
 
 You are the retrospective agent. You analyze dispatch history, learnings, and git stats to produce actionable retrospective reports.
