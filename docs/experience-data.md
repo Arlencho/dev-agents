@@ -362,7 +362,7 @@ One JSON object per line, appended, never rewritten. Every line carries:
 | Key | Type | Meaning |
 |-----|------|---------|
 | `schema` | string | `fleet-events/1` |
-| `seq` | int | 1-based, monotonic within one dispatch |
+| `seq` | int | 1-based, monotonic **per writer**. The dispatcher numbers its own spine in process; a seat reader (`seat_progress`) appends from a separate process, so the two counters share no space and a number can repeat. File order is the true order; the replay scrub cuts the spine on `seq` and the reader's lines on `ts` |
 | `ts` | string | UTC ISO-8601 `YYYY-MM-DDTHH:MM:SSZ` |
 | `dispatch_id` | string | `<UTC timestamp>-<repo slug>`, also the filename stem |
 | `event` | string | Event type (below) |
@@ -382,6 +382,7 @@ One JSON object per line, appended, never rewritten. Every line carries:
 | `human_resume` | the operator answered | `kind`, `wave`, `answer` (`continue`\|`abort`) |
 | `wave_end` | a wave closes | `wave`, `seats`, `succeeded`, `failed` |
 | `seat_log` | log collected | `task_id`, `agent`, `log` (**filename only**) |
+| `seat_progress` | the seat's live stream moved (see below) | `task_id`, `agent`, `tool`, `path` (**repo-relative, or the literal `outside-repo`**), `files_edited`, `commands_run`, `tests_run`, `commits_made`, `phase` |
 | `dispatch_end` | run closes (also on Ctrl-C, via trap) | `status` (`completed`\|`aborted`), `total`, `succeeded`, `failed`, `duration_s` |
 
 `seat_exit.status` ∈ `success` · `failed` · `blocked` (guardrails, exit 77) ·
@@ -438,6 +439,55 @@ show **QUIET** instead of a silent green live run.
 An unwritable directory disables the stream with a warning — a dispatch is never
 failed by its own telemetry.
 
+### Seat activity (`seat_progress`, what the seat is doing right now)
+
+Heartbeats prove a seat is **alive**. `seat_progress` says what it is **doing**.
+
+| Piece | File |
+|-------|------|
+| Writer | `scripts/seat-progress.py` (a pass-through filter on the agent stream) |
+| Wiring | `providers/lib.sh` `run_and_classify` (`AGENT_STREAM_READER`), env from `scripts/run-remote.sh` |
+| Emitter | `scripts/fleet-events.sh emit seat_progress` (the same writer as every other event) |
+
+The launcher runs the vendor CLI in print mode with a streamed JSON output, so
+the stream arrives line by line instead of in one block at the end. The reader
+sits between the CLI and the `tee`, writes every byte through unchanged (the
+agent log is exactly what the CLI printed), and folds the stream into counts.
+`PIPESTATUS[0]` still belongs to the CLI, so exit codes and rate-cap
+classification are untouched.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `task_id` / `agent` | string | which seat this belongs to (matches `seat_dispatch`) |
+| `tool` | string | tool name only, e.g. `Read`, `Edit`, `Bash` |
+| `path` | string | repo-relative path when the tool targets a file; anything resolving outside the repo becomes the literal **`outside-repo`** |
+| `files_edited` | int | distinct paths written so far |
+| `commands_run` | int | commands run so far |
+| `tests_run` | int | commands that ran a test suite so far |
+| `commits_made` | int | commands that made a commit so far |
+| `phase` | string | `reading` · `reviewing` · `editing` · `testing` · `committing` |
+
+`phase` is derived from the counts alone, as a monotone ladder (commits, else
+tests, else edits, else commands, else nothing yet). It says how far the seat
+has got, not what its last keystroke was.
+
+**Cadence:** one event on **every tool call**, plus **at most one event per 15
+seconds** (`SEAT_PROGRESS_INTERVAL_S`) while the stream moves without tool
+calls, plus one closing event at end of stream.
+
+**Redaction (writer-enforced, do not weaken):** prompts, task bodies, message
+text, thinking, tool argument values and command lines **never** leave the
+reader. Command lines are inspected in-process only, to tell a test run from a
+commit from any other command, and are never emitted, not even truncated.
+Absolute paths never leave it either; `desk_live.py` refuses to trust that
+twice and re-marks any absolute or escaping path as `outside-repo`.
+
+**Scope:** the env that turns emitting on is passed for a **local worker** only,
+because the stream file lives on the dispatcher. On a true remote host the
+reader degrades to a plain pass-through: the agent log is unchanged and no
+progress events appear. Every other failure mode (no `python3`, missing reader,
+unwritable stream) degrades the same way.
+
 ### Projection (`live/1`) — `site/experience/data/live.json`
 
 `scripts/desk_live.py` folds the stream (resolved via `--dispatch-id`, else the
@@ -453,7 +503,7 @@ failed by its own telemetry.
 | `status` | string | `idle` · `running` · `settled` · `aborted` |
 | `reason` | string | why it is idle (teaches the next command) |
 | `wave` | object | `{current, total}` |
-| `seats[]` | array | one per `task_id`: `agent`, `branch`, `wave`, `provider`, `worker`, `model`, `status`, `pipeline`, `exit`, `attempt`, `started_at`, `ended_at`, `duration_s`, `elapsed_s` (running), `providers_tried[]`, `failovers[]`, `ratecapped`, `log` |
+| `seats[]` | array | one per `task_id`: `agent`, `branch`, `wave`, `provider`, `worker`, `model`, `status`, `pipeline`, `exit`, `attempt`, `started_at`, `ended_at`, `duration_s`, `elapsed_s` (running), `providers_tried[]`, `failovers[]`, `ratecapped`, `log`, `activity` (newest `seat_progress`: `{ts, phase, tool, path, files_edited, commands_run, tests_run, commits_made}`, else `null`) |
 | `counts` | object | pipeline counts: `queued`, `in_flight`, `blocked`, `settled`, `total` |
 | `waiting_on[]` | array | first-class strip: open human gates, then rate-capped seats, else the longest-running seat. Each entry has `kind` (`human_gate`\|`ratecap`\|`seat`), `label`, `since` |
 | `last_event_ts` | string | newest event timestamp seen |
@@ -473,6 +523,167 @@ Honesty rules the projector enforces:
 * malformed lines are skipped and counted in `warnings`, never guessed at;
 * **Phase C:** when `view=replay` (or `--as-of-seq` / `--replay`), `staleness.state`
   is forced to **`replay`** and `replay.watermark` is **`REPLAY`** — never a green LIVE LED.
+
+### Ops Floor queue (`logs/fleet-queue.json`, schema `fleet-queue/1`)
+
+The event stream says what **ran**. The queue says what the orchestrator
+**declared** should run next, in which order, and why. They are different kinds
+of truth and are stored separately: the stream is per-machine runtime (gitignored),
+the queue is intent and is **tracked in git** so the order survives a machine.
+
+```text
+scripts/queue.sh  ──►  logs/fleet-queue.json   (schema fleet-queue/1)
+scripts/dispatch.sh ─┘         │                start / settle, best effort
+                               ▼
+                     scripts/desk_live.py  ──► live.json: queue[] + today[]
+```
+
+| Piece | File |
+|-------|------|
+| Store + CLI | `scripts/queue.sh` (`make queue-add`, `make queue-list`, `make queue-rm`) |
+| Writer (machine) | `scripts/dispatch.sh` at `dispatch_start` / `dispatch_end` |
+| Reader / projector | `scripts/desk_live.py` |
+| Tests | `tests/run-desk-live-tests.sh` Part F |
+
+#### Document
+
+```json
+{
+  "schema": "fleet-queue/1",
+  "updated_at": "2026-09-12T15:40:00Z",
+  "entries": [
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-12-w2b-read-tools.plan",
+      "repo": "olympus-platform",
+      "purpose": "Assistant Channel W2-B: the six read tools and the cost quota. Issue 2800.",
+      "added_at": "2026-09-12T15:40:00Z",
+      "status": "queued",
+      "dispatch_id": null,
+      "settled_at": null,
+      "settled_status": null
+    }
+  ]
+}
+```
+
+| Field | Notes |
+|-------|-------|
+| `plan` | Plan path **relative to the repo**; an absolute path inside the repo is rewritten, one outside keeps its basename |
+| `repo` | Target repo slug the plan dispatches into (`olympus-platform`), not the plan's own repo |
+| `purpose` | One line the orchestrator writes. Defaults to the **first comment line of the plan file**; never a task body |
+| `added_at` | UTC ISO-8601, when the entry was declared. The newest one stamps the Floor block |
+| `status` | `queued` · `running` · `settled` |
+| `dispatch_id` | Set when a dispatch claims the plan; matches the event-stream id |
+| `settled_at`, `settled_status` | Written at `dispatch_end` (`completed` · `aborted`) |
+
+`entries` is **ordered**: position 1 is next. Order is intent, never motion.
+
+#### Commands
+
+```bash
+./scripts/queue.sh add <plan> <repo> [purpose]   # append (purpose defaults to the plan header)
+./scripts/queue.sh rm <plan>                     # drop
+./scripts/queue.sh mv <plan> <position>          # reorder (1-based)
+./scripts/queue.sh start <plan> [dispatch_id]    # mark running (dispatch.sh calls this)
+./scripts/queue.sh settle <plan> [status]        # mark settled (dispatch.sh calls this)
+./scripts/queue.sh list                          # print the order
+make queue-add PLAN=wave-plans/x.plan REPO=olympus-platform PURPOSE="one line"
+make queue-list
+make queue-rm PLAN=wave-plans/x.plan
+```
+
+Every subcommand prints the resulting order. A plan is matched by repo-relative
+path first, then by basename, so the same entry is reachable from any spelling.
+
+#### Rules
+
+* **Append-safe.** Every write lands in a temp file in the same directory, is
+  fsynced, then renamed over the queue: a reader never sees a half file and an
+  interrupted write never loses an entry. Concurrent writers take an exclusive
+  lock on `<queue>.lock` (5s timeout), so two dispatches cannot clobber each
+  other (the suite proves 8 parallel adds keep 8 entries).
+* **Never destructive on bad input.** A malformed or off-schema queue is refused
+  with a non-zero exit and left byte-for-byte untouched.
+* **Machine-maintained.** `dispatch.sh` marks the plan `running` with the
+  dispatch id at `dispatch_start` (appending it as `running` when it was never
+  armed) and `settled` at `dispatch_end`, aborted runs included. Both calls are
+  best effort: a missing `queue.sh`, an unwritable `logs/`, a busy lock or a
+  missing `python3` are swallowed. **A dispatch is never blocked by its queue.**
+* **Same redaction law as the stream.** Purposes come from the plan header only.
+  No task description, prompt or handoff prose ever enters the queue.
+* Opt-out: `FLEET_QUEUE=0` silences every write. Override the path with
+  `FLEET_QUEUE_FILE=/path` (or `--queue-file` on `desk_live.py`).
+
+### Queue + day fields in the projection (`live/1`)
+
+`desk_live.py` folds the queue and the whole local day into the same
+`live.json`. These keys always exist, so a page never has to guess why they are
+missing.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `queue[]` | array | Entries with status `queued`, **in declared order**: `position`, `plan`, `plan_basename`, `repo`, `purpose`, `added_at`, `status` (always `queued`) |
+| `queue_meta` | object | `{source, declared, declared_at, total, queued, running, settled}`. `declared_at` is the `added_at` of the **newest** entry and stamps the Floor block |
+| `today[]` | array | One entry per dispatch whose **`dispatch_end` falls on the local calendar day**: `dispatch_id`, `source`, `plan`, `plan_basename`, `repo`, `purpose` (+ `purpose_source`: `queue` or `none`), `status` (`settled` · `aborted`), `end_status`, `duration_s`, `started_at`, `ended_at`, `seats`, `succeeded`, `failed`, `branches[]` |
+| `today_meta` | object | `{date, streams_read, live[], ended}`: the local day, how many streams were read, which dispatch ids are still live |
+| `multi_dispatch` | object | Present only when a second dispatch is live on the day: `{live[], followed, merged_seats}` |
+| `seats[].dispatch_id` | string | Which run a seat belongs to |
+| `seats[].foreign` | bool | `true` when the seat comes from a live dispatch other than the followed one |
+
+### The now view (`seats[]` additions + `plan_context`)
+
+The Floor answers "what is this seat doing, and for how long" from data the
+stream and the plan file already carry. The stream travels with a plan
+**basename** only, so `desk_live.py` resolves that basename to the plan file on
+disk (queue entry first, then a walk of `wave-plans/`) and reads three things
+from it: the header, the seat's own line, the wave count.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `plan_context` | object | `{plan, purpose, waves, seats}` for the followed run |
+| `seats[].plan_purpose` | string | First comment line of the seat's plan |
+| `seats[].task` | string | **First sentence** of that seat's line in the plan, cut at 120 chars. Never the whole task body |
+| `seats[].wave_total` | int | Wave count of the plan, so a seat reads "wave 2 of 3" |
+| `seats[].attempt` | int | Attempt number from `seat_dispatch` |
+| `seats[].started_at` | string | `seat_dispatch` timestamp; the browser ticks elapsed from it every second |
+| `seats[].last_heartbeat_ts` | string | Newest `seat_heartbeat` for that seat, `null` when none arrived |
+| `seats[].heartbeat_age_s` | int | Seconds since the last sign of life (heartbeat, else `seat_dispatch`) |
+| `seats[].quiet` | bool | `true` when a **running** seat has had no sign of life for `quiet_after_s` (90) |
+
+Rules:
+
+* the plan is joined to seats by **branch** first, then seat index, then agent;
+  a seat the plan cannot explain keeps its stream facts and says so on the page
+  rather than showing a guessed task;
+* a plan that is not on this machine yields `plan_purpose: null` and
+  `task: null`, never an invented line;
+* `seat_heartbeat` updates liveness but **never creates a seat**;
+* published task text passes the same secret scrub as the Almanac and is a
+  single line;
+* `quiet` uses the same threshold as the `quiet_stream` entry in `waiting_on`,
+  and the Floor marks it in the REPLAY watermark language (violet badge), never
+  as a green live seat.
+
+Rules the projector enforces:
+
+* the day view reads **every stream file of the day**, not only the newest, so
+  concurrent dispatches all appear (files are mtime-prefiltered to a 48h window
+  and summaries are cached by mtime and size);
+* the single-dispatch follow is unchanged: the resolved stream still owns
+  `status`, `wave`, `waiting_on` and the event tail. When more than one dispatch
+  is live, the other seats are **appended** and labelled `foreign`, never merged
+  into the followed run's identity;
+* a queued plan is only ever `queued`, so the Floor cannot claim it is running;
+* a malformed queue degrades to an empty `queue[]` plus a `warnings[]` line;
+* **replay projections carry neither `queue[]` nor `today[]`**: a historical
+  scrub must not borrow today's intent.
+
+On the Floor: the **Queued** pipeline cell counts declared plans (with the file
+named under it), **Up next** lists position, purpose, repo and plan basename with
+the dashed "declared, not observed" treatment, and **Landed today** lists
+purpose, status, duration and the branches created. `make experience` rebuilds
+`data/`, so write the projection after it (`make desk-live-once`, or leave
+`make desk-live` running and the page repaints itself).
 
 ### Phase C — replay API
 

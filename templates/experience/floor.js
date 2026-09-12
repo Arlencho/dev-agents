@@ -34,6 +34,13 @@
     last: null,
   };
 
+  /* Does the elapsed ticker run? Only while the stream itself is live. It
+     starts false so the build snapshot never counts up before a fetch has
+     confirmed anything, and it goes false again on stale, offline, replay or
+     a failed fetch: the seat then keeps the last value the projection
+     reported, the way the lanes already do. */
+  var elapsedLive = false;
+
   function $(id) { return document.getElementById(id); }
 
   function esc(s) {
@@ -206,11 +213,185 @@
 
   function renderCounts(d) {
     var c = d.counts || {};
-    var ids = { queued: "pipe-queued", in_flight: "pipe-inflight", blocked: "pipe-blocked", settled: "pipe-settled" };
+    var ids = { in_flight: "pipe-inflight", blocked: "pipe-blocked", settled: "pipe-settled" };
     Object.keys(ids).forEach(function (k) {
       var el = $(ids[k]);
-      if (el) el.textContent = (typeof c[k] === "number" ? c[k] : "—");
+      if (el) el.textContent = (typeof c[k] === "number" ? c[k] : "\u2014");
     });
+    /* Queued counts PLANS, not seats: the only real queue is the declared one.
+       With no queue file we fall back to the seat count and say so. */
+    var meta = d.queue_meta || {};
+    var queued = (d.queue || []).length;
+    var cell = $("pipe-queued");
+    if (cell) {
+      cell.textContent = meta.declared
+        ? queued
+        : (typeof c.queued === "number" ? c.queued : "\u2014");
+    }
+    var desc = $("pipe-queued-desc");
+    if (desc) {
+      desc.innerHTML = meta.declared
+        ? "plans armed in <span class=\"mono\">" + esc(meta.source || "logs/fleet-queue.json") + "</span>"
+        : "no queue declared, showing plan seats not started";
+    }
+  }
+
+  /* One line of live activity under a seat: phase pill, tool, repo-relative
+     path, then the counts the stream reported. Projection facts only: the
+     stream carries no prompt, no argument and no command line, so there is
+     nothing here to leak. Absent activity renders nothing at all. */
+  var PHASES = { reading: 1, reviewing: 1, editing: 1, testing: 1, committing: 1 };
+
+  function activityLine(seat) {
+    var a = seat.activity;
+    if (!a) return "";
+    var phase = PHASES[a.phase] ? a.phase : "in flight";
+    var what = [];
+    if (a.tool) what.push(esc(a.tool));
+    if (a.path) what.push('<span class="mono">' + esc(a.path) + "</span>");
+    var counts = [
+      (a.files_edited || 0) + " edited",
+      (a.commands_run || 0) + " cmd",
+      (a.tests_run || 0) + " test",
+      (a.commits_made || 0) + " commit",
+    ].join(" · ");
+    return '<div class="nowact"><span class="st st-run">' + esc(phase) + "</span>" +
+      '<span class="faint">' + (what.join(" ") || "no tool reported yet") + "</span>" +
+      '<span class="mono faint">' + esc(counts) + "</span></div>";
+  }
+
+  /* The now view: what every live seat is doing, why, and for how long.
+     Purpose and task come from the plan file (projection side), elapsed ticks
+     in the browser from the seat_dispatch timestamp, and a seat whose last sign
+     of life is older than the quiet threshold wears the watermark badge. */
+  function nowRow(seat) {
+    var quiet = seat.quiet === true;
+    var wave = (typeof seat.wave === "number")
+      ? ("wave " + seat.wave + (seat.wave_total ? " of " + seat.wave_total : ""))
+      : "wave not reported";
+    var beat = seat.last_heartbeat_ts
+      ? "last heartbeat " + timeOf(seat.last_heartbeat_ts) +
+        (typeof seat.heartbeat_age_s === "number" ? " (" + fmtDur(seat.heartbeat_age_s) + " ago)" : "")
+      : "no heartbeat yet";
+    return '<li class="nowrow' + (quiet ? " quiet" : "") + '">' +
+      '<div class="nowhead"><span class="role">' + esc(seat.agent || seat.task_id) + "</span>" +
+      seatPill(seat) +
+      (quiet ? '<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>' : "") +
+      '<span class="timer mono" data-elapsed-from="' + esc(seat.started_at || "") + '">' +
+      fmtDur(seat.elapsed_s) + "</span></div>" +
+      '<div class="nowpurpose">' + esc(seat.plan_purpose || "purpose not declared in the plan header") + "</div>" +
+      '<div class="nowtask">' + esc(seat.task || "task line not resolvable from the plan on this machine") + "</div>" +
+      activityLine(seat) +
+      '<div class="nowmeta"><span class="vendor">' + esc(wave) + "</span>" +
+      '<span class="vendor">attempt ' + esc(seat.attempt || 1) + "</span>" +
+      '<span class="mono faint">' + esc(seat.branch || "branch not reported") + "</span>" +
+      '<span class="faint">' + esc(beat) + "</span></div></li>";
+  }
+
+  function renderNow(d) {
+    var box = $("floor-now-list");
+    if (!box) return;
+    var live = (d.seats || []).filter(function (s) { return s.status === "running"; });
+    var note = $("floor-now-note");
+    if (note) {
+      var runs = {};
+      live.forEach(function (s) { if (s.dispatch_id) runs[s.dispatch_id] = 1; });
+      var n = Object.keys(runs).length;
+      note.textContent = live.length
+        ? live.length + " live seat(s) across " + (n || 1) + " dispatch(es)"
+        : "no seat is live";
+    }
+    box.innerHTML = live.length
+      ? live.map(nowRow).join("")
+      : '<li class="muted">No seat is live. The Floor shows motion only while a dispatch is running.</li>';
+    tickElapsed();
+  }
+
+  /* One ticker for the page: elapsed counts up every second from the timestamp
+     the stream recorded, so a live seat never looks frozen between polls.
+     Off a live stream it does not run at all: a clock still climbing while the
+     LED says offline is a liveness claim the projection cannot back. */
+  function tickElapsed() {
+    if (!elapsedLive) return;
+    var nodes = document.querySelectorAll("[data-elapsed-from]");
+    for (var i = 0; i < nodes.length; i++) {
+      var from = new Date(nodes[i].getAttribute("data-elapsed-from") || "").getTime();
+      if (isNaN(from)) continue;
+      nodes[i].textContent = fmtDur(Math.max(0, Math.round((Date.now() - from) / 1000)));
+    }
+  }
+
+  /* Up next: declared intent. Never rendered as motion, never as "running". */
+  function renderQueue(d) {
+    var box = $("floor-queue-list");
+    if (!box) return;
+    var items = d.queue || [];
+    var meta = d.queue_meta || {};
+    var note = $("floor-queue-note");
+    if (note) {
+      note.innerHTML = meta.declared
+        ? "Declared by the orchestrator in <span class=\"mono\">" +
+          esc(meta.source || "logs/fleet-queue.json") + "</span>, newest entry added " +
+          esc(meta.declared_at || "at an unknown time") +
+          ". Order is intent: a queued plan is not running."
+        : "No queue declared. Arm one with <code>./scripts/queue.sh add &lt;plan&gt; &lt;repo&gt; &lt;purpose&gt;</code>.";
+    }
+    if (!items.length) {
+      box.innerHTML = '<li class="muted">Nothing armed. The next dispatch is whatever the operator types.</li>';
+      return;
+    }
+    box.innerHTML = items.map(function (q) {
+      return '<li class="qrow">' +
+        '<span class="qpos mono">' + esc(q.position) + "</span>" +
+        '<span class="qbody"><span class="qpurpose">' +
+        esc(q.purpose || "no purpose declared") + "</span>" +
+        '<span class="qmeta"><span class="vendor">' + esc(q.repo || "repo not declared") + "</span> " +
+        '<span class="mono faint">' + esc(q.plan_basename || q.plan || "") + "</span></span></span>" +
+        '<span class="st st-unk">queued</span></li>';
+    }).join("");
+  }
+
+  /* Landed today: every dispatch whose dispatch_end fell on this local day.
+     The "still live" count is a liveness claim like any other on this page, so
+     off a live stream it is qualified with "at last event" instead of being
+     asserted in the present tense. State comes from renderAll. */
+  function renderToday(d, st) {
+    var box = $("floor-today-list");
+    if (!box) return;
+    var items = d.today || [];
+    var meta = d.today_meta || {};
+    /* The note is a variable length, data driven string, so it lives in the
+       muted paragraph UNDER the head (same as #floor-queue-note), never in the
+       .cardhead .more slot: that slot is white-space: nowrap and a live day
+       pushed the whole page sideways at 400px. */
+    var note = $("floor-today-note");
+    if (note) {
+      var state = (st && st.state) || liveState(d).state;
+      var liveN = (meta.live || []).length;
+      var liveTxt = !liveN ? ""
+        : state === "live" ? " · " + liveN + " still live"
+        : " · " + liveN + " still live at last event";
+      note.textContent = "dispatch_end on " + (meta.date || "today") +
+        " · " + (meta.streams_read || 0) + " stream(s) read" + liveTxt;
+    }
+    if (!items.length) {
+      box.innerHTML = '<li class="muted">Nothing has landed today yet.</li>';
+      return;
+    }
+    box.innerHTML = items.map(function (t) {
+      var cls = t.status === "settled" ? "st st-done"
+        : (t.status === "aborted" || t.status === "failed") ? "st st-fail" : "st st-unk";
+      var branches = (t.branches || []).map(function (b) {
+        return '<span class="mono faint">' + esc(b) + "</span>";
+      }).join(" ");
+      return '<li class="trow">' +
+        '<span class="tbody"><span class="tpurpose">' +
+        esc(t.purpose || t.plan_basename || t.dispatch_id) + "</span>" +
+        '<span class="tmeta"><span class="vendor">' + esc(t.repo || "repo not reported") + "</span> " +
+        (branches || '<span class="faint">no branch reported</span>') + "</span></span>" +
+        '<span class="' + cls + '">' + esc(t.status || "unknown") + "</span>" +
+        '<span class="timer mono">' + fmtDur(t.duration_s) + "</span></li>";
+    }).join("");
   }
 
   function renderLanes(d) {
@@ -450,10 +631,14 @@
     var st = liveState(d);
     // Hard honesty: never green LIVE when view says replay.
     if (d.view === "replay" && st.state === "live") st = { state: "replay", age: st.age };
+    elapsedLive = st.state === "live";
     renderWatermark(st, d);
     renderAmbient(d, st);
     renderWaiting(d);
     renderCounts(d);
+    renderNow(d);
+    renderQueue(d);
+    renderToday(d, st);
     if (d.mode === "conductor") renderSpine(d); else renderLanes(d);
     renderEvents(d);
     renderCrossLinks(d);
@@ -475,7 +660,7 @@
           renderAll(d);
         }
       })
-      .catch(function () { /* keep snapshot */ });
+      .catch(function () { elapsedLive = false; /* keep snapshot, frozen */ });
   }
 
   function stopLivePoll() {
@@ -489,12 +674,15 @@
     fetch(liveUrl, { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        if (!d) return;
+        if (!d) { elapsedLive = false; return; }
         // Auto-offer scrubber when the live projection is terminal.
         if (mode.replay) return;
         renderAll(d);
       })
-      .catch(function () { /* file:// or server down: keep the build snapshot */ })
+      .catch(function () {
+        // file:// or server down: keep the build snapshot, and stop the clock.
+        elapsedLive = false;
+      })
       .then(function () {
         if (!mode.replay) mode.pollTimer = setTimeout(pollLive, POLL_MS);
       });
@@ -507,6 +695,7 @@
   }
 
   // Boot
+  setInterval(tickElapsed, 1000);
   if (mode.replay || mode.dispatchId) {
     mode.replay = true;
     loadReplay(mode.dispatchId, mode.asOfSeq);

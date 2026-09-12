@@ -26,6 +26,10 @@ logs/provider-state/
 # Fleet Desk Phase B live event streams (per-machine runtime truth, never history)
 logs/fleet-events/
 
+# Ops Floor queue lock + in-flight temp files (the queue itself is tracked intent)
+logs/fleet-queue.json.lock
+logs/fleet-queue.json.tmp.*
+
 # Evidence scorecard outputs (aggregates; no secrets expected)
 logs/evidence.csv
 logs/evidence-latest.txt

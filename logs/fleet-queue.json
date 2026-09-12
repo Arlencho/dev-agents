@@ -1,0 +1,46 @@
+{
+  "schema": "fleet-queue/1",
+  "updated_at": "2026-09-12T15:32:43Z",
+  "entries": [
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-11-w1c-tile.plan",
+      "repo": "olympus-platform",
+      "purpose": "Assistant Channel W1-C: the consent screen and the Connected Assistants tile. Issue 2799.",
+      "added_at": "2026-09-12T15:32:43Z",
+      "status": "queued",
+      "dispatch_id": null,
+      "settled_at": null,
+      "settled_status": null
+    },
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-12-w2a-iris-scaffold.plan",
+      "repo": "olympus-platform",
+      "purpose": "Assistant Channel W2-A: the Iris service, scaffold and edge. Issue 2800. 2026-09-12",
+      "added_at": "2026-09-12T15:32:43Z",
+      "status": "queued",
+      "dispatch_id": null,
+      "settled_at": null,
+      "settled_status": null
+    },
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-12-w2b-read-tools.plan",
+      "repo": "olympus-platform",
+      "purpose": "Assistant Channel W2-B: the six read tools and the cost quota. Issue 2800. 2026-09-12",
+      "added_at": "2026-09-12T15:32:43Z",
+      "status": "queued",
+      "dispatch_id": null,
+      "settled_at": null,
+      "settled_status": null
+    },
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-12-w2c-update-and-hosts.plan",
+      "repo": "olympus-platform",
+      "purpose": "Assistant Channel W2-C: update_trip, the enforcement matrix, and connecting both hosts. Issue 2800. 2026-09-12",
+      "added_at": "2026-09-12T15:32:43Z",
+      "status": "queued",
+      "dispatch_id": null,
+      "settled_at": null,
+      "settled_status": null
+    }
+  ]
+}

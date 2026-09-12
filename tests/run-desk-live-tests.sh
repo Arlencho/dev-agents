@@ -6,6 +6,8 @@
 #   Part B: scripts/desk_live.py live/1 projection over synthetic fixtures
 #           (tests/fixtures/fleet-events/*.jsonl)
 #   Part C: scripts/dispatch.sh wiring guards (no task text ever emitted)
+#   Part G: scripts/seat-progress.py reader (pass-through, counts, redaction)
+#   Part H: live-activity wiring (launcher stream, reader placement, Floor)
 #
 # Offline by design: nothing here binds a socket or touches the network.
 #
@@ -377,6 +379,28 @@ else
   ok "no task text is ever emitted"
 fi
 
+# Ops Floor queue wiring: the machine maintains logs/fleet-queue.json, so a
+# dispatch must mark its plan running on the way in and settled on the way out.
+grep -q 'fleet_queue start' "$REPO_DIR/scripts/dispatch.sh" \
+  && ok "dispatch.sh marks the plan running in the queue" \
+  || bad "dispatch.sh marks the plan running in the queue"
+grep -q 'fleet_queue settle' "$REPO_DIR/scripts/dispatch.sh" \
+  && ok "dispatch.sh settles the plan in the queue" \
+  || bad "dispatch.sh settles the plan in the queue"
+# Same redaction law on the queue path: purposes come from the plan header,
+# never from a task body.
+if grep -n 'fleet_queue' "$REPO_DIR/scripts/dispatch.sh" | grep -qE 'TASK_DESC|\$task|\$desc'; then
+  bad "no task text ever reaches the queue"
+else
+  ok "no task text ever reaches the queue"
+fi
+# Queue bookkeeping is best effort: a missing queue.sh must not kill a dispatch.
+if ( SCRIPT_DIR="$TMP/nonexistent"; eval "$(sed -n '/^fleet_queue() {/,/^}/p' "$REPO_DIR/scripts/dispatch.sh")"; fleet_queue start plan.plan ) >/dev/null 2>&1; then
+  ok "fleet_queue survives a missing queue.sh (never blocks a dispatch)"
+else
+  bad "fleet_queue survives a missing queue.sh (never blocks a dispatch)"
+fi
+
 # M1: the close-out must EXECUTE, not just grep. Replay every trap line
 # dispatch.sh installs for fleet_close_dispatch into a harness shaped like the
 # inter-wave gate (dispatch.sh `read -r answer`), then prove dispatch_end is
@@ -589,6 +613,463 @@ grep -q 'FLEET_HEARTBEAT_S' "$REPO_DIR/scripts/dispatch.sh" \
 grep -q 'elapsed_s' "$REPO_DIR/scripts/fleet-events.sh" \
   && ok "fleet-events treats elapsed_s as numeric on heartbeats" \
   || bad "fleet-events treats elapsed_s as numeric on heartbeats"
+
+echo ""
+echo "== Part F: Ops Floor queue + day view =="
+
+bash -n "$REPO_DIR/scripts/queue.sh" && ok "queue.sh parses" || bad "queue.sh parses"
+test -x "$REPO_DIR/scripts/queue.sh" && ok "queue.sh is executable" || bad "queue.sh is executable"
+
+Q_FILE="$TMP/fleet-queue.json"
+QUEUE="$REPO_DIR/scripts/queue.sh"
+PLAN_DIR="$TMP/plans"
+mkdir -p "$PLAN_DIR"
+cat > "$PLAN_DIR/alpha.plan" <<'PLAN'
+# Alpha purpose taken from the plan header. Issue 1.
+1 | devops | do the alpha thing | feat/alpha
+PLAN
+cat > "$PLAN_DIR/beta.plan" <<'PLAN'
+# Beta purpose from the header.
+1 | go-backend | do the beta thing | feat/beta
+PLAN
+
+FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" add "$PLAN_DIR/alpha.plan" olympus-platform >/dev/null 2>&1 \
+  && ok "queue add exits 0" || bad "queue add exits 0"
+FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" add "$PLAN_DIR/beta.plan" dev-agents "beta declared purpose" >/dev/null 2>&1
+assert_py "queue file is fleet-queue/1 with both entries in order" "$Q_FILE" \
+  'd["schema"]=="fleet-queue/1" and [e["plan"] for e in d["entries"]]==["alpha.plan","beta.plan"]'
+assert_py "purpose defaults to the first comment line of the plan" "$Q_FILE" \
+  'd["entries"][0]["purpose"].startswith("Alpha purpose taken from the plan header")'
+assert_py "an explicit purpose wins over the header" "$Q_FILE" \
+  'd["entries"][1]["purpose"]=="beta declared purpose"'
+
+FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" mv "$PLAN_DIR/beta.plan" 1 >/dev/null 2>&1
+assert_py "mv reorders the queue" "$Q_FILE" \
+  '[e["plan"] for e in d["entries"]]==["beta.plan","alpha.plan"]'
+FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" start "$PLAN_DIR/alpha.plan" 20260912-090000-olympus-platform >/dev/null 2>&1
+assert_py "start marks running with the dispatch id, keeping position" "$Q_FILE" \
+  'd["entries"][1]["status"]=="running" and d["entries"][1]["dispatch_id"]=="20260912-090000-olympus-platform"'
+FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" settle "$PLAN_DIR/alpha.plan" completed >/dev/null 2>&1
+assert_py "settle records status and time" "$Q_FILE" \
+  'd["entries"][1]["status"]=="settled" and d["entries"][1]["settled_status"]=="completed" and d["entries"][1]["settled_at"]'
+if FLEET_QUEUE_FILE="$Q_FILE" "$QUEUE" rm "$PLAN_DIR/nope.plan" >/dev/null 2>&1; then
+  bad "rm of an unknown plan reports failure"
+else
+  ok "rm of an unknown plan reports failure"
+fi
+
+# Crash safety: parallel writers must not lose an entry.
+P_FILE="$TMP/fleet-queue-par.json"
+for i in 1 2 3 4 5 6 7 8; do
+  ( FLEET_QUEUE_FILE="$P_FILE" "$QUEUE" add "plan-$i.plan" "repo-$i" "purpose $i" >/dev/null 2>&1 ) &
+done
+wait
+assert_py "8 concurrent adds keep 8 entries (lock + atomic rename)" "$P_FILE" \
+  'len(d["entries"])==8 and len({e["plan"] for e in d["entries"]})==8'
+
+# A malformed queue is refused, never overwritten.
+BAD_FILE="$TMP/fleet-queue-bad.json"
+printf '{ not json\n' > "$BAD_FILE"
+if FLEET_QUEUE_FILE="$BAD_FILE" "$QUEUE" add x.plan r p >/dev/null 2>&1; then
+  bad "malformed queue is refused"
+else
+  ok "malformed queue is refused"
+fi
+[ "$(cat "$BAD_FILE")" = "{ not json" ] \
+  && ok "malformed queue is left untouched" || bad "malformed queue is left untouched"
+
+# FLEET_QUEUE=0 writes nothing at all.
+OPT_FILE="$TMP/fleet-queue-optout.json"
+FLEET_QUEUE=0 FLEET_QUEUE_FILE="$OPT_FILE" "$QUEUE" add x.plan r p >/dev/null 2>&1
+[ -f "$OPT_FILE" ] && bad "FLEET_QUEUE=0 writes nothing" || ok "FLEET_QUEUE=0 writes nothing"
+
+# ── projection: queue[] + today[] over a multi-dispatch day ────────────────
+DAY_DIR="$TMP/events-day"
+mkdir -p "$DAY_DIR"
+python3 - "$DAY_DIR" <<'DAYFIX'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+
+out = sys.argv[1]
+now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+
+
+def ts(delta_s):
+    return (now - timedelta(seconds=delta_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write(name, rows):
+    with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+        for i, row in enumerate(rows, 1):
+            row.update({"schema": "fleet-events/1", "seq": i, "dispatch_id": name[:-6]})
+            fh.write(json.dumps(row) + "\n")
+
+
+# landed today
+write("day-landed.jsonl", [
+    {"ts": ts(3000), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "alpha.plan"},
+    {"ts": ts(2990), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/alpha", "wave": 1, "provider": "claude"},
+    {"ts": ts(2400), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/alpha", "wave": 1, "status": "success", "exit": 0, "duration_s": 590},
+    {"ts": ts(2395), "event": "dispatch_end", "status": "completed",
+     "total": 1, "succeeded": 1, "failed": 0, "duration_s": 605},
+])
+# live now (this is the followed run)
+write("day-live-a.jsonl", [
+    {"ts": ts(120), "event": "dispatch_start", "mode": "wave",
+     "repo": "dev-agents", "plan": "beta.plan"},
+    {"ts": ts(110), "event": "seat_dispatch", "task_id": "0", "agent": "go-backend",
+     "branch": "feat/beta", "wave": 1, "provider": "claude"},
+])
+# live now (second, concurrent)
+write("day-live-b.jsonl", [
+    {"ts": ts(90), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "gamma.plan"},
+    {"ts": ts(80), "event": "seat_dispatch", "task_id": "0", "agent": "web-frontend",
+     "branch": "feat/gamma", "wave": 1, "provider": "kimi"},
+])
+# an older run in the same directory: must not land in today[]
+old = (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+write("day-old.jsonl", [
+    {"ts": old, "event": "dispatch_start", "mode": "wave", "repo": "dev-agents", "plan": "old.plan"},
+    {"ts": old, "event": "dispatch_end", "status": "completed", "total": 0, "succeeded": 0, "failed": 0},
+])
+DAYFIX
+printf 'day-live-a.jsonl\n' > "$DAY_DIR/latest"
+
+DAY_OUT="$TMP/out/live-day.json"
+python3 "$DESK_LIVE" --once --events-dir "$DAY_DIR" --queue-file "$Q_FILE" --out "$DAY_OUT" >/dev/null 2>&1 \
+  && ok "--once with a queue exits 0" || bad "--once with a queue exits 0"
+assert_py "queue[] carries only queued entries, in order" "$DAY_OUT" \
+  '[q["plan_basename"] for q in d["queue"]]==["beta.plan"] and d["queue"][0]["position"]==1'
+assert_py "queue entries carry purpose and repo" "$DAY_OUT" \
+  'd["queue"][0]["purpose"]=="beta declared purpose" and d["queue"][0]["repo"]=="dev-agents"'
+assert_py "queue_meta publishes the newest added_at as the declaration time" "$DAY_OUT" \
+  'd["queue_meta"]["declared"] is True and d["queue_meta"]["declared_at"] and d["queue_meta"]["total"]==2'
+assert_py "a queued plan is never reported as running" "$DAY_OUT" \
+  'all(q["status"]=="queued" for q in d["queue"])'
+assert_py "today[] holds only dispatches that ended on the local day" "$DAY_OUT" \
+  '[t["dispatch_id"] for t in d["today"]]==["day-landed"]'
+assert_py "today entry carries status, duration and the branches created" "$DAY_OUT" \
+  'd["today"][0]["status"]=="settled" and d["today"][0]["duration_s"]==605 and d["today"][0]["branches"]==["feat/alpha"]'
+assert_py "today purpose comes from the queue when the plan is known" "$DAY_OUT" \
+  'd["today"][0]["purpose"].startswith("Alpha purpose") and d["today"][0]["purpose_source"]=="queue"'
+assert_py "every stream of the day is read, not only the newest" "$DAY_OUT" \
+  'd["today_meta"]["streams_read"]==4 and sorted(d["today_meta"]["live"])==["day-live-a","day-live-b"]'
+assert_py "concurrent live dispatches both show seats" "$DAY_OUT" \
+  'sorted(s["dispatch_id"] for s in d["seats"])==["day-live-a","day-live-b"]'
+assert_py "the followed run stays the subject of the page" "$DAY_OUT" \
+  'd["dispatch_id"]=="day-live-a" and d["multi_dispatch"]["followed"]=="day-live-a" and d["multi_dispatch"]["merged_seats"]==1'
+assert_py "merged seats are labelled as foreign to the followed run" "$DAY_OUT" \
+  'all(s.get("foreign") is True for s in d["seats"] if s["dispatch_id"]!="day-live-a")'
+
+# A malformed queue degrades to an empty queue plus a warning, never a crash.
+BAD_OUT="$TMP/out/live-badqueue.json"
+python3 "$DESK_LIVE" --once --events-dir "$DAY_DIR" --queue-file "$BAD_FILE" --out "$BAD_OUT" >/dev/null 2>&1 \
+  && ok "a malformed queue still projects" || bad "a malformed queue still projects"
+assert_py "malformed queue is an empty queue plus a warning" "$BAD_OUT" \
+  'd["queue"]==[] and any("queue file" in w for w in d["warnings"])'
+
+grep -q 'fleet-queue/1' "$REPO_DIR/docs/experience-data.md" \
+  && ok "docs/experience-data.md documents the fleet-queue/1 schema" \
+  || bad "docs/experience-data.md documents the fleet-queue/1 schema"
+grep -q 'queue_meta' "$REPO_DIR/docs/experience-data.md" \
+  && ok "docs/experience-data.md documents the new live.json fields" \
+  || bad "docs/experience-data.md documents the new live.json fields"
+for t in queue-add queue-list queue-rm; do
+  grep -qE "^$t:.*## " "$REPO_DIR/Makefile" \
+    && ok "make $t exists with help text" || bad "make $t exists with help text"
+done
+grep -q 'floor-queue-list' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "floor.js renders the Up next list" || bad "floor.js renders the Up next list"
+grep -q 'floor-today-list' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "floor.js renders the Landed today list" || bad "floor.js renders the Landed today list"
+grep -q 'floor-queue-list' "$REPO_DIR/scripts/experience_build.py" \
+  && ok "the static Floor snapshot carries the same regions" \
+  || bad "the static Floor snapshot carries the same regions"
+
+# Replay must not carry today's queue into a historical scrub.
+REPLAY_OUT="$TMP/out/live-replay-queue.json"
+python3 "$DESK_LIVE" --once --events-dir "$DAY_DIR" --queue-file "$Q_FILE" \
+  --dispatch-id day-landed --replay --out "$REPLAY_OUT" >/dev/null 2>&1
+assert_py "replay carries no live queue or day view" "$REPLAY_OUT" \
+  'd["view"]=="replay" and d["queue"]==[] and d["today"]==[]'
+
+# ── the now view: purpose, one-line task, wave x of N, attempt, quiet ──────
+NOW_PLAN="$PLAN_DIR/now.plan"
+cat > "$NOW_PLAN" <<'PLAN'
+# Now-view purpose taken from the plan header. Issue 4242.
+#
+# DISPATCH: ./scripts/dispatch.sh git@example.invalid:x/y.git plan --auto
+1 | go-backend | Stand up the service boundary and nothing else. READ FIRST the contract in full, then the issue, then every route it touches, and do not stop there because this sentence keeps going well past any sensible length. | feat/now-a
+2 | devops | Deploy it behind the edge. | feat/now-b
+PLAN
+NOW_Q="$TMP/now-queue.json"
+python3 - "$NOW_Q" "$NOW_PLAN" <<'NOWQ'
+import json, sys
+json.dump({"schema": "fleet-queue/1", "updated_at": "2026-09-12T00:00:00Z",
+           "entries": [{"plan": sys.argv[2], "repo": "olympus-platform",
+                        "purpose": "declared purpose", "added_at": "2026-09-12T00:00:00Z",
+                        "status": "running", "dispatch_id": "now-run",
+                        "settled_at": None, "settled_status": None}]},
+          open(sys.argv[1], "w"), indent=2)
+NOWQ
+
+NOW_DIR="$TMP/events-now"
+mkdir -p "$NOW_DIR"
+python3 - "$NOW_DIR" <<'NOWFIX'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+
+out = sys.argv[1]
+now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+
+
+def ts(d):
+    return (now - timedelta(seconds=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+rows = [
+    {"ts": ts(600), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "now.plan"},
+    {"ts": ts(599), "event": "dispatch_plan", "waves": 2, "seats": 2},
+    {"ts": ts(598), "event": "wave_start", "wave": 1, "seats": 2, "mode": "wave"},
+    # seat 0: heartbeat 10s ago, healthy
+    {"ts": ts(590), "event": "seat_dispatch", "task_id": "0", "agent": "go-backend",
+     "branch": "feat/now-a", "wave": 1, "provider": "claude", "model": "opus", "attempt": 2},
+    {"ts": ts(10), "event": "seat_heartbeat", "task_id": "0", "agent": "go-backend",
+     "branch": "feat/now-a", "wave": 1, "elapsed_s": 580},
+    # seat 1: dispatched long ago, no heartbeat since, must read quiet
+    {"ts": ts(585), "event": "seat_dispatch", "task_id": "1", "agent": "devops",
+     "branch": "feat/now-b", "wave": 1, "provider": "kimi", "attempt": 1},
+]
+with open(os.path.join(out, "now-run.jsonl"), "w", encoding="utf-8") as fh:
+    for i, row in enumerate(rows, 1):
+        row.update({"schema": "fleet-events/1", "seq": i, "dispatch_id": "now-run"})
+        fh.write(json.dumps(row) + "\n")
+NOWFIX
+printf 'now-run.jsonl\n' > "$NOW_DIR/latest"
+
+NOW_OUT="$TMP/out/live-now.json"
+python3 "$DESK_LIVE" --once --events-dir "$NOW_DIR" --queue-file "$NOW_Q" --out "$NOW_OUT" >/dev/null 2>&1 \
+  && ok "--once projects the now view" || bad "--once projects the now view"
+assert_py "a live seat carries the purpose of its plan" "$NOW_OUT" \
+  'S["0"]["plan_purpose"].startswith("Now-view purpose taken from the plan header")'
+assert_py "a live seat carries its task in one line, cut at 120 chars" "$NOW_OUT" \
+  'len(S["0"]["task"])<=120 and S["0"]["task"].startswith("Stand up the service boundary")'
+assert_py "the task is the first sentence, never the whole body" "$NOW_OUT" \
+  '"READ FIRST" not in S["0"]["task"]'
+assert_py "wave x of N comes from the plan wave count" "$NOW_OUT" \
+  'S["0"]["wave"]==1 and S["0"]["wave_total"]==2'
+assert_py "attempt number is projected" "$NOW_OUT" 'S["0"]["attempt"]==2'
+assert_py "elapsed is measured from seat_dispatch" "$NOW_OUT" \
+  'S["0"]["started_at"] and S["0"]["elapsed_s"]>=580'
+assert_py "a heartbeat keeps a working seat out of quiet" "$NOW_OUT" \
+  'S["0"]["last_heartbeat_ts"] and S["0"]["quiet"] is False and S["0"]["heartbeat_age_s"]<90'
+assert_py "a seat with no sign of life past the threshold is quiet" "$NOW_OUT" \
+  'S["1"]["quiet"] is True and S["1"]["last_heartbeat_ts"] is None and S["1"]["heartbeat_age_s"]>=90'
+assert_py "plan context is published for the followed run" "$NOW_OUT" \
+  'd["plan_context"]["waves"]==2 and d["plan_context"]["seats"]==2'
+assert_py "a heartbeat never invents a seat" "$NOW_OUT" 'len(d["seats"])==2'
+
+# An unresolvable plan degrades honestly: stream facts stay, nothing is guessed.
+GONE_Q="$TMP/gone-queue.json"
+python3 - "$GONE_Q" <<'GONEQ'
+import json, sys
+json.dump({"schema": "fleet-queue/1", "updated_at": None, "entries": []},
+          open(sys.argv[1], "w"), indent=2)
+GONEQ
+GONE_OUT="$TMP/out/live-gone.json"
+python3 "$DESK_LIVE" --once --events-dir "$NOW_DIR" --queue-file "$GONE_Q" --out "$GONE_OUT" >/dev/null 2>&1
+assert_py "a plan that is not on this machine invents no task" "$GONE_OUT" \
+  'S["0"]["task"] is None and S["0"]["plan_purpose"] is None and S["0"]["status"]=="running"'
+
+grep -q 'data-elapsed-from' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "floor.js ticks elapsed from the seat_dispatch timestamp" \
+  || bad "floor.js ticks elapsed from the seat_dispatch timestamp"
+grep -q 'setInterval(tickElapsed, 1000)' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "elapsed updates every second in the browser" \
+  || bad "elapsed updates every second in the browser"
+grep -q 'floor-now-list' "$REPO_DIR/scripts/experience_build.py" \
+  && ok "the static Floor snapshot carries the now view" \
+  || bad "the static Floor snapshot carries the now view"
+grep -q 'nowrow.quiet' "$REPO_DIR/templates/experience/site.css" \
+  && ok "quiet seats use the watermark visual language" \
+  || bad "quiet seats use the watermark visual language"
+
+echo ""
+echo "== Part G: seat activity (scripts/seat-progress.py) =="
+
+READER="$REPO_DIR/scripts/seat-progress.py"
+[ -f "$READER" ] && ok "stream reader exists" || bad "stream reader exists"
+
+# A synthetic agent stream: prose, five tool calls (one inside the repo, one
+# write, one file outside the repo, one test command, one commit), one result.
+# Every secret-shaped string is tagged LEAKCANARY: none may reach the stream.
+R_REPO="$TMP/reader-repo"
+mkdir -p "$R_REPO/scripts"
+R_IN="$TMP/reader-in.jsonl"
+cat > "$R_IN" <<'STREAM'
+{"type":"system","subtype":"init","cwd":"/private/tmp/x","tools":["Bash"]}
+{"type":"assistant","message":{"content":[{"type":"text","text":"LEAKCANARY-PROSE"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"scripts/desk_live.py"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"scripts/new.py","content":"LEAKCANARY-BODY"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/etc/hosts"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo LEAKCANARY-TOKEN && ./tests/run-desk-live-tests.sh"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git commit -m LEAKCANARY-MESSAGE"}}]}}
+not json at all, the log keeps it
+{"type":"result","subtype":"success","is_error":false,"result":"LEAKCANARY-RESULT"}
+STREAM
+
+R_EVENTS="$TMP/events-reader"
+mkdir -p "$R_EVENTS"
+R_FILE="$R_EVENTS/20260101-000000-reader.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":1,"ts":"2026-01-01T00:00:00Z","dispatch_id":"20260101-000000-reader","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"p.plan"}' > "$R_FILE"
+printf '%s\n' '{"schema":"fleet-events/1","seq":2,"ts":"2026-01-01T00:00:01Z","dispatch_id":"20260101-000000-reader","event":"seat_dispatch","task_id":"7","agent":"devops","branch":"feat/x","wave":1,"provider":"claude","model":"opus","worker":"localhost","attempt":1}' >> "$R_FILE"
+printf '%s\n' '20260101-000000-reader.jsonl' > "$R_EVENTS/latest"
+
+R_OUT="$TMP/reader-out.jsonl"
+FLEET_EVENTS_SH="$EMITTER" FLEET_EVENTS_FILE="$R_FILE" \
+  FLEET_DISPATCH_ID="20260101-000000-reader" \
+  SEAT_TASK_ID=7 SEAT_AGENT=devops SEAT_REPO_DIR="$R_REPO" \
+  SEAT_PROGRESS_INTERVAL_S=999 \
+  python3 "$READER" < "$R_IN" > "$R_OUT" 2>/dev/null
+R_RC=$?
+[ "$R_RC" -eq 0 ] && ok "reader exits 0 (telemetry never fails a dispatch)" \
+  || bad "reader exits 0 (telemetry never fails a dispatch)"
+if cmp -s "$R_IN" "$R_OUT"; then
+  ok "the stream passes through byte for byte (the agent log loses nothing)"
+else
+  bad "the stream passes through byte for byte (the agent log loses nothing)"
+fi
+
+# Only progress rows were added, and they carry the four counts + the phase.
+assert_jsonl "seat_progress reaches the stream through the existing emitter" "$R_FILE" \
+  'len(K.get("seat_progress",[]))>=6'
+assert_jsonl "progress names the seat it belongs to" "$R_FILE" \
+  'all(r["task_id"]=="7" and r["agent"]=="devops" for r in K["seat_progress"])'
+assert_jsonl "counts are JSON numbers, folded from the whole stream" "$R_FILE" \
+  'K["seat_progress"][-1]["files_edited"]==1 and K["seat_progress"][-1]["commands_run"]==2 '\
+'and K["seat_progress"][-1]["tests_run"]==1 and K["seat_progress"][-1]["commits_made"]==1'
+assert_jsonl "the phase ladder ends on committing" "$R_FILE" \
+  'K["seat_progress"][-1]["phase"]=="committing"'
+assert_jsonl "the first progress event says reading before any tool ran" "$R_FILE" \
+  'K["seat_progress"][0]["phase"]=="reading"'
+assert_jsonl "a repo file travels as a repo-relative path" "$R_FILE" \
+  'any(r.get("path")=="scripts/desk_live.py" for r in K["seat_progress"])'
+assert_jsonl "a file outside the repo travels as the literal marker" "$R_FILE" \
+  'any(r.get("path")=="outside-repo" for r in K["seat_progress"]) '\
+'and not any("/etc/hosts" in str(r.get("path")) for r in K["seat_progress"])'
+assert_jsonl "tool names travel, nothing else from the call" "$R_FILE" \
+  'set(r.get("tool") for r in K["seat_progress"] if r.get("tool"))=={"Read","Write","Bash"}'
+# The hard one: no prose, no argument value, no command line, ever.
+if grep -q "LEAKCANARY" "$R_FILE"; then
+  bad "no prompt, message, argument or command line reaches the stream"
+else
+  ok "no prompt, message, argument or command line reaches the stream"
+fi
+if grep -qE '"(command|content|text|thinking|input|prompt|task)"' "$R_FILE"; then
+  bad "progress events carry no transcript-shaped keys"
+else
+  ok "progress events carry no transcript-shaped keys"
+fi
+
+# No emitter env: a plain pass-through, no crash, nothing written anywhere.
+R_OUT2="$TMP/reader-out-bare.jsonl"
+( unset FLEET_EVENTS_SH FLEET_EVENTS_FILE; python3 "$READER" < "$R_IN" > "$R_OUT2" 2>/dev/null )
+R_RC2=$?
+if [ "$R_RC2" -eq 0 ] && cmp -s "$R_IN" "$R_OUT2"; then
+  ok "without the emitter env the reader is a plain pass-through"
+else
+  bad "without the emitter env the reader is a plain pass-through"
+fi
+
+# Projection: the newest progress lands on the seat as activity.
+OUT_R="$TMP/out/live-reader.json"
+python3 "$DESK_LIVE" --once --events-dir "$R_EVENTS" --out "$OUT_R" >/dev/null 2>&1
+assert_py "the newest seat_progress projects onto the seat as activity" "$OUT_R" \
+  'S["7"]["activity"]["phase"]=="committing" and S["7"]["activity"]["tool"]=="Bash" '\
+'and S["7"]["activity"]["commits_made"]==1'
+assert_py "a seat with no progress reports activity as null" "$OUT_R" \
+  'all(s["activity"] is None for s in d["seats"] if s["task_id"]!="7")'
+
+# Progress never invents a lane, and never renders an operator path.
+R2_DIR="$TMP/events-reader2"
+mkdir -p "$R2_DIR"
+printf '%s\n' '{"schema":"fleet-events/1","seq":1,"ts":"2026-01-01T00:00:00Z","dispatch_id":"r2","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"p.plan"}' > "$R2_DIR/r2.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":2,"ts":"2026-01-01T00:00:02Z","dispatch_id":"r2","event":"seat_progress","task_id":"9","agent":"devops","phase":"editing","tool":"Edit","path":"/Users/someone/secret/plan.md","files_edited":3,"commands_run":0,"tests_run":0,"commits_made":0}' >> "$R2_DIR/r2.jsonl"
+OUT_R2="$TMP/out/live-reader2.json"
+python3 "$DESK_LIVE" --once --events-dir "$R2_DIR" --out "$OUT_R2" >/dev/null 2>&1
+assert_py "seat_progress never creates a seat the stream did not dispatch" "$OUT_R2" \
+  'not d["seats"]'
+
+# Same absolute path, this time on a seat the stream did dispatch: the seat
+# object the Floor renders must carry the marker, never the operator path.
+R3_DIR="$TMP/events-reader3"
+mkdir -p "$R3_DIR"
+printf '%s\n' '{"schema":"fleet-events/1","seq":1,"ts":"2026-01-01T00:00:00Z","dispatch_id":"r3","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"p.plan"}' > "$R3_DIR/r3.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":2,"ts":"2026-01-01T00:00:01Z","dispatch_id":"r3","event":"seat_dispatch","task_id":"9","agent":"devops","branch":"feat/x","wave":1,"provider":"claude","worker":"localhost","attempt":1}' >> "$R3_DIR/r3.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":3,"ts":"2026-01-01T00:00:02Z","dispatch_id":"r3","event":"seat_progress","task_id":"9","agent":"devops","phase":"editing","tool":"Edit","path":"/Users/someone/secret/plan.md","files_edited":3,"commands_run":0,"tests_run":0,"commits_made":0}' >> "$R3_DIR/r3.jsonl"
+OUT_R3="$TMP/out/live-reader3.json"
+python3 "$DESK_LIVE" --once --events-dir "$R3_DIR" --out "$OUT_R3" >/dev/null 2>&1
+assert_py "the projector re-marks an absolute progress path as outside-repo" "$OUT_R3" \
+  'S["9"]["activity"]["path"]=="outside-repo" and S["9"]["activity"]["phase"]=="editing"'
+
+# Replay: the two writers share no seq space, so a scrub must cut the reader's
+# lines on time. Progress at 00:00:09 must not show at a scrub of the spine's
+# seq 2 (00:00:01).
+R4_DIR="$TMP/events-reader4"
+mkdir -p "$R4_DIR"
+printf '%s\n' '{"schema":"fleet-events/1","seq":1,"ts":"2026-01-01T00:00:00Z","dispatch_id":"r4","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"p.plan"}' > "$R4_DIR/r4.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":2,"ts":"2026-01-01T00:00:01Z","dispatch_id":"r4","event":"seat_dispatch","task_id":"0","agent":"devops","branch":"feat/x","wave":1,"provider":"claude","worker":"localhost","attempt":1}' >> "$R4_DIR/r4.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":3,"ts":"2026-01-01T00:00:09Z","dispatch_id":"r4","event":"seat_progress","task_id":"0","agent":"devops","phase":"editing","tool":"Edit","path":"a.py","files_edited":1,"commands_run":0,"tests_run":0,"commits_made":0}' >> "$R4_DIR/r4.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":3,"ts":"2026-01-01T00:00:20Z","dispatch_id":"r4","event":"seat_exit","task_id":"0","agent":"devops","branch":"feat/x","wave":1,"provider":"claude","worker":"localhost","status":"success","exit":0,"duration_s":19,"attempt":1}' >> "$R4_DIR/r4.jsonl"
+OUT_R4="$TMP/out/live-reader4.json"
+python3 "$DESK_LIVE" --once --events-dir "$R4_DIR" --as-of-seq 2 --out "$OUT_R4" >/dev/null 2>&1
+assert_py "a replay scrub shows no activity from after the scrub point" "$OUT_R4" \
+  'S["0"]["status"]=="running" and S["0"]["activity"] is None'
+OUT_R5="$TMP/out/live-reader5.json"
+python3 "$DESK_LIVE" --once --events-dir "$R4_DIR" --as-of-seq 3 --out "$OUT_R5" >/dev/null 2>&1
+assert_py "a full scrub keeps the activity the stream recorded" "$OUT_R5" \
+  'S["0"]["activity"]["files_edited"]==1'
+
+echo ""
+echo "== Part H: live-activity wiring =="
+
+bash -n "$REPO_DIR/providers/lib.sh" && ok "providers/lib.sh parses" || bad "providers/lib.sh parses"
+bash -n "$REPO_DIR/providers/claude/launch.sh" && ok "the launcher parses" || bad "the launcher parses"
+# Streamed print output is what makes the log grow during a run at all.
+grep -q -- '--output-format stream-json' "$REPO_DIR/providers/claude/launch.sh" \
+  && ok "the launcher streams its output as JSON lines" \
+  || bad "the launcher streams its output as JSON lines"
+# The reader must sit BEFORE the tee, so the log keeps the raw stream, and the
+# vendor CLI must stay PIPESTATUS[0], so rate-cap classification is unchanged.
+grep -q 'reader\[@\]}" | tee "\$tmp"' "$REPO_DIR/providers/lib.sh" \
+  && ok "the reader sits between the CLI and the log tee" \
+  || bad "the reader sits between the CLI and the log tee"
+grep -q 'cmd_exit="\${PIPESTATUS\[0\]}"' "$REPO_DIR/providers/lib.sh" \
+  && ok "the vendor CLI stays PIPESTATUS[0] (exit + rate-cap intact)" \
+  || bad "the vendor CLI stays PIPESTATUS[0] (exit + rate-cap intact)"
+grep -q 'seat-progress.py' "$REPO_DIR/scripts/run-remote.sh" \
+  && ok "run-remote ships the reader to the worker" \
+  || bad "run-remote ships the reader to the worker"
+grep -q 'AGENT_TASK_ID' "$REPO_DIR/scripts/dispatch.sh" \
+  && ok "dispatch passes the seat id down to the reader" \
+  || bad "dispatch passes the seat id down to the reader"
+grep -q 'nowact' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "the Floor renders the activity line under a live seat" \
+  || bad "the Floor renders the activity line under a live seat"
+grep -q 'nowact' "$REPO_DIR/templates/experience/site.css" \
+  && ok "the activity line has the pipeline-language pill" \
+  || bad "the activity line has the pipeline-language pill"
+grep -q '_live_activity_line' "$REPO_DIR/scripts/experience_build.py" \
+  && ok "the static Floor snapshot carries the same activity line" \
+  || bad "the static Floor snapshot carries the same activity line"
+grep -q 'seat_progress' "$REPO_DIR/docs/experience-data.md" \
+  && ok "seat_progress is documented in the data contract" \
+  || bad "seat_progress is documented in the data contract"
 
 echo ""
 echo "----------------------------------------"

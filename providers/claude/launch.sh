@@ -25,8 +25,17 @@ command -v claude >/dev/null 2>&1 || {
 MODEL_FLAG=()
 [ -n "${AGENT_MODEL:-}" ] && MODEL_FLAG=(--model "$AGENT_MODEL")
 
+# Print mode takes the prompt from argv, so detach stdin: the worker shell is
+# still reading the dispatch script from the same descriptor.
+exec 0</dev/null
+
+# Streamed output: one JSON object per line, printed as the run happens, so the
+# agent log grows during the run instead of arriving in one block at the end.
+# --verbose is required by the CLI for streamed print output.
+STREAM_ARGS=(-p --output-format stream-json --verbose)
+
 # NOTE: if claude ever HANGS at the Max usage cap instead of exiting, wrap
 # this in `timeout` — see plan risk log.
 # ${arr[@]+…} guard: empty-array expansion errors under `set -u` on bash 3.2 (macOS).
 run_and_classify claude \
-    claude --agent "$ROLE" ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} --dangerously-skip-permissions "$TASK"
+    claude "${STREAM_ARGS[@]}" --agent "$ROLE" ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} --dangerously-skip-permissions "$TASK"

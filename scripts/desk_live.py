@@ -31,6 +31,7 @@ Python 3.8+ (stdlib only).
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -41,6 +42,8 @@ EVENT_SCHEMA_PREFIX = "fleet-events/"
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DEFAULT_EVENTS_DIR = os.path.join(REPO_DIR, "logs", "fleet-events")
+DEFAULT_QUEUE_FILE = os.environ.get(
+    "FLEET_QUEUE_FILE", os.path.join(REPO_DIR, "logs", "fleet-queue.json"))
 DEFAULT_SITE_DIR = os.path.join(REPO_DIR, "site", "experience")
 DEFAULT_PORT = 8777
 DEFAULT_INTERVAL = 2.0
@@ -48,10 +51,19 @@ STALE_AFTER = 120     # seconds without an event → STALE chrome
 OFFLINE_AFTER = 900   # seconds without an event → OFFLINE chrome
 QUIET_AFTER = 90      # running stream with no new events → waiting_on quiet_stream
 RECENT_EVENTS = 50    # tail kept in the projection (already redaction-safe)
+QUEUE_SCHEMA = "fleet-queue/1"
+DAY_SCAN_WINDOW_S = 48 * 3600   # mtime prefilter when scanning the day streams
 
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 
 # Seat status vocabulary, mapped to the pipeline language of the desk.
+# The one event a second writer appends to a dispatch stream.
+PROGRESS_EVENT = "seat_progress"
+# Phase words a seat_progress event may carry (writer: scripts/seat-progress.py).
+PHASES = ("reading", "reviewing", "editing", "testing", "committing")
+# What the writer puts in `path` when the tool touched something outside the repo.
+OUTSIDE_REPO = "outside-repo"
+
 PIPELINE = {
     "queued": "queued",
     "running": "in_flight",
@@ -76,6 +88,18 @@ def rel(path):
         return os.path.relpath(path, REPO_DIR)
     except ValueError:
         return os.path.basename(path)
+
+
+def rel_safe(path):
+    """Repo-relative when the path is inside the repo, else the basename only.
+
+    Operator paths never enter the projection: a queue file outside the repo is
+    named, not located.
+    """
+    if not path:
+        return None
+    relative = rel(path)
+    return os.path.basename(path) if relative.startswith("..") else relative
 
 
 def parse_ts(value):
@@ -181,6 +205,15 @@ def empty_projection(now=None, reason="no dispatch has emitted events yet"):
                       "stale_after_s": STALE_AFTER, "offline_after_s": OFFLINE_AFTER},
         "events_seen": 0,
         "recent_events": [],
+        # Declared intent (logs/fleet-queue.json), never observed motion: the
+        # Floor labels this block as declared and never calls a queued plan
+        # running. Filled by build(); [] here so the key always exists.
+        "queue": [],
+        "queue_meta": {"source": None, "declared": False, "declared_at": None,
+                       "total": 0, "queued": 0, "running": 0, "settled": 0},
+        # Day view: one entry per dispatch that ENDED on this local calendar day.
+        "today": [],
+        "today_meta": {"date": None, "streams_read": 0, "live": [], "ended": 0},
         "warnings": [],
         "view": "live",  # "live" | "replay" — replay never paints a green LIVE LED
         "replay": None,
@@ -228,9 +261,497 @@ def truncate_events(events, as_of_seq=None):
     if cut < 1:
         return []
     has_seq = any(isinstance(e.get("seq"), int) for e in events)
-    if has_seq:
-        return [e for e in events if isinstance(e.get("seq"), int) and e["seq"] <= cut]
-    return events[:cut]
+    if not has_seq:
+        return events[:cut]
+    # `seq` counts per writer. The dispatcher numbers its own spine in process;
+    # a seat reader appends progress lines from a separate process, so the two
+    # counters share no space. Cut the spine on seq (unchanged), and cut the
+    # second writer's lines on time against the newest kept spine event, so a
+    # scrub never shows activity from after the point being replayed.
+    cut_ts = None
+    for event in events:
+        if event.get("event") == PROGRESS_EVENT:
+            continue
+        if isinstance(event.get("seq"), int) and event["seq"] <= cut:
+            cut_ts = event.get("ts") or cut_ts
+    kept = []
+    for event in events:
+        if event.get("event") == PROGRESS_EVENT:
+            if cut_ts is not None and str(event.get("ts") or "") <= str(cut_ts):
+                kept.append(event)
+        elif isinstance(event.get("seq"), int) and event["seq"] <= cut:
+            kept.append(event)
+    return kept
+
+
+# ── queue (declared) ────────────────────────────────────────────────────────
+
+def read_queue(path):
+    """Read logs/fleet-queue.json (fleet-queue/1). Returns (entries, warnings).
+
+    Never raises: a missing file is an empty queue, a malformed one is a warning
+    and an empty queue. The desk must never fail because intent was not written.
+    """
+    if not path or not os.path.isfile(path):
+        return [], []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return [], ["queue file %s is unreadable or malformed" % rel_safe(path)]
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+        return [], ["queue file %s is not a %s document" % (rel_safe(path), QUEUE_SCHEMA)]
+    if data.get("schema") != QUEUE_SCHEMA:
+        return [], ["queue file %s carries schema %r, expected %s"
+                    % (rel_safe(path), data.get("schema"), QUEUE_SCHEMA)]
+    return [e for e in data["entries"] if isinstance(e, dict)], []
+
+
+def queue_view(entries):
+    """Queued entries only, in declared order. A running plan is not 'up next'."""
+    out = []
+    position = 0
+    for entry in entries:
+        if (entry.get("status") or "queued") != "queued":
+            continue
+        position += 1
+        plan = str(entry.get("plan") or "")
+        out.append({
+            "position": position,
+            "plan": plan,
+            "plan_basename": os.path.basename(plan),
+            "repo": entry.get("repo") or None,
+            "purpose": entry.get("purpose") or None,
+            "added_at": entry.get("added_at") or None,
+            "status": "queued",
+        })
+    return out
+
+
+def queue_meta(entries, path):
+    """Provenance for the queue block: who declared it and when it last changed."""
+    tally = {"queued": 0, "running": 0, "settled": 0}
+    newest = None
+    for entry in entries:
+        status = entry.get("status") or "queued"
+        tally[status] = tally.get(status, 0) + 1
+        added = entry.get("added_at")
+        if isinstance(added, str) and (newest is None or added > newest):
+            newest = added
+    return {
+        "source": rel_safe(path),
+        "declared": bool(entries),
+        "declared_at": newest,
+        "total": len(entries),
+        "queued": tally.get("queued", 0),
+        "running": tally.get("running", 0),
+        "settled": tally.get("settled", 0),
+    }
+
+
+def queue_purpose_index(entries):
+    """plan basename -> {purpose, repo, plan} so the day view can name a run."""
+    index = {}
+    for entry in entries:
+        plan = str(entry.get("plan") or "")
+        base = os.path.basename(plan)
+        if base and base not in index:
+            index[base] = {"plan": plan,
+                           "purpose": entry.get("purpose") or None,
+                           "repo": entry.get("repo") or None}
+    return index
+
+
+# ── day view (every stream of the local calendar day) ───────────────────────
+
+_DAY_CACHE = {}   # path -> (mtime, size, summary); settled streams parse once
+
+
+def local_date(dt_utc):
+    """Local calendar date of a naive-UTC timestamp (the operator's day)."""
+    if dt_utc is None:
+        return None
+    return dt_utc.replace(tzinfo=timezone.utc).astimezone().date()
+
+
+def summarize_stream(path):
+    """One dispatch, folded to the facts the day view needs. Cached by mtime."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    key = (stat.st_mtime, stat.st_size)
+    cached = _DAY_CACHE.get(path)
+    if cached and cached[0] == key:
+        return cached[1]
+
+    events, _malformed = read_events(path)
+    if not events:
+        _DAY_CACHE[path] = (key, None)
+        return None
+
+    summary = {
+        "dispatch_id": os.path.basename(path)[:-6],
+        "source": rel(path),
+        "repo": None, "plan": None, "mode": "wave",
+        "started_at": None, "ended_at": None,
+        "status": "running", "end_status": None,
+        "duration_s": None, "seats": 0, "succeeded": None, "failed": None,
+        "branches": [],
+    }
+    seat_ids = set()
+    for ev in events:
+        if ev.get("dispatch_id"):
+            summary["dispatch_id"] = ev["dispatch_id"]
+        kind = ev.get("event")
+        if kind == "dispatch_start":
+            summary["repo"] = ev.get("repo")
+            summary["plan"] = ev.get("plan")
+            summary["started_at"] = ev.get("ts")
+            if ev.get("mode"):
+                summary["mode"] = ev["mode"]
+        elif kind in ("seat_dispatch", "seat_exit"):
+            if ev.get("task_id") is not None:
+                seat_ids.add(str(ev["task_id"]))
+            branch = ev.get("branch")
+            if branch and branch not in summary["branches"]:
+                summary["branches"].append(branch)
+        elif kind == "dispatch_end":
+            summary["ended_at"] = ev.get("ts")
+            summary["end_status"] = ev.get("status")
+            summary["status"] = "settled" if ev.get("status") == "completed" else (
+                ev.get("status") or "settled")
+            if isinstance(ev.get("duration_s"), int):
+                summary["duration_s"] = ev["duration_s"]
+            for key_name in ("succeeded", "failed"):
+                if isinstance(ev.get(key_name), int):
+                    summary[key_name] = ev[key_name]
+    summary["seats"] = len(seat_ids)
+    _DAY_CACHE[path] = (key, summary)
+    return summary
+
+
+def day_streams(events_dir, now):
+    """Stream summaries that could belong to the local day (mtime prefiltered)."""
+    try:
+        names = sorted(n for n in os.listdir(events_dir) if n.endswith(".jsonl"))
+    except OSError:
+        return []
+    cutoff = time.time() - DAY_SCAN_WINDOW_S
+    out = []
+    for name in names:
+        path = os.path.join(events_dir, name)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                continue
+        except OSError:
+            continue
+        summary = summarize_stream(path)
+        if summary:
+            out.append(summary)
+    return out
+
+
+def today_view(events_dir, now, entries):
+    """Every dispatch that ENDED on this local calendar day, plus the live ones.
+
+    Reads every stream file of the day, not only the newest, so concurrent
+    dispatches all appear. Purpose and plan path come from the queue when the
+    basename matches; the stream only ever carries a basename.
+    """
+    today = local_date(now)
+    index = queue_purpose_index(entries)
+    landed, live = [], []
+    summaries = day_streams(events_dir, now)
+    for summary in summaries:
+        ended = parse_ts(summary.get("ended_at"))
+        started = parse_ts(summary.get("started_at"))
+        known = index.get(os.path.basename(summary.get("plan") or "")) or {}
+        if ended is not None and local_date(ended) == today:
+            landed.append({
+                "dispatch_id": summary["dispatch_id"],
+                "source": summary["source"],
+                "plan": known.get("plan") or summary.get("plan"),
+                "plan_basename": os.path.basename(summary.get("plan") or ""),
+                "repo": summary.get("repo") or known.get("repo"),
+                "purpose": known.get("purpose"),
+                "purpose_source": "queue" if known.get("purpose") else "none",
+                "status": summary.get("status"),
+                "end_status": summary.get("end_status"),
+                "duration_s": summary.get("duration_s"),
+                "started_at": summary.get("started_at"),
+                "ended_at": summary.get("ended_at"),
+                "seats": summary.get("seats"),
+                "succeeded": summary.get("succeeded"),
+                "failed": summary.get("failed"),
+                "branches": summary.get("branches") or [],
+            })
+        elif ended is None and started is not None and local_date(started) == today:
+            live.append(summary)
+    landed.sort(key=lambda r: r.get("ended_at") or "", reverse=True)
+    live.sort(key=lambda r: r.get("started_at") or "")
+    meta = {
+        "date": today.isoformat(),
+        "streams_read": len(summaries),
+        "live": [s["dispatch_id"] for s in live],
+        "ended": len(landed),
+    }
+    return landed, live, meta
+
+
+def merge_live_seats(proj, events_dir, now, live_summaries):
+    """Show the seats of every live dispatch when more than one is running.
+
+    The single-dispatch follow is unchanged: the resolved stream stays the
+    subject of the page (status, wave, waiting_on, event tail). This only adds
+    the seats of the other dispatches that are live on the same day, each tagged
+    with its dispatch_id, so a second run is never invisible.
+    """
+    primary = proj.get("dispatch_id")
+    for seat in proj.get("seats") or []:
+        seat.setdefault("dispatch_id", primary)
+    others = [s for s in live_summaries if s["dispatch_id"] != primary]
+    if not others:
+        return proj
+    merged = 0
+    for summary in others:
+        path = os.path.join(events_dir, summary["dispatch_id"] + ".jsonl")
+        if not os.path.isfile(path):
+            continue
+        events, malformed = read_events(path)
+        if not events:
+            continue
+        side = project(events, now=now, source=rel(path), malformed=malformed)
+        for seat in side.get("seats") or []:
+            seat["dispatch_id"] = side.get("dispatch_id") or summary["dispatch_id"]
+            seat["foreign"] = True     # not the followed run: honest label
+            seat["plan"] = side.get("plan") or summary.get("plan")
+            proj["seats"].append(seat)
+            merged += 1
+    if merged:
+        counts = {"queued": 0, "in_flight": 0, "blocked": 0, "settled": 0,
+                  "total": len(proj["seats"])}
+        for seat in proj["seats"]:
+            pipe = seat.get("pipeline") or "queued"
+            counts[pipe] = counts.get(pipe, 0) + 1
+        proj["counts"] = counts
+        proj["multi_dispatch"] = {
+            "live": [s["dispatch_id"] for s in live_summaries],
+            "followed": primary,
+            "merged_seats": merged,
+        }
+    return proj
+
+
+# ── plan context (the "now" view) ───────────────────────────────────────────
+#
+# The event stream carries a plan BASENAME only (redaction law: no task bodies,
+# no absolute paths). The now view needs a little more than that: why this run
+# exists and what each live seat was actually asked to do. Both come from the
+# plan file on disk, read here, never from the stream:
+#
+#   purpose   the first comment line of the plan (its header)
+#   task      the FIRST SENTENCE of that seat's line, cut at 120 chars
+#   waves     how many waves the plan declares, so a seat can say "wave 2 of 3"
+#
+# The whole task body is never published. What is published passes the same
+# secret scrub the Almanac uses.
+
+TASK_MAX = 120
+_SECRET_PATTERNS = [
+    re.compile(r"\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"\bAKIA[0-9A-Z]{12,}"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._-]{12,}"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+]
+
+
+def scrub_text(value, limit=200):
+    """One clean line: control chars out, secret shapes redacted, capped."""
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[redacted]", text)
+    if len(text) > limit:
+        text = text[:limit - 1].rstrip() + "…"
+    return text
+
+
+def activity_path(value):
+    """A progress path as the Floor may render it: repo-relative or a marker.
+
+    The writer already strips anything outside the repo. The projector refuses
+    to trust that twice: an absolute path or a parent escape becomes the marker
+    here too, so no operator path can reach the page through a hand-written
+    stream line.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    text = scrub_text(value, 120)
+    if not text:
+        return None
+    if os.path.isabs(text) or text.startswith(os.pardir) or "/../" in text:
+        return OUTSIDE_REPO
+    return text
+
+
+def seat_activity(ev, ts):
+    """Newest seat_progress folded into the seat object as `activity`."""
+    phase = ev.get("phase")
+    tool = ev.get("tool")
+    activity = {
+        "ts": ts,
+        "phase": phase if phase in PHASES else None,
+        "tool": scrub_text(tool, 40) if tool else None,
+        "path": activity_path(ev.get("path")),
+    }
+    for key in ("files_edited", "commands_run", "tests_run", "commits_made"):
+        value = ev.get(key)
+        activity[key] = value if isinstance(value, int) else 0
+    return activity
+
+
+def first_sentence(value, limit=TASK_MAX):
+    """First sentence of a task line, cut at ``limit``. Never the whole body."""
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    match = re.match(r"^(.{10,}?[.!?])(?:\s|$)", text)
+    if match:
+        text = match.group(1)
+    return scrub_text(text, limit)
+
+
+def resolve_plan_path(plan_name, queue_entries):
+    """Find the plan file a stream names by basename. Repo paths only.
+
+    Order: the queue (it stores the repo-relative path the orchestrator armed),
+    then a shallow walk of wave-plans/. Returns None when the plan is not on
+    this machine, which is a normal state, not an error.
+    """
+    base = os.path.basename(str(plan_name or ""))
+    if not base:
+        return None
+    for entry in queue_entries or []:
+        candidate = str(entry.get("plan") or "")
+        if os.path.basename(candidate) != base:
+            continue
+        path = candidate if os.path.isabs(candidate) else os.path.join(REPO_DIR, candidate)
+        if os.path.isfile(path):
+            return path
+    root = os.path.join(REPO_DIR, "wave-plans")
+    for dirpath, _dirnames, filenames in os.walk(root):
+        if base in filenames:
+            return os.path.join(dirpath, base)
+    return None
+
+
+def parse_plan(path):
+    """Fold a plan file into {purpose, waves, seats[]}. Mirrors dispatch.sh.
+
+    Plan line: ``[wave] | agent | task | [branch]``. The branch is only the last
+    field and only when it looks like a branch slug, exactly as dispatch.sh
+    decides, so seat index and branch line up with what the stream reports.
+    """
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            raw = fh.readlines()
+    except OSError:
+        return None
+
+    purpose = ""
+    lines = []
+    for line in raw:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            if not purpose:
+                body = stripped.lstrip("#").strip()
+                if body:
+                    purpose = scrub_text(body)
+            continue
+        lines.append(stripped)
+    if not lines:
+        return {"plan": rel_safe(path), "purpose": purpose, "waves": 0, "seats": []}
+
+    # Format detection: a leading integer field means the plan is wave-aware.
+    first_field = lines[0].split("|")[0].strip()
+    wave_format = first_field.isdigit()
+
+    seats, waves = [], []
+    for index, line in enumerate(lines):
+        fields = [f.strip() for f in line.split("|")]
+        if wave_format:
+            wave = int(fields[0]) if fields[0].isdigit() else None
+            agent = fields[1] if len(fields) > 1 else None
+            start = 2
+        else:
+            wave = 1
+            agent = fields[0] if fields else None
+            start = 1
+        last = fields[-1] if fields else ""
+        is_branch = bool(re.match(r"^[A-Za-z0-9/_.-]+$", last)) and "/" in last
+        if is_branch and len(fields) > start + 1:
+            branch = last
+            desc = " | ".join(fields[start:-1])
+        else:
+            branch = None
+            desc = " | ".join(fields[start:])
+        if wave is not None and wave not in waves:
+            waves.append(wave)
+        seats.append({
+            "index": str(index),
+            "wave": wave,
+            "agent": agent,
+            "branch": branch,
+            "task": first_sentence(desc),
+        })
+    return {"plan": rel_safe(path), "purpose": purpose,
+            "waves": len(waves) or 1, "seats": seats}
+
+
+def attach_plan_context(proj, queue_entries, plan_cache=None):
+    """Give every seat the purpose of its plan and its one-line task.
+
+    Joined by branch first (the stream and the plan agree on it), then by seat
+    index, then by agent. A seat the plan cannot explain keeps its stream facts
+    and says nothing more: no guessed task ever reaches the page.
+    """
+    cache = {} if plan_cache is None else plan_cache
+
+    def plan_for(name):
+        base = os.path.basename(str(name or ""))
+        if base not in cache:
+            cache[base] = parse_plan(resolve_plan_path(base, queue_entries))
+        return cache[base]
+
+    # The followed run's plan explains its own seats; a merged foreign seat is
+    # explained by the plan of ITS dispatch, looked up the same way.
+    context = plan_for(proj.get("plan"))
+    if context:
+        proj["plan_context"] = {"plan": context["plan"], "purpose": context["purpose"],
+                                "waves": context["waves"], "seats": len(context["seats"])}
+    for seat in proj.get("seats") or []:
+        plan = plan_for(seat.get("plan") or proj.get("plan"))
+        if not plan:
+            continue
+        match = None
+        if seat.get("branch"):
+            match = next((s for s in plan["seats"] if s["branch"] == seat["branch"]), None)
+        if match is None:
+            match = next((s for s in plan["seats"] if s["index"] == str(seat.get("task_id"))), None)
+        if match is None and seat.get("agent"):
+            match = next((s for s in plan["seats"] if s["agent"] == seat["agent"]), None)
+        seat["plan_purpose"] = plan["purpose"] or None
+        seat["wave_total"] = plan["waves"]
+        if match:
+            seat["task"] = match["task"] or None
+    return proj
 
 
 def list_runs(events_dir):
@@ -318,6 +839,13 @@ def _seat(state, task_id):
             "failovers": [],
             "ratecapped": False,
             "log": None,
+            "last_heartbeat_ts": None,
+            "heartbeat_age_s": None,
+            "activity": None,
+            "quiet": False,
+            "plan_purpose": None,
+            "task": None,
+            "wave_total": None,
         }
         state[task_id] = seat
     return seat
@@ -426,6 +954,22 @@ def project(events, now=None, source=None, malformed=0):
             for provider in (ev.get("from_provider"), ev.get("to_provider")):
                 if provider and provider not in seat["providers_tried"]:
                     seat["providers_tried"].append(provider)
+        elif kind == "seat_heartbeat":
+            # Heartbeats prove a seat is alive between dispatch and exit. They
+            # never CREATE a seat: no fabricated lanes, only liveness on one the
+            # stream already reported.
+            task_id = str(ev.get("task_id"))
+            if task_id in seats:
+                seats[task_id]["last_heartbeat_ts"] = ts
+                if isinstance(ev.get("elapsed_s"), int):
+                    seats[task_id]["heartbeat_elapsed_s"] = ev["elapsed_s"]
+        elif kind == PROGRESS_EVENT:
+            # What the seat is doing right now. Like heartbeats, progress never
+            # CREATES a seat, and it carries no prompt, argument or command
+            # line: a tool name, one repo-relative path, four counts, a phase.
+            task_id = str(ev.get("task_id"))
+            if task_id in seats:
+                seats[task_id]["activity"] = seat_activity(ev, ts)
         elif kind == "seat_log":
             task_id = str(ev.get("task_id"))
             if task_id in seats and ev.get("log"):
@@ -464,6 +1008,17 @@ def project(events, now=None, source=None, malformed=0):
             started = parse_ts(seat["started_at"])
             if started:
                 seat["elapsed_s"] = max(0, int((now - started).total_seconds()))
+        if seat["status"] == "running":
+            # Quiet is measured from the last sign of life: a heartbeat when the
+            # dispatcher sends them, else the seat_dispatch itself.
+            last_sign = parse_ts(seat.get("last_heartbeat_ts")) or parse_ts(seat.get("started_at"))
+            if last_sign:
+                age = max(0, int((now - last_sign).total_seconds()))
+                seat["heartbeat_age_s"] = age
+                seat["quiet"] = age >= QUIET_AFTER
+            else:
+                seat["heartbeat_age_s"] = None
+                seat["quiet"] = False
     seat_list.sort(key=lambda s: (s.get("wave") if isinstance(s.get("wave"), int) else 0,
                                   str(s.get("task_id"))))
     out["seats"] = seat_list
@@ -554,17 +1109,42 @@ def project(events, now=None, source=None, malformed=0):
     return out
 
 
-def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False):
+def attach_queue_and_day(proj, events_dir, queue_file, now):
+    """Fold declared intent (queue) and the local day into a projection.
+
+    Both are independent of which stream is followed: an idle desk with armed
+    plans still shows them, and a desk following one run still lists every
+    dispatch that ended today. Replay projections get neither, because a
+    historical scrub must not carry today's queue.
+    """
+    entries, warnings = read_queue(queue_file)
+    proj["queue"] = queue_view(entries)
+    proj["queue_meta"] = queue_meta(entries, queue_file)
+    landed, live, meta = today_view(events_dir, now, entries)
+    proj["today"] = landed
+    proj["today_meta"] = meta
+    for warning in warnings:
+        proj.setdefault("warnings", []).append(warning)
+    merge_live_seats(proj, events_dir, now, live)
+    attach_plan_context(proj, entries)
+    return proj
+
+
+def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False,
+          queue_file=None):
     """Resolve the current stream and project it (never raises on missing data).
 
     Phase C: pass ``as_of_seq`` and/or ``replay=True`` to get a historical
     projection. Replay always sets ``view=replay`` so the Floor cannot paint a
     green LIVE LED for the past.
     """
+    now = now or utcnow()
+    queue_file = DEFAULT_QUEUE_FILE if queue_file is None else queue_file
     path, resolved_id = resolve_stream(events_dir, dispatch_id)
     if not path:
-        return empty_projection(
+        proj = empty_projection(
             now, reason="no event stream in %s — run a dispatch (FLEET_EVENTS=1)" % rel(events_dir))
+        return attach_queue_and_day(proj, events_dir, queue_file, now)
     events, malformed = read_events(path)
     total = len(events)
     if as_of_seq is not None:
@@ -578,7 +1158,8 @@ def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False):
         # Use the cut seq (or full length when replaying the whole settled run).
         cut = as_of_seq if as_of_seq is not None else total
         mark_replay(proj, cut, total)
-    return proj
+        return proj
+    return attach_queue_and_day(proj, events_dir, queue_file, now)
 
 
 def write_projection(proj, out_path):
@@ -603,7 +1184,7 @@ def serve(args, out_path):
     stop = threading.Event()
 
     def refresh():
-        proj = build(args.events_dir, args.dispatch_id)
+        proj = build(args.events_dir, args.dispatch_id, queue_file=args.queue_file)
         payload = json.dumps(proj)
         if payload != state["json"]:
             state["json"] = payload
@@ -740,6 +1321,8 @@ def main(argv=None):
         description="Fleet Desk Ops Floor: tail dispatch events → live.json (+ optional local server)")
     parser.add_argument("--events-dir", default=DEFAULT_EVENTS_DIR,
                         help="directory of *.jsonl event streams (default: logs/fleet-events)")
+    parser.add_argument("--queue-file", default=DEFAULT_QUEUE_FILE,
+                        help="declared queue to fold in (default: logs/fleet-queue.json)")
     parser.add_argument("--site-dir", default=DEFAULT_SITE_DIR,
                         help="static site root to serve (default: site/experience)")
     parser.add_argument("--out", default=None,
@@ -775,7 +1358,8 @@ def main(argv=None):
 
     if args.once or args.watch:
         proj = build(args.events_dir, args.dispatch_id,
-                     as_of_seq=args.as_of_seq, replay=args.replay)
+                     as_of_seq=args.as_of_seq, replay=args.replay,
+                     queue_file=args.queue_file)
         write_projection(proj, out_path)
         if args.print_json:
             print(json.dumps(proj, indent=2))
@@ -791,7 +1375,8 @@ def main(argv=None):
                 time.sleep(args.interval)
                 write_projection(
                     build(args.events_dir, args.dispatch_id,
-                          as_of_seq=args.as_of_seq, replay=args.replay),
+                          as_of_seq=args.as_of_seq, replay=args.replay,
+                          queue_file=args.queue_file),
                     out_path)
         except KeyboardInterrupt:
             print("\ndesk-live: stopped")

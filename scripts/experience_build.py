@@ -970,6 +970,177 @@ class Renderer:
             )
         return "".join(rows)
 
+    @staticmethod
+    def _live_activity_line(seat: Dict[str, Any]) -> str:
+        """One line of live activity under a seat (mirrored in floor.js).
+
+        Phase word as the in-flight pill, then the tool, the repo-relative path
+        and the counts. The projection carries no prompt, argument or command
+        line, so there is nothing here to redact. No activity renders nothing.
+        """
+        act = seat.get("activity") or {}
+        if not isinstance(act, dict) or not act:
+            return ""
+        phases = ("reading", "reviewing", "editing", "testing", "committing")
+        phase = act.get("phase") if act.get("phase") in phases else "in flight"
+        what = []
+        if act.get("tool"):
+            what.append(esc(act["tool"]))
+        if act.get("path"):
+            what.append(f'<span class="mono">{esc(act["path"])}</span>')
+        counts = " · ".join([
+            f'{act.get("files_edited") or 0} edited',
+            f'{act.get("commands_run") or 0} cmd',
+            f'{act.get("tests_run") or 0} test',
+            f'{act.get("commits_made") or 0} commit',
+        ])
+        return (f'<div class="nowact"><span class="st st-run">{esc(phase)}</span>'
+                f'<span class="faint">{" ".join(what) or "no tool reported yet"}</span>'
+                f'<span class="mono faint">{esc(counts)}</span></div>')
+
+    def _live_now_card(self, live: Dict[str, Any]) -> str:
+        """The now view: what every live seat is doing, why, and for how long.
+
+        Purpose and task come from the plan file through the projection (first
+        comment line, first sentence of the seat line capped at 120 chars), never
+        from the event stream and never the whole task body. Elapsed is a build
+        stamp here; assets/floor.js ticks the same element every second from
+        data-elapsed-from. A seat whose last sign of life is older than the quiet
+        threshold wears the watermark badge.
+        """
+        seats = [s for s in (live.get("seats") or []) if s.get("status") == "running"]
+        runs = {s.get("dispatch_id") for s in seats if s.get("dispatch_id")}
+        note = (f"{len(seats)} live seat(s) across {len(runs) or 1} dispatch(es)"
+                if seats else "no seat is live")
+        if seats:
+            rows = []
+            for s in seats:
+                quiet = s.get("quiet") is True
+                wave = (f'wave {s["wave"]}' + (f' of {s["wave_total"]}' if s.get("wave_total") else "")
+                        if isinstance(s.get("wave"), int) else "wave not reported")
+                if s.get("last_heartbeat_ts"):
+                    beat = f'last heartbeat {self._time_of(s.get("last_heartbeat_ts"))}'
+                    if isinstance(s.get("heartbeat_age_s"), int):
+                        beat += f' ({self._fmt_dur(s.get("heartbeat_age_s"))} ago)'
+                else:
+                    beat = "no heartbeat yet"
+                rows.append(
+                    f'<li class="nowrow{" quiet" if quiet else ""}">'
+                    f'<div class="nowhead"><span class="role">{esc(s.get("agent") or s.get("task_id"))}</span>'
+                    f'{self._seat_pill(s)}'
+                    + ('<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>'
+                       if quiet else "")
+                    + f'<span class="timer mono" data-elapsed-from="{esc(s.get("started_at") or "")}">'
+                    f'{self._fmt_dur(s.get("elapsed_s"))}</span></div>'
+                    f'<div class="nowpurpose">{esc(s.get("plan_purpose") or "purpose not declared in the plan header")}</div>'
+                    f'<div class="nowtask">{esc(s.get("task") or "task line not resolvable from the plan on this machine")}</div>'
+                    + self._live_activity_line(s)
+                    + f'<div class="nowmeta"><span class="vendor">{esc(wave)}</span>'
+                    f'<span class="vendor">attempt {esc(s.get("attempt") or 1)}</span>'
+                    f'<span class="mono faint">{esc(s.get("branch") or "branch not reported")}</span>'
+                    f'<span class="faint">{esc(beat)}</span></div></li>'
+                )
+            rows_html = "".join(rows)
+        else:
+            rows_html = ('<li class="muted">No seat is live. The Floor shows motion only '
+                         "while a dispatch is running.</li>")
+        return f"""
+    <div class="card mt" id="floor-now-card">
+      <div class="cardhead"><h2>Now</h2><span class="more faint" id="floor-now-note">{note}</span></div>
+      <ol class="nowlist" id="floor-now-list">{rows_html}</ol>
+    </div>
+"""
+
+    def _live_queue_card(self, live: Dict[str, Any]) -> str:
+        """Up next: declared intent from logs/fleet-queue.json, labelled as such.
+
+        Honesty: the block says who declared it and when the newest entry was
+        added, and every row reads "queued". A queued plan is never drawn as
+        motion, so the page cannot imply a plan is running before a dispatch
+        opened a stream for it.
+        """
+        queue = live.get("queue") or []
+        meta = live.get("queue_meta") or {}
+        source = meta.get("source") or "logs/fleet-queue.json"
+        if meta.get("declared"):
+            note = (
+                f'Declared by the orchestrator in <span class="mono">{esc(source)}</span>, '
+                f'newest entry added {esc(meta.get("declared_at") or "at an unknown time")}. '
+                "Order is intent: a queued plan is not running."
+            )
+        else:
+            note = ("No queue declared. Arm one with "
+                    "<code>./scripts/queue.sh add &lt;plan&gt; &lt;repo&gt; &lt;purpose&gt;</code>.")
+        if queue:
+            rows = "".join(
+                '<li class="qrow">'
+                f'<span class="qpos mono">{esc(q.get("position"))}</span>'
+                f'<span class="qbody"><span class="qpurpose">{esc(q.get("purpose") or "no purpose declared")}</span>'
+                f'<span class="qmeta"><span class="vendor">{esc(q.get("repo") or "repo not declared")}</span> '
+                f'<span class="mono faint">{esc(q.get("plan_basename") or q.get("plan") or "")}</span></span></span>'
+                '<span class="st st-unk">queued</span></li>'
+                for q in queue
+            )
+        else:
+            rows = ('<li class="muted">Nothing armed. The next dispatch is whatever '
+                    "the operator types.</li>")
+        return f"""
+    <div class="card mt" id="floor-queue-card">
+      <div class="cardhead"><h2>Up next</h2><span class="more faint">declared, not observed</span></div>
+      <p class="muted" id="floor-queue-note">{note}</p>
+      <ol class="qlist" id="floor-queue-list">{rows}</ol>
+    </div>
+"""
+
+    def _live_today_card(self, live: Dict[str, Any], state: str = "none") -> str:
+        """Landed today: every dispatch that ENDED on this local calendar day.
+
+        The "still live" count is a liveness claim, so it wears the same
+        watermark as the rest of the Floor: off a live stream it is qualified
+        with "at last event" rather than asserted in the present tense.
+        """
+        today = live.get("today") or []
+        meta = live.get("today_meta") or {}
+        live_n = len(meta.get("live") or [])
+        if not live_n:
+            live_note = ""
+        elif state == "live":
+            live_note = f" · {live_n} still live"
+        else:
+            live_note = f" · {live_n} still live at last event"
+        note = (f'dispatch_end on {esc(meta.get("date") or "today")} · '
+                f'{esc(meta.get("streams_read") or 0)} stream(s) read'
+                + live_note)
+        if today:
+            rows = []
+            for t in today:
+                status = t.get("status") or "unknown"
+                cls = ("st st-done" if status == "settled"
+                       else "st st-fail" if status in ("aborted", "failed")
+                       else "st st-unk")
+                branches = " ".join(
+                    f'<span class="mono faint">{esc(b)}</span>' for b in (t.get("branches") or [])
+                ) or '<span class="faint">no branch reported</span>'
+                rows.append(
+                    '<li class="trow">'
+                    f'<span class="tbody"><span class="tpurpose">'
+                    f'{esc(t.get("purpose") or t.get("plan_basename") or t.get("dispatch_id"))}</span>'
+                    f'<span class="tmeta"><span class="vendor">{esc(t.get("repo") or "repo not reported")}</span> '
+                    f"{branches}</span></span>"
+                    f'<span class="{cls}">{esc(status)}</span>'
+                    f'<span class="timer mono">{esc(self._fmt_dur(t.get("duration_s")))}</span></li>'
+                )
+            rows_html = "".join(rows)
+        else:
+            rows_html = '<li class="muted">Nothing has landed today yet.</li>'
+        return f"""
+    <div class="card mt" id="floor-today-card">
+      <div class="cardhead"><h2>Landed today</h2><span class="more faint">from the event stream</span></div>
+      <p class="muted" id="floor-today-note">{note}</p>
+      <ol class="tlist" id="floor-today-list">{rows_html}</ol>
+    </div>
+"""
+
     def live_page(self) -> None:
         live = self.live
         # Almanac link map for trail↔floor (Phase C). Do NOT html-escape the
@@ -1069,10 +1240,31 @@ class Renderer:
     </div>
 
     <div class="pipeline" role="group" aria-label="Pipeline">
-      <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">—</span></div><div class="desc">no plan armed</div></div>
+      <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">&mdash;</span></div><div class="desc" id="pipe-queued-desc">no queue declared in this build</div></div>
       <div class="pipe wip"><div class="ph">Running <span class="n" id="pipe-inflight">—</span></div><div class="desc">no seat live</div></div>
       <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">—</span></div><div class="desc">—</div></div>
       <div class="pipe done"><div class="ph">Done <span class="n" id="pipe-settled">—</span></div><div class="desc">settled work lives in the <a href="../work/index.html">Almanac</a></div></div>
+    </div>
+
+    <div class="card mt" id="floor-now-card">
+      <div class="cardhead"><h2>Now</h2><span class="more faint" id="floor-now-note">no projection in this build</span></div>
+      <ol class="nowlist" id="floor-now-list"><li class="muted">No live projection, so no seat can be claimed to be working.</li></ol>
+    </div>
+
+    <div class="card mt" id="floor-queue-card">
+      <div class="cardhead"><h2>Up next</h2><span class="more faint">declared, not observed</span></div>
+      <p class="muted" id="floor-queue-note">No projection in this build. The queue lives in
+      <span class="mono">logs/fleet-queue.json</span>; arm one with
+      <code>make queue-add PLAN=… REPO=… PURPOSE=…</code> and it appears here on the next
+      <code>make desk-live-once</code>.</p>
+      <ol class="qlist" id="floor-queue-list"><li class="muted">Nothing armed in this build.</li></ol>
+    </div>
+
+    <div class="card mt" id="floor-today-card">
+      <div class="cardhead"><h2>Landed today</h2><span class="more faint">from the event stream</span></div>
+      <p class="muted" id="floor-today-note">No projection in this build. Landed rows come from the
+      <code>dispatch_end</code> events of the day, so nothing is claimed until a stream is read.</p>
+      <ol class="tlist" id="floor-today-list"><li class="muted">No live projection, so nothing can be claimed about today.</li></ol>
     </div>
 
     <div id="floor-mode-body">
@@ -1150,6 +1342,18 @@ class Renderer:
             v = counts.get(key)
             return v if isinstance(v, int) else "—"
 
+        # Queued counts PLANS, not seats: the declared queue is the only real
+        # queue. With no queue file the cell falls back to the seat count and
+        # the caption says so rather than implying an empty pipeline.
+        queue_meta_snapshot = live.get("queue_meta") or {}
+        if queue_meta_snapshot.get("declared"):
+            queued_n: Any = len(live.get("queue") or [])
+            queued_desc = ('plans armed in <span class="mono">'
+                           f'{esc(queue_meta_snapshot.get("source") or "logs/fleet-queue.json")}</span>')
+        else:
+            queued_n = cn("queued")
+            queued_desc = "no queue declared, showing plan seats not started"
+
         if mode == "conductor":
             mode_title = "Conductor — serial spine"
             mode_sub = "Settled nodes fill, the hot pin marks the live seat, dashed nodes stay ahead of it."
@@ -1186,11 +1390,14 @@ class Renderer:
     </div>
 
     <div class="pipeline" role="group" aria-label="Pipeline">
-      <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">{cn("queued")}</span></div><div class="desc">plan seats not started</div></div>
+      <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">{queued_n}</span></div><div class="desc" id="pipe-queued-desc">{queued_desc}</div></div>
       <div class="pipe wip"><div class="ph">In flight <span class="n" id="pipe-inflight">{cn("in_flight")}</span></div><div class="desc">seats reporting running</div></div>
       <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">{cn("blocked")}</span></div><div class="desc">failed · rate-capped · unknown</div></div>
       <div class="pipe done"><div class="ph">Settled <span class="n" id="pipe-settled">{cn("settled")}</span></div><div class="desc">record lands in the <a href="../work/index.html">Almanac</a></div></div>
     </div>
+{self._live_now_card(live)}
+{self._live_queue_card(live)}
+{self._live_today_card(live, state)}
 
     <div id="floor-mode-body">
     <div class="card">
@@ -1307,6 +1514,18 @@ class Renderer:
         def cn(key: str) -> Any:
             v = counts.get(key)
             return v if isinstance(v, int) else "—"
+
+        # Queued counts PLANS, not seats: the declared queue is the only real
+        # queue. With no queue file the cell falls back to the seat count and
+        # the caption says so rather than implying an empty pipeline.
+        queue_meta_snapshot = live.get("queue_meta") or {}
+        if queue_meta_snapshot.get("declared"):
+            queued_n: Any = len(live.get("queue") or [])
+            queued_desc = ('plans armed in <span class="mono">'
+                           f'{esc(queue_meta_snapshot.get("source") or "logs/fleet-queue.json")}</span>')
+        else:
+            queued_n = cn("queued")
+            queued_desc = "no queue declared, showing plan seats not started"
 
         return f"""
       <div class="card teaser">
