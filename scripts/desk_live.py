@@ -57,6 +57,8 @@ DAY_SCAN_WINDOW_S = 48 * 3600   # mtime prefilter when scanning the day streams
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 
 # Seat status vocabulary, mapped to the pipeline language of the desk.
+# The one event a second writer appends to a dispatch stream.
+PROGRESS_EVENT = "seat_progress"
 # Phase words a seat_progress event may carry (writer: scripts/seat-progress.py).
 PHASES = ("reading", "reviewing", "editing", "testing", "committing")
 # What the writer puts in `path` when the tool touched something outside the repo.
@@ -259,9 +261,27 @@ def truncate_events(events, as_of_seq=None):
     if cut < 1:
         return []
     has_seq = any(isinstance(e.get("seq"), int) for e in events)
-    if has_seq:
-        return [e for e in events if isinstance(e.get("seq"), int) and e["seq"] <= cut]
-    return events[:cut]
+    if not has_seq:
+        return events[:cut]
+    # `seq` counts per writer. The dispatcher numbers its own spine in process;
+    # a seat reader appends progress lines from a separate process, so the two
+    # counters share no space. Cut the spine on seq (unchanged), and cut the
+    # second writer's lines on time against the newest kept spine event, so a
+    # scrub never shows activity from after the point being replayed.
+    cut_ts = None
+    for event in events:
+        if event.get("event") == PROGRESS_EVENT:
+            continue
+        if isinstance(event.get("seq"), int) and event["seq"] <= cut:
+            cut_ts = event.get("ts") or cut_ts
+    kept = []
+    for event in events:
+        if event.get("event") == PROGRESS_EVENT:
+            if cut_ts is not None and str(event.get("ts") or "") <= str(cut_ts):
+                kept.append(event)
+        elif isinstance(event.get("seq"), int) and event["seq"] <= cut:
+            kept.append(event)
+    return kept
 
 
 # ── queue (declared) ────────────────────────────────────────────────────────
@@ -943,7 +963,7 @@ def project(events, now=None, source=None, malformed=0):
                 seats[task_id]["last_heartbeat_ts"] = ts
                 if isinstance(ev.get("elapsed_s"), int):
                     seats[task_id]["heartbeat_elapsed_s"] = ev["elapsed_s"]
-        elif kind == "seat_progress":
+        elif kind == PROGRESS_EVENT:
             # What the seat is doing right now. Like heartbeats, progress never
             # CREATES a seat, and it carries no prompt, argument or command
             # line: a tool name, one repo-relative path, four counts, a phase.

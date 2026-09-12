@@ -6,6 +6,8 @@
 #   Part B: scripts/desk_live.py live/1 projection over synthetic fixtures
 #           (tests/fixtures/fleet-events/*.jsonl)
 #   Part C: scripts/dispatch.sh wiring guards (no task text ever emitted)
+#   Part G: scripts/seat-progress.py reader (pass-through, counts, redaction)
+#   Part H: live-activity wiring (launcher stream, reader placement, Floor)
 #
 # Offline by design: nothing here binds a socket or touches the network.
 #
@@ -898,7 +900,7 @@ grep -q 'nowrow.quiet' "$REPO_DIR/templates/experience/site.css" \
   || bad "quiet seats use the watermark visual language"
 
 echo ""
-echo "== Part E: seat activity (scripts/seat-progress.py) =="
+echo "== Part G: seat activity (scripts/seat-progress.py) =="
 
 READER="$REPO_DIR/scripts/seat-progress.py"
 [ -f "$READER" ] && ok "stream reader exists" || bad "stream reader exists"
@@ -1015,8 +1017,26 @@ python3 "$DESK_LIVE" --once --events-dir "$R3_DIR" --out "$OUT_R3" >/dev/null 2>
 assert_py "the projector re-marks an absolute progress path as outside-repo" "$OUT_R3" \
   'S["9"]["activity"]["path"]=="outside-repo" and S["9"]["activity"]["phase"]=="editing"'
 
+# Replay: the two writers share no seq space, so a scrub must cut the reader's
+# lines on time. Progress at 00:00:09 must not show at a scrub of the spine's
+# seq 2 (00:00:01).
+R4_DIR="$TMP/events-reader4"
+mkdir -p "$R4_DIR"
+printf '%s\n' '{"schema":"fleet-events/1","seq":1,"ts":"2026-01-01T00:00:00Z","dispatch_id":"r4","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"p.plan"}' > "$R4_DIR/r4.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":2,"ts":"2026-01-01T00:00:01Z","dispatch_id":"r4","event":"seat_dispatch","task_id":"0","agent":"devops","branch":"feat/x","wave":1,"provider":"claude","worker":"localhost","attempt":1}' >> "$R4_DIR/r4.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":3,"ts":"2026-01-01T00:00:09Z","dispatch_id":"r4","event":"seat_progress","task_id":"0","agent":"devops","phase":"editing","tool":"Edit","path":"a.py","files_edited":1,"commands_run":0,"tests_run":0,"commits_made":0}' >> "$R4_DIR/r4.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":3,"ts":"2026-01-01T00:00:20Z","dispatch_id":"r4","event":"seat_exit","task_id":"0","agent":"devops","branch":"feat/x","wave":1,"provider":"claude","worker":"localhost","status":"success","exit":0,"duration_s":19,"attempt":1}' >> "$R4_DIR/r4.jsonl"
+OUT_R4="$TMP/out/live-reader4.json"
+python3 "$DESK_LIVE" --once --events-dir "$R4_DIR" --as-of-seq 2 --out "$OUT_R4" >/dev/null 2>&1
+assert_py "a replay scrub shows no activity from after the scrub point" "$OUT_R4" \
+  'S["0"]["status"]=="running" and S["0"]["activity"] is None'
+OUT_R5="$TMP/out/live-reader5.json"
+python3 "$DESK_LIVE" --once --events-dir "$R4_DIR" --as-of-seq 3 --out "$OUT_R5" >/dev/null 2>&1
+assert_py "a full scrub keeps the activity the stream recorded" "$OUT_R5" \
+  'S["0"]["activity"]["files_edited"]==1'
+
 echo ""
-echo "== Part F: live-activity wiring =="
+echo "== Part H: live-activity wiring =="
 
 bash -n "$REPO_DIR/providers/lib.sh" && ok "providers/lib.sh parses" || bad "providers/lib.sh parses"
 bash -n "$REPO_DIR/providers/claude/launch.sh" && ok "the launcher parses" || bad "the launcher parses"
