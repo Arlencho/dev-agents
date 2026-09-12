@@ -214,6 +214,9 @@ if [ -f "$PROVIDER_LAUNCHER" ] && [ -f "$PROVIDER_LIB" ]; then
     remote_put "$PROVIDER_LIB" "dev/agent-runtime/lib.sh"
     remote_put "$PROVIDER_LAUNCHER" "dev/agent-runtime/launch.sh"
     [ -f "$RATECAP_CONF" ] && remote_put "$RATECAP_CONF" "dev/agent-runtime/ratecap-patterns.conf"
+    # Live progress pair: the stream reader and the event writer it calls.
+    [ -f "$SCRIPT_DIR/seat-progress.py" ] && remote_put "$SCRIPT_DIR/seat-progress.py" "dev/agent-runtime/seat-progress.py"
+    [ -f "$SCRIPT_DIR/fleet-events.sh" ] && remote_put "$SCRIPT_DIR/fleet-events.sh" "dev/agent-runtime/fleet-events.sh"
     if [ "$PROVIDER" != "claude" ] && [ -f "$SCRIPT_DIR/../roles/$AGENT.md" ]; then
         remote_put "$SCRIPT_DIR/../roles/$AGENT.md" "dev/agent-runtime/roles/$AGENT.md"
     fi
@@ -226,6 +229,26 @@ if [ -f "$PROVIDER_LAUNCHER" ] && [ -f "$PROVIDER_LIB" ]; then
 else
     echo "ERROR: launcher runtime for provider '$PROVIDER' not found ($PROVIDER_LAUNCHER)" >&2
     exit 1
+fi
+
+# Live seat activity: the launcher pipes the agent stream through
+# scripts/seat-progress.py, which emits redaction-safe seat_progress events into
+# the dispatcher's event stream (tool name, one repo-relative path, four counts,
+# one phase word; never a prompt, an argument or a command line).
+#
+# Local worker only: the event stream file lives on the dispatcher, so a true
+# remote host would append to a path that is not the Floor's. Without this env
+# the reader degrades to a plain pass-through and the log is unchanged.
+PROGRESS_ENV=""
+if [ "$IS_LOCAL" -eq 1 ] && [ -n "${FLEET_EVENTS_FILE:-}" ] && [ -f "$SCRIPT_DIR/seat-progress.py" ]; then
+    PROGRESS_ENV="AGENT_STREAM_READER=\$HOME/dev/agent-runtime/seat-progress.py"
+    PROGRESS_ENV="$PROGRESS_ENV FLEET_EVENTS_SH=\$HOME/dev/agent-runtime/fleet-events.sh"
+    PROGRESS_ENV="$PROGRESS_ENV FLEET_EVENTS_FILE=$(printf '%q' "$FLEET_EVENTS_FILE")"
+    PROGRESS_ENV="$PROGRESS_ENV FLEET_DISPATCH_ID=$(printf '%q' "${FLEET_DISPATCH_ID:-}")"
+    PROGRESS_ENV="$PROGRESS_ENV SEAT_TASK_ID=$(printf '%q' "${AGENT_TASK_ID:-0}")"
+    PROGRESS_ENV="$PROGRESS_ENV SEAT_AGENT=$(printf '%q' "$AGENT")"
+    PROGRESS_ENV="$PROGRESS_ENV SEAT_REPO_DIR=$WORK_DIR"
+    echo "Live seat activity: seat_progress events → $(basename "$FLEET_EVENTS_FILE")"
 fi
 
 # Execute on worker (local bash -s or ssh bash -s)
@@ -280,6 +303,7 @@ FULL_TASK=\$(printf '%s' "$FULL_TASK_B64" | base64 -d)
 set +e
 AGENT_MODEL="$MODEL" ROLES_DIR=~/dev/agent-runtime/roles \
     RATECAP_PATTERNS=~/dev/agent-runtime/ratecap-patterns.conf \
+    $PROGRESS_ENV \
     bash ~/dev/agent-runtime/launch.sh "$AGENT" "\$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
 AGENT_EXIT=\${PIPESTATUS[0]}
 set -e

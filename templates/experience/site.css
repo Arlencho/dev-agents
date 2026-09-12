@@ -545,6 +545,12 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 .nowpurpose { color: var(--muted); line-height: 1.35; }
 .nowtask { line-height: 1.4; }
 .nowmeta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+/* One line of live activity: the phase word wears the in-flight pill, then the
+   tool, the repo-relative path, and the counts the stream reported. */
+.nowact { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; }
+.nowact .st { font-size: 9.5px; }
+.nowact .mono { font-size: 11px; }
+.nowact > .mono.faint { margin-left: auto; }
 
 /* ── Ops Floor: Up next (declared queue) + Landed today ─────────────── */
 .qlist, .tlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }

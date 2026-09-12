@@ -58,11 +58,23 @@ run_and_classify() {
     local tmp
     tmp=$(mktemp)
 
+    # Optional live-stream reader: a pass-through filter between the CLI and
+    # the log. It folds progress facts out of a streaming run for the Ops Floor
+    # and writes every byte back, so the log keeps exactly what the CLI printed.
+    # PIPESTATUS[0] still belongs to the vendor CLI, so the exit code and the
+    # rate-cap classification below are unchanged. No reader, no python3, or an
+    # unreadable path all degrade to `cat`.
+    local reader=(cat)
+    if [ -n "${AGENT_STREAM_READER:-}" ] && [ -f "${AGENT_STREAM_READER}" ] \
+        && command -v python3 >/dev/null 2>&1; then
+        reader=(python3 -u "$AGENT_STREAM_READER")
+    fi
+
     # Launchers run under set -e; a failing vendor CLI must not abort the
     # launcher before classification. Toggle errexit around the pipeline only.
     local cmd_exit
     set +e
-    "$@" 2>&1 | tee "$tmp"
+    "$@" 2>&1 | "${reader[@]}" | tee "$tmp"
     cmd_exit="${PIPESTATUS[0]}"
     set -e
 

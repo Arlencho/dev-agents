@@ -970,6 +970,34 @@ class Renderer:
             )
         return "".join(rows)
 
+    @staticmethod
+    def _live_activity_line(seat: Dict[str, Any]) -> str:
+        """One line of live activity under a seat (mirrored in floor.js).
+
+        Phase word as the in-flight pill, then the tool, the repo-relative path
+        and the counts. The projection carries no prompt, argument or command
+        line, so there is nothing here to redact. No activity renders nothing.
+        """
+        act = seat.get("activity") or {}
+        if not isinstance(act, dict) or not act:
+            return ""
+        phases = ("reading", "reviewing", "editing", "testing", "committing")
+        phase = act.get("phase") if act.get("phase") in phases else "in flight"
+        what = []
+        if act.get("tool"):
+            what.append(esc(act["tool"]))
+        if act.get("path"):
+            what.append(f'<span class="mono">{esc(act["path"])}</span>')
+        counts = " · ".join([
+            f'{act.get("files_edited") or 0} edited',
+            f'{act.get("commands_run") or 0} cmd',
+            f'{act.get("tests_run") or 0} test',
+            f'{act.get("commits_made") or 0} commit',
+        ])
+        return (f'<div class="nowact"><span class="st st-run">{esc(phase)}</span>'
+                f'<span class="faint">{" ".join(what) or "no tool reported yet"}</span>'
+                f'<span class="mono faint">{esc(counts)}</span></div>')
+
     def _live_now_card(self, live: Dict[str, Any]) -> str:
         """The now view: what every live seat is doing, why, and for how long.
 
@@ -1006,7 +1034,8 @@ class Renderer:
                     f'{self._fmt_dur(s.get("elapsed_s"))}</span></div>'
                     f'<div class="nowpurpose">{esc(s.get("plan_purpose") or "purpose not declared in the plan header")}</div>'
                     f'<div class="nowtask">{esc(s.get("task") or "task line not resolvable from the plan on this machine")}</div>'
-                    f'<div class="nowmeta"><span class="vendor">{esc(wave)}</span>'
+                    + self._live_activity_line(s)
+                    + f'<div class="nowmeta"><span class="vendor">{esc(wave)}</span>'
                     f'<span class="vendor">attempt {esc(s.get("attempt") or 1)}</span>'
                     f'<span class="mono faint">{esc(s.get("branch") or "branch not reported")}</span>'
                     f'<span class="faint">{esc(beat)}</span></div></li>'

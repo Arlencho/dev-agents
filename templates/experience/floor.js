@@ -229,6 +229,30 @@
     }
   }
 
+  /* One line of live activity under a seat: phase pill, tool, repo-relative
+     path, then the counts the stream reported. Projection facts only: the
+     stream carries no prompt, no argument and no command line, so there is
+     nothing here to leak. Absent activity renders nothing at all. */
+  var PHASES = { reading: 1, reviewing: 1, editing: 1, testing: 1, committing: 1 };
+
+  function activityLine(seat) {
+    var a = seat.activity;
+    if (!a) return "";
+    var phase = PHASES[a.phase] ? a.phase : "in flight";
+    var what = [];
+    if (a.tool) what.push(esc(a.tool));
+    if (a.path) what.push('<span class="mono">' + esc(a.path) + "</span>");
+    var counts = [
+      (a.files_edited || 0) + " edited",
+      (a.commands_run || 0) + " cmd",
+      (a.tests_run || 0) + " test",
+      (a.commits_made || 0) + " commit",
+    ].join(" · ");
+    return '<div class="nowact"><span class="st st-run">' + esc(phase) + "</span>" +
+      '<span class="faint">' + (what.join(" ") || "no tool reported yet") + "</span>" +
+      '<span class="mono faint">' + esc(counts) + "</span></div>";
+  }
+
   /* The now view: what every live seat is doing, why, and for how long.
      Purpose and task come from the plan file (projection side), elapsed ticks
      in the browser from the seat_dispatch timestamp, and a seat whose last sign
@@ -250,6 +274,7 @@
       fmtDur(seat.elapsed_s) + "</span></div>" +
       '<div class="nowpurpose">' + esc(seat.plan_purpose || "purpose not declared in the plan header") + "</div>" +
       '<div class="nowtask">' + esc(seat.task || "task line not resolvable from the plan on this machine") + "</div>" +
+      activityLine(seat) +
       '<div class="nowmeta"><span class="vendor">' + esc(wave) + "</span>" +
       '<span class="vendor">attempt ' + esc(seat.attempt || 1) + "</span>" +
       '<span class="mono faint">' + esc(seat.branch || "branch not reported") + "</span>" +

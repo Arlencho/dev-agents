@@ -57,6 +57,11 @@ DAY_SCAN_WINDOW_S = 48 * 3600   # mtime prefilter when scanning the day streams
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 
 # Seat status vocabulary, mapped to the pipeline language of the desk.
+# Phase words a seat_progress event may carry (writer: scripts/seat-progress.py).
+PHASES = ("reading", "reviewing", "editing", "testing", "committing")
+# What the writer puts in `path` when the tool touched something outside the repo.
+OUTSIDE_REPO = "outside-repo"
+
 PIPELINE = {
     "queued": "queued",
     "running": "in_flight",
@@ -555,6 +560,40 @@ def scrub_text(value, limit=200):
     return text
 
 
+def activity_path(value):
+    """A progress path as the Floor may render it: repo-relative or a marker.
+
+    The writer already strips anything outside the repo. The projector refuses
+    to trust that twice: an absolute path or a parent escape becomes the marker
+    here too, so no operator path can reach the page through a hand-written
+    stream line.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    text = scrub_text(value, 120)
+    if not text:
+        return None
+    if os.path.isabs(text) or text.startswith(os.pardir) or "/../" in text:
+        return OUTSIDE_REPO
+    return text
+
+
+def seat_activity(ev, ts):
+    """Newest seat_progress folded into the seat object as `activity`."""
+    phase = ev.get("phase")
+    tool = ev.get("tool")
+    activity = {
+        "ts": ts,
+        "phase": phase if phase in PHASES else None,
+        "tool": scrub_text(tool, 40) if tool else None,
+        "path": activity_path(ev.get("path")),
+    }
+    for key in ("files_edited", "commands_run", "tests_run", "commits_made"):
+        value = ev.get(key)
+        activity[key] = value if isinstance(value, int) else 0
+    return activity
+
+
 def first_sentence(value, limit=TASK_MAX):
     """First sentence of a task line, cut at ``limit``. Never the whole body."""
     text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
@@ -782,6 +821,7 @@ def _seat(state, task_id):
             "log": None,
             "last_heartbeat_ts": None,
             "heartbeat_age_s": None,
+            "activity": None,
             "quiet": False,
             "plan_purpose": None,
             "task": None,
@@ -903,6 +943,13 @@ def project(events, now=None, source=None, malformed=0):
                 seats[task_id]["last_heartbeat_ts"] = ts
                 if isinstance(ev.get("elapsed_s"), int):
                     seats[task_id]["heartbeat_elapsed_s"] = ev["elapsed_s"]
+        elif kind == "seat_progress":
+            # What the seat is doing right now. Like heartbeats, progress never
+            # CREATES a seat, and it carries no prompt, argument or command
+            # line: a tool name, one repo-relative path, four counts, a phase.
+            task_id = str(ev.get("task_id"))
+            if task_id in seats:
+                seats[task_id]["activity"] = seat_activity(ev, ts)
         elif kind == "seat_log":
             task_id = str(ev.get("task_id"))
             if task_id in seats and ev.get("log"):

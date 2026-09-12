@@ -93,6 +93,17 @@ echo "== row 17: plan-critic.sh skips (exit 3) when grok CLI absent =="
 got=$(PATH="/usr/bin:/bin" "$REPO_DIR/providers/grok/plan-critic.sh" "$REPO_DIR/README.md" >/dev/null 2>&1; echo $?)
 check "plan-critic / no-grok" 3 "$got"
 
+echo "== row 18: the live-stream reader changes no exit classification =="
+# The reader is a pass-through filter between the CLI and the log tee. The
+# vendor CLI must stay PIPESTATUS[0], so every row above must hold with the
+# reader in the pipeline too.
+for pair in "success 0" "fail 1" "ratecap 75" "noauth 69"; do
+    mode="${pair% *}"; want="${pair#* }"
+    got=$(SHIM_MODE="$mode" AGENT_STREAM_READER="$REPO_DIR/scripts/seat-progress.py" \
+        run_launcher claude web-frontend "do the thing")
+    check "claude / $mode + stream reader" "$want" "$got"
+done
+
 echo ""
 echo "== $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

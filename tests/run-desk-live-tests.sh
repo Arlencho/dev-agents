@@ -898,6 +898,160 @@ grep -q 'nowrow.quiet' "$REPO_DIR/templates/experience/site.css" \
   || bad "quiet seats use the watermark visual language"
 
 echo ""
+echo "== Part E: seat activity (scripts/seat-progress.py) =="
+
+READER="$REPO_DIR/scripts/seat-progress.py"
+[ -f "$READER" ] && ok "stream reader exists" || bad "stream reader exists"
+
+# A synthetic agent stream: prose, five tool calls (one inside the repo, one
+# write, one file outside the repo, one test command, one commit), one result.
+# Every secret-shaped string is tagged LEAKCANARY: none may reach the stream.
+R_REPO="$TMP/reader-repo"
+mkdir -p "$R_REPO/scripts"
+R_IN="$TMP/reader-in.jsonl"
+cat > "$R_IN" <<'STREAM'
+{"type":"system","subtype":"init","cwd":"/private/tmp/x","tools":["Bash"]}
+{"type":"assistant","message":{"content":[{"type":"text","text":"LEAKCANARY-PROSE"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"scripts/desk_live.py"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"scripts/new.py","content":"LEAKCANARY-BODY"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/etc/hosts"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo LEAKCANARY-TOKEN && ./tests/run-desk-live-tests.sh"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git commit -m LEAKCANARY-MESSAGE"}}]}}
+not json at all, the log keeps it
+{"type":"result","subtype":"success","is_error":false,"result":"LEAKCANARY-RESULT"}
+STREAM
+
+R_EVENTS="$TMP/events-reader"
+mkdir -p "$R_EVENTS"
+R_FILE="$R_EVENTS/20260101-000000-reader.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":1,"ts":"2026-01-01T00:00:00Z","dispatch_id":"20260101-000000-reader","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"p.plan"}' > "$R_FILE"
+printf '%s\n' '{"schema":"fleet-events/1","seq":2,"ts":"2026-01-01T00:00:01Z","dispatch_id":"20260101-000000-reader","event":"seat_dispatch","task_id":"7","agent":"devops","branch":"feat/x","wave":1,"provider":"claude","model":"opus","worker":"localhost","attempt":1}' >> "$R_FILE"
+printf '%s\n' '20260101-000000-reader.jsonl' > "$R_EVENTS/latest"
+
+R_OUT="$TMP/reader-out.jsonl"
+FLEET_EVENTS_SH="$EMITTER" FLEET_EVENTS_FILE="$R_FILE" \
+  FLEET_DISPATCH_ID="20260101-000000-reader" \
+  SEAT_TASK_ID=7 SEAT_AGENT=devops SEAT_REPO_DIR="$R_REPO" \
+  SEAT_PROGRESS_INTERVAL_S=999 \
+  python3 "$READER" < "$R_IN" > "$R_OUT" 2>/dev/null
+R_RC=$?
+[ "$R_RC" -eq 0 ] && ok "reader exits 0 (telemetry never fails a dispatch)" \
+  || bad "reader exits 0 (telemetry never fails a dispatch)"
+if cmp -s "$R_IN" "$R_OUT"; then
+  ok "the stream passes through byte for byte (the agent log loses nothing)"
+else
+  bad "the stream passes through byte for byte (the agent log loses nothing)"
+fi
+
+# Only progress rows were added, and they carry the four counts + the phase.
+assert_jsonl "seat_progress reaches the stream through the existing emitter" "$R_FILE" \
+  'len(K.get("seat_progress",[]))>=6'
+assert_jsonl "progress names the seat it belongs to" "$R_FILE" \
+  'all(r["task_id"]=="7" and r["agent"]=="devops" for r in K["seat_progress"])'
+assert_jsonl "counts are JSON numbers, folded from the whole stream" "$R_FILE" \
+  'K["seat_progress"][-1]["files_edited"]==1 and K["seat_progress"][-1]["commands_run"]==2 '\
+'and K["seat_progress"][-1]["tests_run"]==1 and K["seat_progress"][-1]["commits_made"]==1'
+assert_jsonl "the phase ladder ends on committing" "$R_FILE" \
+  'K["seat_progress"][-1]["phase"]=="committing"'
+assert_jsonl "the first progress event says reading before any tool ran" "$R_FILE" \
+  'K["seat_progress"][0]["phase"]=="reading"'
+assert_jsonl "a repo file travels as a repo-relative path" "$R_FILE" \
+  'any(r.get("path")=="scripts/desk_live.py" for r in K["seat_progress"])'
+assert_jsonl "a file outside the repo travels as the literal marker" "$R_FILE" \
+  'any(r.get("path")=="outside-repo" for r in K["seat_progress"]) '\
+'and not any("/etc/hosts" in str(r.get("path")) for r in K["seat_progress"])'
+assert_jsonl "tool names travel, nothing else from the call" "$R_FILE" \
+  'set(r.get("tool") for r in K["seat_progress"] if r.get("tool"))=={"Read","Write","Bash"}'
+# The hard one: no prose, no argument value, no command line, ever.
+if grep -q "LEAKCANARY" "$R_FILE"; then
+  bad "no prompt, message, argument or command line reaches the stream"
+else
+  ok "no prompt, message, argument or command line reaches the stream"
+fi
+if grep -qE '"(command|content|text|thinking|input|prompt|task)"' "$R_FILE"; then
+  bad "progress events carry no transcript-shaped keys"
+else
+  ok "progress events carry no transcript-shaped keys"
+fi
+
+# No emitter env: a plain pass-through, no crash, nothing written anywhere.
+R_OUT2="$TMP/reader-out-bare.jsonl"
+( unset FLEET_EVENTS_SH FLEET_EVENTS_FILE; python3 "$READER" < "$R_IN" > "$R_OUT2" 2>/dev/null )
+R_RC2=$?
+if [ "$R_RC2" -eq 0 ] && cmp -s "$R_IN" "$R_OUT2"; then
+  ok "without the emitter env the reader is a plain pass-through"
+else
+  bad "without the emitter env the reader is a plain pass-through"
+fi
+
+# Projection: the newest progress lands on the seat as activity.
+OUT_R="$TMP/out/live-reader.json"
+python3 "$DESK_LIVE" --once --events-dir "$R_EVENTS" --out "$OUT_R" >/dev/null 2>&1
+assert_py "the newest seat_progress projects onto the seat as activity" "$OUT_R" \
+  'S["7"]["activity"]["phase"]=="committing" and S["7"]["activity"]["tool"]=="Bash" '\
+'and S["7"]["activity"]["commits_made"]==1'
+assert_py "a seat with no progress reports activity as null" "$OUT_R" \
+  'all(s["activity"] is None for s in d["seats"] if s["task_id"]!="7")'
+
+# Progress never invents a lane, and never renders an operator path.
+R2_DIR="$TMP/events-reader2"
+mkdir -p "$R2_DIR"
+printf '%s\n' '{"schema":"fleet-events/1","seq":1,"ts":"2026-01-01T00:00:00Z","dispatch_id":"r2","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"p.plan"}' > "$R2_DIR/r2.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":2,"ts":"2026-01-01T00:00:02Z","dispatch_id":"r2","event":"seat_progress","task_id":"9","agent":"devops","phase":"editing","tool":"Edit","path":"/Users/someone/secret/plan.md","files_edited":3,"commands_run":0,"tests_run":0,"commits_made":0}' >> "$R2_DIR/r2.jsonl"
+OUT_R2="$TMP/out/live-reader2.json"
+python3 "$DESK_LIVE" --once --events-dir "$R2_DIR" --out "$OUT_R2" >/dev/null 2>&1
+assert_py "seat_progress never creates a seat the stream did not dispatch" "$OUT_R2" \
+  'not d["seats"]'
+
+# Same absolute path, this time on a seat the stream did dispatch: the seat
+# object the Floor renders must carry the marker, never the operator path.
+R3_DIR="$TMP/events-reader3"
+mkdir -p "$R3_DIR"
+printf '%s\n' '{"schema":"fleet-events/1","seq":1,"ts":"2026-01-01T00:00:00Z","dispatch_id":"r3","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"p.plan"}' > "$R3_DIR/r3.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":2,"ts":"2026-01-01T00:00:01Z","dispatch_id":"r3","event":"seat_dispatch","task_id":"9","agent":"devops","branch":"feat/x","wave":1,"provider":"claude","worker":"localhost","attempt":1}' >> "$R3_DIR/r3.jsonl"
+printf '%s\n' '{"schema":"fleet-events/1","seq":3,"ts":"2026-01-01T00:00:02Z","dispatch_id":"r3","event":"seat_progress","task_id":"9","agent":"devops","phase":"editing","tool":"Edit","path":"/Users/someone/secret/plan.md","files_edited":3,"commands_run":0,"tests_run":0,"commits_made":0}' >> "$R3_DIR/r3.jsonl"
+OUT_R3="$TMP/out/live-reader3.json"
+python3 "$DESK_LIVE" --once --events-dir "$R3_DIR" --out "$OUT_R3" >/dev/null 2>&1
+assert_py "the projector re-marks an absolute progress path as outside-repo" "$OUT_R3" \
+  'S["9"]["activity"]["path"]=="outside-repo" and S["9"]["activity"]["phase"]=="editing"'
+
+echo ""
+echo "== Part F: live-activity wiring =="
+
+bash -n "$REPO_DIR/providers/lib.sh" && ok "providers/lib.sh parses" || bad "providers/lib.sh parses"
+bash -n "$REPO_DIR/providers/claude/launch.sh" && ok "the launcher parses" || bad "the launcher parses"
+# Streamed print output is what makes the log grow during a run at all.
+grep -q -- '--output-format stream-json' "$REPO_DIR/providers/claude/launch.sh" \
+  && ok "the launcher streams its output as JSON lines" \
+  || bad "the launcher streams its output as JSON lines"
+# The reader must sit BEFORE the tee, so the log keeps the raw stream, and the
+# vendor CLI must stay PIPESTATUS[0], so rate-cap classification is unchanged.
+grep -q 'reader\[@\]}" | tee "\$tmp"' "$REPO_DIR/providers/lib.sh" \
+  && ok "the reader sits between the CLI and the log tee" \
+  || bad "the reader sits between the CLI and the log tee"
+grep -q 'cmd_exit="\${PIPESTATUS\[0\]}"' "$REPO_DIR/providers/lib.sh" \
+  && ok "the vendor CLI stays PIPESTATUS[0] (exit + rate-cap intact)" \
+  || bad "the vendor CLI stays PIPESTATUS[0] (exit + rate-cap intact)"
+grep -q 'seat-progress.py' "$REPO_DIR/scripts/run-remote.sh" \
+  && ok "run-remote ships the reader to the worker" \
+  || bad "run-remote ships the reader to the worker"
+grep -q 'AGENT_TASK_ID' "$REPO_DIR/scripts/dispatch.sh" \
+  && ok "dispatch passes the seat id down to the reader" \
+  || bad "dispatch passes the seat id down to the reader"
+grep -q 'nowact' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "the Floor renders the activity line under a live seat" \
+  || bad "the Floor renders the activity line under a live seat"
+grep -q 'nowact' "$REPO_DIR/templates/experience/site.css" \
+  && ok "the activity line has the pipeline-language pill" \
+  || bad "the activity line has the pipeline-language pill"
+grep -q '_live_activity_line' "$REPO_DIR/scripts/experience_build.py" \
+  && ok "the static Floor snapshot carries the same activity line" \
+  || bad "the static Floor snapshot carries the same activity line"
+grep -q 'seat_progress' "$REPO_DIR/docs/experience-data.md" \
+  && ok "seat_progress is documented in the data contract" \
+  || bad "seat_progress is documented in the data contract"
+
+echo ""
 echo "----------------------------------------"
 echo "  passed: $pass   failed: $fail"
 echo "----------------------------------------"

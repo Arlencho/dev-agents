@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""Seat progress reader: a live agent stream in, redaction-safe events out.
+
+Sits in the launcher pipeline (providers/lib.sh run_and_classify):
+
+    vendor CLI --output-format stream-json  |  seat-progress.py  |  tee <agent log>
+
+Every byte read on stdin is written back to stdout unchanged, so the agent log
+stays exactly what the CLI printed. On the side, the reader folds the stream
+into four counts and emits a ``seat_progress`` event through the existing
+emitter (``scripts/fleet-events.sh``) so the Ops Floor can say what the seat is
+doing right now.
+
+REDACTION LAW (docs/experience-data.md § Redaction law, do not weaken):
+  What may leave this process
+    - the tool name (e.g. Read, Edit, Bash)
+    - one repo-relative path, when the tool targets a file
+      (anything resolving outside the repo becomes the literal "outside-repo")
+    - counts: files edited, commands run, tests run, commits made
+    - one phase word: reading | reviewing | editing | testing | committing
+  What never leaves it
+    - prompts, task bodies, assistant or user message text, thinking
+    - tool argument values of any kind, including command lines
+    - absolute paths, session ids, environment values
+
+Command lines ARE inspected in-process (to tell a test run from a commit from
+any other command) and are never emitted, not even truncated.
+
+Env in (all optional; missing ones degrade to pure pass-through of the stream):
+  FLEET_EVENTS_SH        path to scripts/fleet-events.sh (the only writer)
+  FLEET_EVENTS_FILE      stream file the emitter appends to
+  FLEET_DISPATCH_ID      dispatch id stamped on every event
+  SEAT_TASK_ID           task id of this seat (matches seat_dispatch)
+  SEAT_AGENT             role name of this seat
+  SEAT_REPO_DIR          repo root used to make paths repo-relative (default cwd)
+  SEAT_PROGRESS_INTERVAL_S  quiet-period emit floor in seconds (default 15)
+
+Exit status is always 0: telemetry never fails a dispatch.
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+EMITTER = os.environ.get("FLEET_EVENTS_SH", "")
+EVENTS_FILE = os.environ.get("FLEET_EVENTS_FILE", "")
+TASK_ID = os.environ.get("SEAT_TASK_ID", "")
+AGENT = os.environ.get("SEAT_AGENT", "")
+REPO_DIR = os.environ.get("SEAT_REPO_DIR", "") or os.getcwd()
+OUTSIDE = "outside-repo"
+
+try:
+    INTERVAL_S = float(os.environ.get("SEAT_PROGRESS_INTERVAL_S", "15") or 15)
+except ValueError:
+    INTERVAL_S = 15.0
+
+# Tools that change files on disk: they drive files_edited.
+EDIT_TOOLS = ("edit", "write", "multiedit", "notebookedit")
+# Input keys that name a file. Only these ever yield a path; every other
+# argument value is dropped on the floor.
+PATH_KEYS = ("file_path", "notebook_path", "path")
+
+# A command line matching these ran a test suite. Inspected, never emitted.
+TEST_RE = re.compile(
+    r"(^|[;&|(]\s*|\s)("
+    r"pytest|py\.test|unittest|tox|nox"
+    r"|jest|vitest|mocha|ava"
+    r"|go\s+test|cargo\s+test|gradle\s+test|mvn\s+test|dotnet\s+test|rspec|bats"
+    r"|(npm|yarn|pnpm|bun)\s+(run\s+)?test"
+    r"|make\s+[a-z-]*test"
+    r"|(bash\s+|sh\s+|\./)?tests?/[^\s]*"
+    r"|[^\s]*run-[a-z0-9-]+-tests\.sh"
+    r")",
+    re.IGNORECASE,
+)
+COMMIT_RE = re.compile(r"(^|[;&|(]\s*|\s)git(\s+-[^\s]+)*\s+commit(\s|$)", re.IGNORECASE)
+
+
+def repo_relative(raw):
+    """Repo-relative path, or the literal OUTSIDE marker. Never absolute.
+
+    Paths are resolved against the repo root before the comparison so
+    ``../../etc/hosts`` and ``/tmp/x`` both land on the marker instead of
+    leaking an operator path into the stream.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        root = os.path.realpath(REPO_DIR)
+        target = raw if os.path.isabs(raw) else os.path.join(root, raw)
+        target = os.path.realpath(target)
+        relative = os.path.relpath(target, root)
+    except (OSError, ValueError):
+        return OUTSIDE
+    if relative == os.curdir:
+        return OUTSIDE
+    if relative.startswith(os.pardir) or os.path.isabs(relative):
+        return OUTSIDE
+    return relative
+
+
+class Progress(object):
+    """Counts folded from the stream, plus the emitter throttle."""
+
+    def __init__(self):
+        self.edited = set()          # distinct repo-relative paths written
+        self.commands = 0
+        self.tests = 0
+        self.commits = 0
+        self.tool = None
+        self.path = None
+        self.last_emit = 0.0
+        self.dirty = False
+        self.emitted = 0
+
+    def phase(self):
+        """Phase word derived from the counts alone (a monotone ladder).
+
+        It says how far the seat has got, not what its last keystroke was.
+        """
+        if self.commits:
+            return "committing"
+        if self.tests:
+            return "testing"
+        if self.edited:
+            return "editing"
+        if self.commands:
+            return "reviewing"
+        return "reading"
+
+    def tool_call(self, name, tool_input):
+        """Fold one tool call. Returns True when it should be emitted now."""
+        if not isinstance(name, str) or not name:
+            return False
+        self.tool = re.sub(r"[^A-Za-z0-9_.-]", "", name)[:40]
+        self.path = None
+        args = tool_input if isinstance(tool_input, dict) else {}
+
+        target = None
+        for key in PATH_KEYS:
+            value = args.get(key)
+            if isinstance(value, str) and value:
+                target = repo_relative(value)
+                break
+        self.path = target
+
+        lowered = self.tool.lower()
+        if lowered in EDIT_TOOLS:
+            self.edited.add(target or OUTSIDE)
+        elif lowered in ("bash", "bashoutput", "shell", "run", "terminal"):
+            command = args.get("command")
+            if isinstance(command, str) and command.strip():
+                self.commands += 1
+                if COMMIT_RE.search(command):
+                    self.commits += 1
+                if TEST_RE.search(command):
+                    self.tests += 1
+        self.dirty = True
+        return True
+
+    def fields(self):
+        """The whole payload. Four counts, a tool, a path, a phase word."""
+        out = [
+            "phase=%s" % self.phase(),
+            "files_edited=%d" % len(self.edited),
+            "commands_run=%d" % self.commands,
+            "tests_run=%d" % self.tests,
+            "commits_made=%d" % self.commits,
+        ]
+        if TASK_ID != "":
+            out.append("task_id=%s" % TASK_ID)
+        if AGENT:
+            out.append("agent=%s" % AGENT)
+        if self.tool:
+            out.append("tool=%s" % self.tool)
+        if self.path:
+            out.append("path=%s" % self.path)
+        return out
+
+
+def emitting_enabled():
+    return bool(EMITTER) and bool(EVENTS_FILE) and os.path.isfile(EMITTER)
+
+
+def emit(progress):
+    """Hand the payload to fleet-events.sh. Best effort, never raises."""
+    if not emitting_enabled():
+        progress.last_emit = time.time()
+        progress.dirty = False
+        return
+    cmd = ["bash", EMITTER, "emit", "seat_progress"] + progress.fields()
+    try:
+        subprocess.call(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=dict(os.environ),
+        )
+    except Exception:
+        progress.last_emit = time.time()
+        return
+    progress.last_emit = time.time()
+    progress.dirty = False
+    progress.emitted += 1
+
+
+def tool_calls(event):
+    """Yield (name, input) for every tool call in one stream line.
+
+    Only the tool blocks are read. Text, thinking, and tool results are
+    skipped without being touched.
+    """
+    if not isinstance(event, dict):
+        return
+    message = event.get("message")
+    blocks = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(blocks, list):
+        return
+    for block in blocks:
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            yield block.get("name"), block.get("input")
+
+
+def pump(stdin, stdout, progress):
+    for raw in stdin:
+        stdout.write(raw)
+        stdout.flush()
+        now = time.time()
+        fired = False
+        try:
+            text = raw.decode("utf-8", "replace").strip()
+            if text.startswith("{"):
+                event = json.loads(text)
+                for name, tool_input in tool_calls(event):
+                    if progress.tool_call(name, tool_input):
+                        emit(progress)
+                        fired = True
+        except (ValueError, TypeError):
+            pass  # not a stream event; the log keeps it, the Floor ignores it
+        if not fired:
+            # A line arrived, so the seat is alive: refresh the same counts at
+            # most once per interval. Tool calls above are never throttled.
+            progress.dirty = True
+            if (now - progress.last_emit) >= INTERVAL_S:
+                emit(progress)
+    if progress.dirty:
+        emit(progress)   # closing counts, so the last phase is not lost
+
+
+def main():
+    stdin = getattr(sys.stdin, "buffer", sys.stdin)
+    stdout = getattr(sys.stdout, "buffer", sys.stdout)
+    progress = Progress()
+    try:
+        pump(stdin, stdout, progress)
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        # Never truncate the agent log because the reader tripped: fall back to
+        # a dumb copy for whatever is left of the stream.
+        try:
+            shutil.copyfileobj(stdin, stdout)
+            stdout.flush()
+        except Exception:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -712,8 +712,14 @@ dispatch_task() {
     # The PID travels via the DISPATCH_PID global — callers must NOT capture
     # $(dispatch_task): a command-substitution subshell would swallow every
     # RESULT_* write above (the actual root cause of the unbound-variable crash).
+    # FLEET_EVENTS_FILE + FLEET_DISPATCH_ID + AGENT_TASK_ID travel with the seat
+    # so the stream reader can attribute live activity to this lane. Facts only,
+    # same redaction law as every other event.
     (
         AGENT_MODEL="$model" AGENT_PROVIDER="$provider" AGENT_WAVE="${CURRENT_WAVE:-1}" \
+            AGENT_TASK_ID="$idx" \
+            FLEET_EVENTS_FILE="${FLEET_EVENTS_FILE:-}" \
+            FLEET_DISPATCH_ID="${FLEET_DISPATCH_ID:-}" \
             "$SCRIPT_DIR/run-remote.sh" "$whost" "$REPO_URL" "$agent" "$task" "$branch"
     ) &
     DISPATCH_PID=$!

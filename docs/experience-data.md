@@ -382,6 +382,7 @@ One JSON object per line, appended, never rewritten. Every line carries:
 | `human_resume` | the operator answered | `kind`, `wave`, `answer` (`continue`\|`abort`) |
 | `wave_end` | a wave closes | `wave`, `seats`, `succeeded`, `failed` |
 | `seat_log` | log collected | `task_id`, `agent`, `log` (**filename only**) |
+| `seat_progress` | the seat's live stream moved (see below) | `task_id`, `agent`, `tool`, `path` (**repo-relative, or the literal `outside-repo`**), `files_edited`, `commands_run`, `tests_run`, `commits_made`, `phase` |
 | `dispatch_end` | run closes (also on Ctrl-C, via trap) | `status` (`completed`\|`aborted`), `total`, `succeeded`, `failed`, `duration_s` |
 
 `seat_exit.status` ∈ `success` · `failed` · `blocked` (guardrails, exit 77) ·
@@ -438,6 +439,55 @@ show **QUIET** instead of a silent green live run.
 An unwritable directory disables the stream with a warning — a dispatch is never
 failed by its own telemetry.
 
+### Seat activity (`seat_progress`, what the seat is doing right now)
+
+Heartbeats prove a seat is **alive**. `seat_progress` says what it is **doing**.
+
+| Piece | File |
+|-------|------|
+| Writer | `scripts/seat-progress.py` (a pass-through filter on the agent stream) |
+| Wiring | `providers/lib.sh` `run_and_classify` (`AGENT_STREAM_READER`), env from `scripts/run-remote.sh` |
+| Emitter | `scripts/fleet-events.sh emit seat_progress` (the same writer as every other event) |
+
+The launcher runs the vendor CLI in print mode with a streamed JSON output, so
+the stream arrives line by line instead of in one block at the end. The reader
+sits between the CLI and the `tee`, writes every byte through unchanged (the
+agent log is exactly what the CLI printed), and folds the stream into counts.
+`PIPESTATUS[0]` still belongs to the CLI, so exit codes and rate-cap
+classification are untouched.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `task_id` / `agent` | string | which seat this belongs to (matches `seat_dispatch`) |
+| `tool` | string | tool name only, e.g. `Read`, `Edit`, `Bash` |
+| `path` | string | repo-relative path when the tool targets a file; anything resolving outside the repo becomes the literal **`outside-repo`** |
+| `files_edited` | int | distinct paths written so far |
+| `commands_run` | int | commands run so far |
+| `tests_run` | int | commands that ran a test suite so far |
+| `commits_made` | int | commands that made a commit so far |
+| `phase` | string | `reading` · `reviewing` · `editing` · `testing` · `committing` |
+
+`phase` is derived from the counts alone, as a monotone ladder (commits, else
+tests, else edits, else commands, else nothing yet). It says how far the seat
+has got, not what its last keystroke was.
+
+**Cadence:** one event on **every tool call**, plus **at most one event per 15
+seconds** (`SEAT_PROGRESS_INTERVAL_S`) while the stream moves without tool
+calls, plus one closing event at end of stream.
+
+**Redaction (writer-enforced, do not weaken):** prompts, task bodies, message
+text, thinking, tool argument values and command lines **never** leave the
+reader. Command lines are inspected in-process only, to tell a test run from a
+commit from any other command, and are never emitted, not even truncated.
+Absolute paths never leave it either; `desk_live.py` refuses to trust that
+twice and re-marks any absolute or escaping path as `outside-repo`.
+
+**Scope:** the env that turns emitting on is passed for a **local worker** only,
+because the stream file lives on the dispatcher. On a true remote host the
+reader degrades to a plain pass-through: the agent log is unchanged and no
+progress events appear. Every other failure mode (no `python3`, missing reader,
+unwritable stream) degrades the same way.
+
 ### Projection (`live/1`) — `site/experience/data/live.json`
 
 `scripts/desk_live.py` folds the stream (resolved via `--dispatch-id`, else the
@@ -453,7 +503,7 @@ failed by its own telemetry.
 | `status` | string | `idle` · `running` · `settled` · `aborted` |
 | `reason` | string | why it is idle (teaches the next command) |
 | `wave` | object | `{current, total}` |
-| `seats[]` | array | one per `task_id`: `agent`, `branch`, `wave`, `provider`, `worker`, `model`, `status`, `pipeline`, `exit`, `attempt`, `started_at`, `ended_at`, `duration_s`, `elapsed_s` (running), `providers_tried[]`, `failovers[]`, `ratecapped`, `log` |
+| `seats[]` | array | one per `task_id`: `agent`, `branch`, `wave`, `provider`, `worker`, `model`, `status`, `pipeline`, `exit`, `attempt`, `started_at`, `ended_at`, `duration_s`, `elapsed_s` (running), `providers_tried[]`, `failovers[]`, `ratecapped`, `log`, `activity` (newest `seat_progress`: `{ts, phase, tool, path, files_edited, commands_run, tests_run, commits_made}`, else `null`) |
 | `counts` | object | pipeline counts: `queued`, `in_flight`, `blocked`, `settled`, `total` |
 | `waiting_on[]` | array | first-class strip: open human gates, then rate-capped seats, else the longest-running seat. Each entry has `kind` (`human_gate`\|`ratecap`\|`seat`), `label`, `since` |
 | `last_event_ts` | string | newest event timestamp seen |
