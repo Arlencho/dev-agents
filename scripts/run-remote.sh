@@ -128,6 +128,12 @@ DISPATCH_ID=$(printf '%s' "${FLEET_DISPATCH_ID:-direct-$(date +%Y%m%d-%H%M%S)-$$
 BRANCH_SAFE=$(printf '%s' "$BRANCH" | tr '/ ' '--')
 FETCH_DIR="\$HOME/dev/$REPO_NAME"
 SEAT_DIR="\$HOME/dev/worktrees/$REPO_NAME/$DISPATCH_ID/${AGENT_TASK_ID:-0}-$BRANCH_SAFE"
+#   RUNTIME_DIR ~/dev/agent-runtime/<dispatch>    the launcher runtime, shipped
+#              once per dispatch and never written again while a seat may be
+#              reading it (the flat ~/dev/agent-runtime/ used to be overwritten
+#              by every dispatch under running seats).
+RUNTIME_REL="dev/agent-runtime/$DISPATCH_ID"
+RUNTIME_DIR="\$HOME/$RUNTIME_REL"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 LOG_FILE="${REPO_NAME}-${BRANCH_SAFE}-${TIMESTAMP}.log"
 
@@ -218,33 +224,57 @@ else
     echo "WARNING: Guardrails not found locally, skipping safety hooks"
 fi
 
-# Ship the provider launcher runtime to the worker. lib.sh + launch.sh land
-# flat in ~/dev/agent-runtime/; non-claude providers also get the role charter.
-PROVIDER_LAUNCHER="$SCRIPT_DIR/../providers/$PROVIDER/launch.sh"
-PROVIDER_LIB="$SCRIPT_DIR/../providers/lib.sh"
-RATECAP_CONF="$SCRIPT_DIR/../config/ratecap-patterns.conf"
-if [ -f "$PROVIDER_LAUNCHER" ] && [ -f "$PROVIDER_LIB" ]; then
-    echo "Shipping $PROVIDER launcher runtime to $HOST..."
-    remote_run "mkdir -p ~/dev/agent-runtime/roles ~/dev/agent-runtime/skills ~/dev/agent-runtime/config"
-    remote_put "$PROVIDER_LIB" "dev/agent-runtime/lib.sh"
-    remote_put "$PROVIDER_LAUNCHER" "dev/agent-runtime/launch.sh"
-    [ -f "$RATECAP_CONF" ] && remote_put "$RATECAP_CONF" "dev/agent-runtime/ratecap-patterns.conf"
-    # Live progress pair: the stream reader and the event writer it calls.
-    [ -f "$SCRIPT_DIR/seat-progress.py" ] && remote_put "$SCRIPT_DIR/seat-progress.py" "dev/agent-runtime/seat-progress.py"
-    [ -f "$SCRIPT_DIR/fleet-events.sh" ] && remote_put "$SCRIPT_DIR/fleet-events.sh" "dev/agent-runtime/fleet-events.sh"
-    if [ "$PROVIDER" != "claude" ] && [ -f "$SCRIPT_DIR/../roles/$AGENT.md" ]; then
-        remote_put "$SCRIPT_DIR/../roles/$AGENT.md" "dev/agent-runtime/roles/$AGENT.md"
-    fi
-    if [ -d "$SCRIPT_DIR/../skills" ]; then
-        remote_put_dir "$SCRIPT_DIR/../skills" "dev/agent-runtime/skills"
-    fi
-    if [ -f "$SCRIPT_DIR/../config/role-skills.yaml" ]; then
-        remote_put "$SCRIPT_DIR/../config/role-skills.yaml" "dev/agent-runtime/config/role-skills.yaml"
-    fi
-else
-    echo "ERROR: launcher runtime for provider '$PROVIDER' not found ($PROVIDER_LAUNCHER)" >&2
+# Ship the launcher runtime to the worker, once per dispatch. The snapshot
+# holds every provider launcher (providers/ as laid out in this checkout, so
+# launch.sh finds ../lib.sh), every role charter, the skills, the two configs
+# and the live-progress pair; nothing in it is seat-specific, so the seats of a
+# dispatch share one copy and never write into it. First seat to claim the
+# directory ships it (staged locally, copied to <dir>.tmp, renamed into place,
+# then marked .ready); the others wait for the marker.
+RUNTIME_SRC="$SCRIPT_DIR/.."
+if [ ! -f "$RUNTIME_SRC/providers/$PROVIDER/launch.sh" ] || [ ! -f "$RUNTIME_SRC/providers/lib.sh" ]; then
+    echo "ERROR: launcher runtime for provider '$PROVIDER' not found ($RUNTIME_SRC/providers/$PROVIDER/launch.sh)" >&2
     exit 1
 fi
+ship_runtime_once() {
+    local dest="~/$RUNTIME_REL" stage waited
+    if remote_run "test -f $dest/.ready"; then
+        echo "Launcher runtime already shipped for dispatch $DISPATCH_ID"
+        return 0
+    fi
+    if remote_run "mkdir -p ~/dev/agent-runtime && ( set -o noclobber; : > $dest.claim ) 2>/dev/null"; then
+        echo "Shipping launcher runtime to $HOST ($dest)..."
+        stage=$(mktemp -d)
+        mkdir -p "$stage/config" "$stage/scripts" "$stage/roles" "$stage/skills"
+        cp -R "$RUNTIME_SRC/providers" "$stage/providers"
+        [ -d "$RUNTIME_SRC/roles" ] && cp -R "$RUNTIME_SRC/roles/." "$stage/roles/"
+        [ -d "$RUNTIME_SRC/skills" ] && cp -R "$RUNTIME_SRC/skills/." "$stage/skills/"
+        [ -f "$RUNTIME_SRC/config/ratecap-patterns.conf" ] && cp "$RUNTIME_SRC/config/ratecap-patterns.conf" "$stage/config/"
+        [ -f "$RUNTIME_SRC/config/role-skills.yaml" ] && cp "$RUNTIME_SRC/config/role-skills.yaml" "$stage/config/"
+        [ -f "$SCRIPT_DIR/seat-progress.py" ] && cp "$SCRIPT_DIR/seat-progress.py" "$stage/scripts/"
+        [ -f "$SCRIPT_DIR/fleet-events.sh" ] && cp "$SCRIPT_DIR/fleet-events.sh" "$stage/scripts/"
+        remote_run "rm -rf $dest.tmp"
+        if [ "$IS_LOCAL" -eq 1 ]; then
+            cp -R "$stage" "$HOME/$RUNTIME_REL.tmp"
+        else
+            scp -rq "$stage" "$HOST:$dest.tmp"
+        fi
+        rm -rf "$stage"
+        remote_run "mv $dest.tmp $dest && : > $dest/.ready && rm -f $dest.claim"
+        return 0
+    fi
+    waited=0
+    while ! remote_run "test -f $dest/.ready"; do
+        sleep 1
+        waited=$(( waited + 1 ))
+        if [ "$waited" -ge 120 ]; then
+            echo "ERROR: another seat claimed the launcher runtime $dest but never marked it ready" >&2
+            exit 1
+        fi
+    done
+    echo "Launcher runtime shipped by another seat of dispatch $DISPATCH_ID"
+}
+ship_runtime_once
 
 # Live seat activity: the launcher pipes the agent stream through
 # scripts/seat-progress.py, which emits redaction-safe seat_progress events into
@@ -258,8 +288,8 @@ fi
 # its literal \$HOME so it expands on the worker.
 PROGRESS_ENV=""
 if [ "$IS_LOCAL" -eq 1 ] && [ -n "${FLEET_EVENTS_FILE:-}" ] && [ -f "$SCRIPT_DIR/seat-progress.py" ]; then
-    PROGRESS_ENV="export AGENT_STREAM_READER=\"\$HOME/dev/agent-runtime/seat-progress.py\"
-export FLEET_EVENTS_SH=\"\$HOME/dev/agent-runtime/fleet-events.sh\"
+    PROGRESS_ENV="export AGENT_STREAM_READER=\"$RUNTIME_DIR/scripts/seat-progress.py\"
+export FLEET_EVENTS_SH=\"$RUNTIME_DIR/scripts/fleet-events.sh\"
 export FLEET_EVENTS_FILE=$(printf '%q' "$FLEET_EVENTS_FILE")
 export FLEET_DISPATCH_ID=$(printf '%q' "${FLEET_DISPATCH_ID:-}")
 export SEAT_TASK_ID=$(printf '%q' "${AGENT_TASK_ID:-0}")
@@ -291,6 +321,7 @@ MODEL=$(printf '%q' "$MODEL")
 DISPATCH_ID=$(printf '%q' "$DISPATCH_ID")
 FETCH_DIR="$FETCH_DIR"
 SEAT_DIR="$SEAT_DIR"
+RUNTIME_DIR="$RUNTIME_DIR"
 KEEP_FAILED=$(printf '%q' "${FLEET_KEEP_FAILED_WORKTREES:-0}")
 SEAT_WAIT_POLL_S=$(printf '%q' "${SEAT_WAIT_POLL_S:-5}")
 FULL_TASK_B64=$(printf '%q' "$FULL_TASK_B64")
@@ -474,9 +505,9 @@ echo "Starting $PROVIDER launcher for agent $AGENT (model: ${MODEL:-default})...
 echo "Logging to: $LOG_DIR/$LOG_FILE"
 FULL_TASK=$(printf '%s' "$FULL_TASK_B64" | base64 -d)
 set +e
-AGENT_MODEL="$MODEL" ROLES_DIR="$HOME/dev/agent-runtime/roles" \
-    RATECAP_PATTERNS="$HOME/dev/agent-runtime/ratecap-patterns.conf" \
-    bash "$HOME/dev/agent-runtime/launch.sh" "$AGENT" "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
+AGENT_MODEL="$MODEL" ROLES_DIR="$RUNTIME_DIR/roles" \
+    RATECAP_PATTERNS="$RUNTIME_DIR/config/ratecap-patterns.conf" \
+    bash "$RUNTIME_DIR/providers/$PROVIDER/launch.sh" "$AGENT" "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
 AGENT_EXIT=${PIPESTATUS[0]}
 set -e
 

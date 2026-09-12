@@ -1256,6 +1256,14 @@ for i in "${!TASK_AGENT[@]}"; do
 done
 
 # --------------------------------------------------
+# Per-dispatch launcher runtime: gone with the dispatch (localhost only; a
+# remote worker's copy is left to the daily seat worktree sweep)
+# --------------------------------------------------
+if [ -n "${FLEET_DISPATCH_ID:-}" ] && dispatch_lock_uses_localhost; then
+    rm -rf "$HOME/dev/agent-runtime/${FLEET_DISPATCH_ID}" 2>/dev/null || true
+fi
+
+# --------------------------------------------------
 # Save wave plan state
 # --------------------------------------------------
 mkdir -p "$WAVE_PLANS_DIR"

@@ -90,7 +90,7 @@ The heterogeneity invariant extended across vendors — same-vendor different-ti
 
 Agents load **charter (L1) + skill packs (L2) + case file (L3 preamble) + task**. Skills are short, evidence-cited playbooks under `skills/<id>/SKILL.md`, mapped per role in `config/role-skills.yaml`.
 
-**Runtime (fleet dispatch):** `scripts/run-remote.sh` runs `scripts/skill-inject.sh` and places L2 text **before** the L3 preamble (not inside `preamble.sh`). Missing packs warn and continue — never block dispatch. Workers also receive a copy under `~/dev/agent-runtime/skills/`.
+**Runtime (fleet dispatch):** `scripts/run-remote.sh` runs `scripts/skill-inject.sh` and places L2 text **before** the L3 preamble (not inside `preamble.sh`). Missing packs warn and continue — never block dispatch. Workers also receive a copy under `~/dev/agent-runtime/<dispatch id>/skills/`, shipped once per dispatch.
 
 **Starter packs (shared, not 50 novels):** `evidence-first`, `untrusted-prior`, `handoff-intent`, `git-ship`, `docs-no-hallucinate`, `session-modes` (orchestrator). Lint with `./scripts/skills-lint.sh`.
 
