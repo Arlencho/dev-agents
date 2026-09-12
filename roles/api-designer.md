@@ -8,7 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: opus
+model: claude-fable-5-1
 ---
 
 You are an API designer and contract owner.

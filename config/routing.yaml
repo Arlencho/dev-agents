@@ -27,41 +27,43 @@
 #   Use opus on producers when mistakes are hard to reverse or the seat IS
 #   the judgment (DB migrations, contracts, test-first, infra, gates).
 #
-# Tier guidance (Claude only):
-#   claude-fable-5 — flagship for design/docs
-#   opus           — judgment, critique, irreversible or contract work, gates
-#   sonnet         — implementation producers paired with an opus critic
-#   haiku          — not used for fleet seats (insufficient quality bar)
+# Owner decision 2026-09-12: every Claude seat runs the flagship, claude-fable-5-1,
+# producers and critics alike. Tier aliases are no longer used for fleet seats.
+# Haiku is never used for development seats. Kimi and Grok seats are unchanged
+# (workers.yaml provider_preferences picks the vendor; those launchers ignore
+# this column). Cross-vendor pairs (kimi producer x claude critic, grok plan-critic)
+# remain the source of independent error detection; same-model Claude pairs are
+# accepted by the owner for now.
 model_routing:
   # Gates / strategy / investigation
-  orchestrator:              opus
-  cto:                       opus
-  retro:                     opus
-  security-reviewer:         opus
-  investigate:               opus
+  orchestrator:              claude-fable-5-1
+  cto:                       claude-fable-5-1
+  retro:                     claude-fable-5-1
+  security-reviewer:         claude-fable-5-1
+  investigate:               claude-fable-5-1
 
   # Critics — adversarial review (always opus)
-  backend-critic:            opus
-  frontend-critic:           opus
-  database-critic:           opus
-  api-critic:                opus
+  backend-critic:            claude-fable-5-1
+  frontend-critic:           claude-fable-5-1
+  database-critic:           claude-fable-5-1
+  api-critic:                claude-fable-5-1
 
   # Producers where quality = best value at sonnet + opus critic
-  go-backend:                sonnet
-  web-frontend:              sonnet   # ignored when provider=kimi → K3
-  mobile:                    sonnet
+  go-backend:                claude-fable-5-1
+  web-frontend:              claude-fable-5-1   # ignored when provider=kimi → K3
+  mobile:                    claude-fable-5-1
 
   # Producers / specialists where mistakes are expensive → opus
-  db-architect:              opus     # irreversible migrations (DB exception)
-  api-designer:              opus     # OpenAPI contract is product law
-  devops:                    opus     # CI/deploy/infra blast radius
-  test-engineer:             opus     # test-first quality bar before producers
+  db-architect:              claude-fable-5-1     # irreversible migrations (DB exception)
+  api-designer:              claude-fable-5-1     # OpenAPI contract is product law
+  devops:                    claude-fable-5-1     # CI/deploy/infra blast radius
+  test-engineer:             claude-fable-5-1     # test-first quality bar before producers
 
   # High-volume mechanical routing (not code review)
-  pr-sentinel:               sonnet
+  pr-sentinel:               claude-fable-5-1
 
   # Claude Fable 5 — docs / design proposals
-  docs-writer:               claude-fable-5
+  docs-writer:               claude-fable-5-1
 
   # plan-critic is Grok (workers.yaml); no Claude model pin
   # plan-critic:             (omit — vendor default)
@@ -69,7 +71,7 @@ model_routing:
   # and kimi, so no pin here: the launcher uses the vendor default.
   # devops-critic:           (omit, vendor default)
 
-  default:                   sonnet
+  default:                   claude-fable-5-1
 
 # Label-based routing: exact match on GitHub issue labels
 label_routes:

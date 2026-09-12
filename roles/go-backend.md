@@ -8,7 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: sonnet
+model: claude-fable-5-1
 ---
 
 You are a Go backend engineer working on a production Go API.
