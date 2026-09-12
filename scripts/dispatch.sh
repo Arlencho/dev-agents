@@ -71,6 +71,22 @@ else
     fleet_event() { :; }
 fi
 
+# Fleet Desk: the Ops Floor queue (logs/fleet-queue.json). The queue is the
+# orchestrator's declared order; keeping it current must be the machine's job,
+# not memory, so a dispatch marks its own plan running and settles it on the way
+# out. Same law as fleet-events: best effort, never blocking. Every failure mode
+# (missing script, unwritable logs dir, busy lock, no python3) is swallowed, so a
+# dispatch is never killed by its own bookkeeping. Opt-out: FLEET_QUEUE=0.
+fleet_queue() {
+    if [ "${FLEET_QUEUE:-1}" = "0" ]; then
+        return 0
+    fi
+    if [ -x "$SCRIPT_DIR/queue.sh" ]; then
+        "$SCRIPT_DIR/queue.sh" "$@" >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
 # --------------------------------------------------
 # Usage
 # --------------------------------------------------
@@ -447,6 +463,12 @@ DISPATCH_MODE="$(detect_dispatch_mode)"
 REPO_SLUG_EVENTS="$(basename "$REPO_URL" .git)"
 fleet_events_init "$REPO_SLUG_EVENTS" "$DISPATCH_MODE" "$PLAN_SOURCE"
 fleet_event dispatch_plan waves="${#SORTED_WAVES[@]}" seats="${#TASK_AGENT[@]}" format="$FORMAT"
+# Queue: this plan is now running. Armed plans keep their position and gain the
+# dispatch id; a plan dispatched without being armed is appended as running with
+# the purpose read from its own header line (never from a task body).
+if [ -f "$PLAN_SOURCE" ]; then
+    fleet_queue start "$PLAN_SOURCE" "${FLEET_DISPATCH_ID:-}" "$REPO_SLUG_EVENTS"
+fi
 if [ -n "${FLEET_EVENTS_FILE:-}" ]; then
     echo -e "Live events: ${CYAN}logs/fleet-events/$(basename "$FLEET_EVENTS_FILE")${NC}  (watch: make desk-live)"
     echo ""
@@ -462,6 +484,11 @@ fleet_close_dispatch() {
     fleet_event dispatch_end status="$status" \
         total="${TOTAL_TASKS:-0}" succeeded="${TOTAL_SUCCESS:-0}" failed="${TOTAL_FAIL:-0}" \
         duration_s="$(( $(date +%s) - ${OVERALL_START:-$(date +%s)} ))"
+    # Same close-out for the queue: the plan stops being "running" the moment
+    # the dispatcher is gone, aborted runs included.
+    if [ -f "$PLAN_SOURCE" ]; then
+        fleet_queue settle "$PLAN_SOURCE" "$status"
+    fi
 }
 # EXIT covers normal and error exits; the INT/TERM traps make the close-out
 # ordering explicit on Ctrl-C / kill and pin the conventional 130/143 exit

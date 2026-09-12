@@ -377,6 +377,28 @@ else
   ok "no task text is ever emitted"
 fi
 
+# Ops Floor queue wiring: the machine maintains logs/fleet-queue.json, so a
+# dispatch must mark its plan running on the way in and settled on the way out.
+grep -q 'fleet_queue start' "$REPO_DIR/scripts/dispatch.sh" \
+  && ok "dispatch.sh marks the plan running in the queue" \
+  || bad "dispatch.sh marks the plan running in the queue"
+grep -q 'fleet_queue settle' "$REPO_DIR/scripts/dispatch.sh" \
+  && ok "dispatch.sh settles the plan in the queue" \
+  || bad "dispatch.sh settles the plan in the queue"
+# Same redaction law on the queue path: purposes come from the plan header,
+# never from a task body.
+if grep -n 'fleet_queue' "$REPO_DIR/scripts/dispatch.sh" | grep -qE 'TASK_DESC|\$task|\$desc'; then
+  bad "no task text ever reaches the queue"
+else
+  ok "no task text ever reaches the queue"
+fi
+# Queue bookkeeping is best effort: a missing queue.sh must not kill a dispatch.
+if ( SCRIPT_DIR="$TMP/nonexistent"; eval "$(sed -n '/^fleet_queue() {/,/^}/p' "$REPO_DIR/scripts/dispatch.sh")"; fleet_queue start plan.plan ) >/dev/null 2>&1; then
+  ok "fleet_queue survives a missing queue.sh (never blocks a dispatch)"
+else
+  bad "fleet_queue survives a missing queue.sh (never blocks a dispatch)"
+fi
+
 # M1: the close-out must EXECUTE, not just grep. Replay every trap line
 # dispatch.sh installs for fleet_close_dispatch into a harness shaped like the
 # inter-wave gate (dispatch.sh `read -r answer`), then prove dispatch_end is
