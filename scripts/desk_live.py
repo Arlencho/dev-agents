@@ -31,6 +31,7 @@ Python 3.8+ (stdlib only).
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -499,6 +500,7 @@ def merge_live_seats(proj, events_dir, now, live_summaries):
         for seat in side.get("seats") or []:
             seat["dispatch_id"] = side.get("dispatch_id") or summary["dispatch_id"]
             seat["foreign"] = True     # not the followed run: honest label
+            seat["plan"] = side.get("plan") or summary.get("plan")
             proj["seats"].append(seat)
             merged += 1
     if merged:
@@ -513,6 +515,183 @@ def merge_live_seats(proj, events_dir, now, live_summaries):
             "followed": primary,
             "merged_seats": merged,
         }
+    return proj
+
+
+# ── plan context (the "now" view) ───────────────────────────────────────────
+#
+# The event stream carries a plan BASENAME only (redaction law: no task bodies,
+# no absolute paths). The now view needs a little more than that: why this run
+# exists and what each live seat was actually asked to do. Both come from the
+# plan file on disk, read here, never from the stream:
+#
+#   purpose   the first comment line of the plan (its header)
+#   task      the FIRST SENTENCE of that seat's line, cut at 120 chars
+#   waves     how many waves the plan declares, so a seat can say "wave 2 of 3"
+#
+# The whole task body is never published. What is published passes the same
+# secret scrub the Almanac uses.
+
+TASK_MAX = 120
+_SECRET_PATTERNS = [
+    re.compile(r"\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"\bAKIA[0-9A-Z]{12,}"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._-]{12,}"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+]
+
+
+def scrub_text(value, limit=200):
+    """One clean line: control chars out, secret shapes redacted, capped."""
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[redacted]", text)
+    if len(text) > limit:
+        text = text[:limit - 1].rstrip() + "…"
+    return text
+
+
+def first_sentence(value, limit=TASK_MAX):
+    """First sentence of a task line, cut at ``limit``. Never the whole body."""
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    match = re.match(r"^(.{10,}?[.!?])(?:\s|$)", text)
+    if match:
+        text = match.group(1)
+    return scrub_text(text, limit)
+
+
+def resolve_plan_path(plan_name, queue_entries):
+    """Find the plan file a stream names by basename. Repo paths only.
+
+    Order: the queue (it stores the repo-relative path the orchestrator armed),
+    then a shallow walk of wave-plans/. Returns None when the plan is not on
+    this machine, which is a normal state, not an error.
+    """
+    base = os.path.basename(str(plan_name or ""))
+    if not base:
+        return None
+    for entry in queue_entries or []:
+        candidate = str(entry.get("plan") or "")
+        if os.path.basename(candidate) != base:
+            continue
+        path = candidate if os.path.isabs(candidate) else os.path.join(REPO_DIR, candidate)
+        if os.path.isfile(path):
+            return path
+    root = os.path.join(REPO_DIR, "wave-plans")
+    for dirpath, _dirnames, filenames in os.walk(root):
+        if base in filenames:
+            return os.path.join(dirpath, base)
+    return None
+
+
+def parse_plan(path):
+    """Fold a plan file into {purpose, waves, seats[]}. Mirrors dispatch.sh.
+
+    Plan line: ``[wave] | agent | task | [branch]``. The branch is only the last
+    field and only when it looks like a branch slug, exactly as dispatch.sh
+    decides, so seat index and branch line up with what the stream reports.
+    """
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            raw = fh.readlines()
+    except OSError:
+        return None
+
+    purpose = ""
+    lines = []
+    for line in raw:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            if not purpose:
+                body = stripped.lstrip("#").strip()
+                if body:
+                    purpose = scrub_text(body)
+            continue
+        lines.append(stripped)
+    if not lines:
+        return {"plan": rel_safe(path), "purpose": purpose, "waves": 0, "seats": []}
+
+    # Format detection: a leading integer field means the plan is wave-aware.
+    first_field = lines[0].split("|")[0].strip()
+    wave_format = first_field.isdigit()
+
+    seats, waves = [], []
+    for index, line in enumerate(lines):
+        fields = [f.strip() for f in line.split("|")]
+        if wave_format:
+            wave = int(fields[0]) if fields[0].isdigit() else None
+            agent = fields[1] if len(fields) > 1 else None
+            start = 2
+        else:
+            wave = 1
+            agent = fields[0] if fields else None
+            start = 1
+        last = fields[-1] if fields else ""
+        is_branch = bool(re.match(r"^[A-Za-z0-9/_.-]+$", last)) and "/" in last
+        if is_branch and len(fields) > start + 1:
+            branch = last
+            desc = " | ".join(fields[start:-1])
+        else:
+            branch = None
+            desc = " | ".join(fields[start:])
+        if wave is not None and wave not in waves:
+            waves.append(wave)
+        seats.append({
+            "index": str(index),
+            "wave": wave,
+            "agent": agent,
+            "branch": branch,
+            "task": first_sentence(desc),
+        })
+    return {"plan": rel_safe(path), "purpose": purpose,
+            "waves": len(waves) or 1, "seats": seats}
+
+
+def attach_plan_context(proj, queue_entries, plan_cache=None):
+    """Give every seat the purpose of its plan and its one-line task.
+
+    Joined by branch first (the stream and the plan agree on it), then by seat
+    index, then by agent. A seat the plan cannot explain keeps its stream facts
+    and says nothing more: no guessed task ever reaches the page.
+    """
+    cache = {} if plan_cache is None else plan_cache
+
+    def plan_for(name):
+        base = os.path.basename(str(name or ""))
+        if base not in cache:
+            cache[base] = parse_plan(resolve_plan_path(base, queue_entries))
+        return cache[base]
+
+    # The followed run's plan explains its own seats; a merged foreign seat is
+    # explained by the plan of ITS dispatch, looked up the same way.
+    context = plan_for(proj.get("plan"))
+    if context:
+        proj["plan_context"] = {"plan": context["plan"], "purpose": context["purpose"],
+                                "waves": context["waves"], "seats": len(context["seats"])}
+    for seat in proj.get("seats") or []:
+        plan = plan_for(seat.get("plan") or proj.get("plan"))
+        if not plan:
+            continue
+        match = None
+        if seat.get("branch"):
+            match = next((s for s in plan["seats"] if s["branch"] == seat["branch"]), None)
+        if match is None:
+            match = next((s for s in plan["seats"] if s["index"] == str(seat.get("task_id"))), None)
+        if match is None and seat.get("agent"):
+            match = next((s for s in plan["seats"] if s["agent"] == seat["agent"]), None)
+        seat["plan_purpose"] = plan["purpose"] or None
+        seat["wave_total"] = plan["waves"]
+        if match:
+            seat["task"] = match["task"] or None
     return proj
 
 
@@ -601,6 +780,12 @@ def _seat(state, task_id):
             "failovers": [],
             "ratecapped": False,
             "log": None,
+            "last_heartbeat_ts": None,
+            "heartbeat_age_s": None,
+            "quiet": False,
+            "plan_purpose": None,
+            "task": None,
+            "wave_total": None,
         }
         state[task_id] = seat
     return seat
@@ -709,6 +894,15 @@ def project(events, now=None, source=None, malformed=0):
             for provider in (ev.get("from_provider"), ev.get("to_provider")):
                 if provider and provider not in seat["providers_tried"]:
                     seat["providers_tried"].append(provider)
+        elif kind == "seat_heartbeat":
+            # Heartbeats prove a seat is alive between dispatch and exit. They
+            # never CREATE a seat: no fabricated lanes, only liveness on one the
+            # stream already reported.
+            task_id = str(ev.get("task_id"))
+            if task_id in seats:
+                seats[task_id]["last_heartbeat_ts"] = ts
+                if isinstance(ev.get("elapsed_s"), int):
+                    seats[task_id]["heartbeat_elapsed_s"] = ev["elapsed_s"]
         elif kind == "seat_log":
             task_id = str(ev.get("task_id"))
             if task_id in seats and ev.get("log"):
@@ -747,6 +941,17 @@ def project(events, now=None, source=None, malformed=0):
             started = parse_ts(seat["started_at"])
             if started:
                 seat["elapsed_s"] = max(0, int((now - started).total_seconds()))
+        if seat["status"] == "running":
+            # Quiet is measured from the last sign of life: a heartbeat when the
+            # dispatcher sends them, else the seat_dispatch itself.
+            last_sign = parse_ts(seat.get("last_heartbeat_ts")) or parse_ts(seat.get("started_at"))
+            if last_sign:
+                age = max(0, int((now - last_sign).total_seconds()))
+                seat["heartbeat_age_s"] = age
+                seat["quiet"] = age >= QUIET_AFTER
+            else:
+                seat["heartbeat_age_s"] = None
+                seat["quiet"] = False
     seat_list.sort(key=lambda s: (s.get("wave") if isinstance(s.get("wave"), int) else 0,
                                   str(s.get("task_id"))))
     out["seats"] = seat_list
@@ -854,6 +1059,7 @@ def attach_queue_and_day(proj, events_dir, queue_file, now):
     for warning in warnings:
         proj.setdefault("warnings", []).append(warning)
     merge_live_seats(proj, events_dir, now, live)
+    attach_plan_context(proj, entries)
     return proj
 
 

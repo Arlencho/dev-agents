@@ -580,6 +580,40 @@ missing.
 | `seats[].dispatch_id` | string | Which run a seat belongs to |
 | `seats[].foreign` | bool | `true` when the seat comes from a live dispatch other than the followed one |
 
+### The now view (`seats[]` additions + `plan_context`)
+
+The Floor answers "what is this seat doing, and for how long" from data the
+stream and the plan file already carry. The stream travels with a plan
+**basename** only, so `desk_live.py` resolves that basename to the plan file on
+disk (queue entry first, then a walk of `wave-plans/`) and reads three things
+from it: the header, the seat's own line, the wave count.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `plan_context` | object | `{plan, purpose, waves, seats}` for the followed run |
+| `seats[].plan_purpose` | string | First comment line of the seat's plan |
+| `seats[].task` | string | **First sentence** of that seat's line in the plan, cut at 120 chars. Never the whole task body |
+| `seats[].wave_total` | int | Wave count of the plan, so a seat reads "wave 2 of 3" |
+| `seats[].attempt` | int | Attempt number from `seat_dispatch` |
+| `seats[].started_at` | string | `seat_dispatch` timestamp; the browser ticks elapsed from it every second |
+| `seats[].last_heartbeat_ts` | string | Newest `seat_heartbeat` for that seat, `null` when none arrived |
+| `seats[].heartbeat_age_s` | int | Seconds since the last sign of life (heartbeat, else `seat_dispatch`) |
+| `seats[].quiet` | bool | `true` when a **running** seat has had no sign of life for `quiet_after_s` (90) |
+
+Rules:
+
+* the plan is joined to seats by **branch** first, then seat index, then agent;
+  a seat the plan cannot explain keeps its stream facts and says so on the page
+  rather than showing a guessed task;
+* a plan that is not on this machine yields `plan_purpose: null` and
+  `task: null`, never an invented line;
+* `seat_heartbeat` updates liveness but **never creates a seat**;
+* published task text passes the same secret scrub as the Almanac and is a
+  single line;
+* `quiet` uses the same threshold as the `quiet_stream` entry in `waiting_on`,
+  and the Floor marks it in the REPLAY watermark language (violet badge), never
+  as a green live seat.
+
 Rules the projector enforces:
 
 * the day view reads **every stream file of the day**, not only the newest, so

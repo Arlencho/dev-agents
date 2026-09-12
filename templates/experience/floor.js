@@ -229,6 +229,63 @@
     }
   }
 
+  /* The now view: what every live seat is doing, why, and for how long.
+     Purpose and task come from the plan file (projection side), elapsed ticks
+     in the browser from the seat_dispatch timestamp, and a seat whose last sign
+     of life is older than the quiet threshold wears the watermark badge. */
+  function nowRow(seat) {
+    var quiet = seat.quiet === true;
+    var wave = (typeof seat.wave === "number")
+      ? ("wave " + seat.wave + (seat.wave_total ? " of " + seat.wave_total : ""))
+      : "wave not reported";
+    var beat = seat.last_heartbeat_ts
+      ? "last heartbeat " + timeOf(seat.last_heartbeat_ts) +
+        (typeof seat.heartbeat_age_s === "number" ? " (" + fmtDur(seat.heartbeat_age_s) + " ago)" : "")
+      : "no heartbeat yet";
+    return '<li class="nowrow' + (quiet ? " quiet" : "") + '">' +
+      '<div class="nowhead"><span class="role">' + esc(seat.agent || seat.task_id) + "</span>" +
+      seatPill(seat) +
+      (quiet ? '<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>' : "") +
+      '<span class="timer mono" data-elapsed-from="' + esc(seat.started_at || "") + '">' +
+      fmtDur(seat.elapsed_s) + "</span></div>" +
+      '<div class="nowpurpose">' + esc(seat.plan_purpose || "purpose not declared in the plan header") + "</div>" +
+      '<div class="nowtask">' + esc(seat.task || "task line not resolvable from the plan on this machine") + "</div>" +
+      '<div class="nowmeta"><span class="vendor">' + esc(wave) + "</span>" +
+      '<span class="vendor">attempt ' + esc(seat.attempt || 1) + "</span>" +
+      '<span class="mono faint">' + esc(seat.branch || "branch not reported") + "</span>" +
+      '<span class="faint">' + esc(beat) + "</span></div></li>";
+  }
+
+  function renderNow(d) {
+    var box = $("floor-now-list");
+    if (!box) return;
+    var live = (d.seats || []).filter(function (s) { return s.status === "running"; });
+    var note = $("floor-now-note");
+    if (note) {
+      var runs = {};
+      live.forEach(function (s) { if (s.dispatch_id) runs[s.dispatch_id] = 1; });
+      var n = Object.keys(runs).length;
+      note.textContent = live.length
+        ? live.length + " live seat(s) across " + (n || 1) + " dispatch(es)"
+        : "no seat is live";
+    }
+    box.innerHTML = live.length
+      ? live.map(nowRow).join("")
+      : '<li class="muted">No seat is live. The Floor shows motion only while a dispatch is running.</li>';
+    tickElapsed();
+  }
+
+  /* One ticker for the page: elapsed counts up every second from the timestamp
+     the stream recorded, so a live seat never looks frozen between polls. */
+  function tickElapsed() {
+    var nodes = document.querySelectorAll("[data-elapsed-from]");
+    for (var i = 0; i < nodes.length; i++) {
+      var from = new Date(nodes[i].getAttribute("data-elapsed-from") || "").getTime();
+      if (isNaN(from)) continue;
+      nodes[i].textContent = fmtDur(Math.max(0, Math.round((Date.now() - from) / 1000)));
+    }
+  }
+
   /* Up next: declared intent. Never rendered as motion, never as "running". */
   function renderQueue(d) {
     var box = $("floor-queue-list");
@@ -532,6 +589,7 @@
     renderAmbient(d, st);
     renderWaiting(d);
     renderCounts(d);
+    renderNow(d);
     renderQueue(d);
     renderToday(d);
     if (d.mode === "conductor") renderSpine(d); else renderLanes(d);
@@ -587,6 +645,7 @@
   }
 
   // Boot
+  setInterval(tickElapsed, 1000);
   if (mode.replay || mode.dispatchId) {
     mode.replay = true;
     loadReplay(mode.dispatchId, mode.asOfSeq);

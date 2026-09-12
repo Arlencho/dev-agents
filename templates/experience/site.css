@@ -528,6 +528,24 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 }
 .wavehead2:first-of-type { margin-top: 0; }
 
+/* ── Ops Floor: the now view (one row per live seat) ────────────────── */
+.nowlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.nowlist > li {
+  background: var(--bg3); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 11px 13px; font-size: 12.5px;
+  display: grid; gap: 5px;
+}
+.nowlist > li.muted { border-style: dashed; color: var(--muted); font-size: 12px; }
+/* Quiet wears the watermark language: violet badge, violet edge, never green. */
+.nowrow.quiet { border-color: var(--violet); background: var(--violet-soft); }
+.nowhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.nowhead .role { font-weight: 650; font-size: 13px; }
+.nowhead .wm-badge { font-size: 9.5px; padding: 2px 6px; }
+.nowhead .timer { margin-left: auto; font-size: 12px; color: var(--muted); }
+.nowpurpose { color: var(--muted); line-height: 1.35; }
+.nowtask { line-height: 1.4; }
+.nowmeta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+
 /* ── Ops Floor: Up next (declared queue) + Landed today ─────────────── */
 .qlist, .tlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .qlist > li, .tlist > li {

@@ -970,6 +970,58 @@ class Renderer:
             )
         return "".join(rows)
 
+    def _live_now_card(self, live: Dict[str, Any]) -> str:
+        """The now view: what every live seat is doing, why, and for how long.
+
+        Purpose and task come from the plan file through the projection (first
+        comment line, first sentence of the seat line capped at 120 chars), never
+        from the event stream and never the whole task body. Elapsed is a build
+        stamp here; assets/floor.js ticks the same element every second from
+        data-elapsed-from. A seat whose last sign of life is older than the quiet
+        threshold wears the watermark badge.
+        """
+        seats = [s for s in (live.get("seats") or []) if s.get("status") == "running"]
+        runs = {s.get("dispatch_id") for s in seats if s.get("dispatch_id")}
+        note = (f"{len(seats)} live seat(s) across {len(runs) or 1} dispatch(es)"
+                if seats else "no seat is live")
+        if seats:
+            rows = []
+            for s in seats:
+                quiet = s.get("quiet") is True
+                wave = (f'wave {s["wave"]}' + (f' of {s["wave_total"]}' if s.get("wave_total") else "")
+                        if isinstance(s.get("wave"), int) else "wave not reported")
+                if s.get("last_heartbeat_ts"):
+                    beat = f'last heartbeat {self._time_of(s.get("last_heartbeat_ts"))}'
+                    if isinstance(s.get("heartbeat_age_s"), int):
+                        beat += f' ({self._fmt_dur(s.get("heartbeat_age_s"))} ago)'
+                else:
+                    beat = "no heartbeat yet"
+                rows.append(
+                    f'<li class="nowrow{" quiet" if quiet else ""}">'
+                    f'<div class="nowhead"><span class="role">{esc(s.get("agent") or s.get("task_id"))}</span>'
+                    f'{self._seat_pill(s)}'
+                    + ('<span class="wm-badge" title="no sign of life since the quiet threshold">quiet</span>'
+                       if quiet else "")
+                    + f'<span class="timer mono" data-elapsed-from="{esc(s.get("started_at") or "")}">'
+                    f'{self._fmt_dur(s.get("elapsed_s"))}</span></div>'
+                    f'<div class="nowpurpose">{esc(s.get("plan_purpose") or "purpose not declared in the plan header")}</div>'
+                    f'<div class="nowtask">{esc(s.get("task") or "task line not resolvable from the plan on this machine")}</div>'
+                    f'<div class="nowmeta"><span class="vendor">{esc(wave)}</span>'
+                    f'<span class="vendor">attempt {esc(s.get("attempt") or 1)}</span>'
+                    f'<span class="mono faint">{esc(s.get("branch") or "branch not reported")}</span>'
+                    f'<span class="faint">{esc(beat)}</span></div></li>'
+                )
+            rows_html = "".join(rows)
+        else:
+            rows_html = ('<li class="muted">No seat is live. The Floor shows motion only '
+                         "while a dispatch is running.</li>")
+        return f"""
+    <div class="card mt" id="floor-now-card">
+      <div class="cardhead"><h2>Now</h2><span class="more faint" id="floor-now-note">{note}</span></div>
+      <ol class="nowlist" id="floor-now-list">{rows_html}</ol>
+    </div>
+"""
+
     def _live_queue_card(self, live: Dict[str, Any]) -> str:
         """Up next: declared intent from logs/fleet-queue.json, labelled as such.
 
@@ -1153,6 +1205,11 @@ class Renderer:
       <div class="pipe done"><div class="ph">Done <span class="n" id="pipe-settled">—</span></div><div class="desc">settled work lives in the <a href="../work/index.html">Almanac</a></div></div>
     </div>
 
+    <div class="card mt" id="floor-now-card">
+      <div class="cardhead"><h2>Now</h2><span class="more faint" id="floor-now-note">no projection in this build</span></div>
+      <ol class="nowlist" id="floor-now-list"><li class="muted">No live projection, so no seat can be claimed to be working.</li></ol>
+    </div>
+
     <div class="card mt" id="floor-queue-card">
       <div class="cardhead"><h2>Up next</h2><span class="more faint">declared, not observed</span></div>
       <p class="muted" id="floor-queue-note">No projection in this build. The queue lives in
@@ -1295,6 +1352,7 @@ class Renderer:
       <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">{cn("blocked")}</span></div><div class="desc">failed · rate-capped · unknown</div></div>
       <div class="pipe done"><div class="ph">Settled <span class="n" id="pipe-settled">{cn("settled")}</span></div><div class="desc">record lands in the <a href="../work/index.html">Almanac</a></div></div>
     </div>
+{self._live_now_card(live)}
 {self._live_queue_card(live)}
 {self._live_today_card(live)}
 

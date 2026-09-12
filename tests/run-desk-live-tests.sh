@@ -795,6 +795,108 @@ python3 "$DESK_LIVE" --once --events-dir "$DAY_DIR" --queue-file "$Q_FILE" \
 assert_py "replay carries no live queue or day view" "$REPLAY_OUT" \
   'd["view"]=="replay" and d["queue"]==[] and d["today"]==[]'
 
+# ── the now view: purpose, one-line task, wave x of N, attempt, quiet ──────
+NOW_PLAN="$PLAN_DIR/now.plan"
+cat > "$NOW_PLAN" <<'PLAN'
+# Now-view purpose taken from the plan header. Issue 4242.
+#
+# DISPATCH: ./scripts/dispatch.sh git@example.invalid:x/y.git plan --auto
+1 | go-backend | Stand up the service boundary and nothing else. READ FIRST the contract in full, then the issue, then every route it touches, and do not stop there because this sentence keeps going well past any sensible length. | feat/now-a
+2 | devops | Deploy it behind the edge. | feat/now-b
+PLAN
+NOW_Q="$TMP/now-queue.json"
+python3 - "$NOW_Q" "$NOW_PLAN" <<'NOWQ'
+import json, sys
+json.dump({"schema": "fleet-queue/1", "updated_at": "2026-09-12T00:00:00Z",
+           "entries": [{"plan": sys.argv[2], "repo": "olympus-platform",
+                        "purpose": "declared purpose", "added_at": "2026-09-12T00:00:00Z",
+                        "status": "running", "dispatch_id": "now-run",
+                        "settled_at": None, "settled_status": None}]},
+          open(sys.argv[1], "w"), indent=2)
+NOWQ
+
+NOW_DIR="$TMP/events-now"
+mkdir -p "$NOW_DIR"
+python3 - "$NOW_DIR" <<'NOWFIX'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+
+out = sys.argv[1]
+now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+
+
+def ts(d):
+    return (now - timedelta(seconds=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+rows = [
+    {"ts": ts(600), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "now.plan"},
+    {"ts": ts(599), "event": "dispatch_plan", "waves": 2, "seats": 2},
+    {"ts": ts(598), "event": "wave_start", "wave": 1, "seats": 2, "mode": "wave"},
+    # seat 0: heartbeat 10s ago, healthy
+    {"ts": ts(590), "event": "seat_dispatch", "task_id": "0", "agent": "go-backend",
+     "branch": "feat/now-a", "wave": 1, "provider": "claude", "model": "opus", "attempt": 2},
+    {"ts": ts(10), "event": "seat_heartbeat", "task_id": "0", "agent": "go-backend",
+     "branch": "feat/now-a", "wave": 1, "elapsed_s": 580},
+    # seat 1: dispatched long ago, no heartbeat since, must read quiet
+    {"ts": ts(585), "event": "seat_dispatch", "task_id": "1", "agent": "devops",
+     "branch": "feat/now-b", "wave": 1, "provider": "kimi", "attempt": 1},
+]
+with open(os.path.join(out, "now-run.jsonl"), "w", encoding="utf-8") as fh:
+    for i, row in enumerate(rows, 1):
+        row.update({"schema": "fleet-events/1", "seq": i, "dispatch_id": "now-run"})
+        fh.write(json.dumps(row) + "\n")
+NOWFIX
+printf 'now-run.jsonl\n' > "$NOW_DIR/latest"
+
+NOW_OUT="$TMP/out/live-now.json"
+python3 "$DESK_LIVE" --once --events-dir "$NOW_DIR" --queue-file "$NOW_Q" --out "$NOW_OUT" >/dev/null 2>&1 \
+  && ok "--once projects the now view" || bad "--once projects the now view"
+assert_py "a live seat carries the purpose of its plan" "$NOW_OUT" \
+  'S["0"]["plan_purpose"].startswith("Now-view purpose taken from the plan header")'
+assert_py "a live seat carries its task in one line, cut at 120 chars" "$NOW_OUT" \
+  'len(S["0"]["task"])<=120 and S["0"]["task"].startswith("Stand up the service boundary")'
+assert_py "the task is the first sentence, never the whole body" "$NOW_OUT" \
+  '"READ FIRST" not in S["0"]["task"]'
+assert_py "wave x of N comes from the plan wave count" "$NOW_OUT" \
+  'S["0"]["wave"]==1 and S["0"]["wave_total"]==2'
+assert_py "attempt number is projected" "$NOW_OUT" 'S["0"]["attempt"]==2'
+assert_py "elapsed is measured from seat_dispatch" "$NOW_OUT" \
+  'S["0"]["started_at"] and S["0"]["elapsed_s"]>=580'
+assert_py "a heartbeat keeps a working seat out of quiet" "$NOW_OUT" \
+  'S["0"]["last_heartbeat_ts"] and S["0"]["quiet"] is False and S["0"]["heartbeat_age_s"]<90'
+assert_py "a seat with no sign of life past the threshold is quiet" "$NOW_OUT" \
+  'S["1"]["quiet"] is True and S["1"]["last_heartbeat_ts"] is None and S["1"]["heartbeat_age_s"]>=90'
+assert_py "plan context is published for the followed run" "$NOW_OUT" \
+  'd["plan_context"]["waves"]==2 and d["plan_context"]["seats"]==2'
+assert_py "a heartbeat never invents a seat" "$NOW_OUT" 'len(d["seats"])==2'
+
+# An unresolvable plan degrades honestly: stream facts stay, nothing is guessed.
+GONE_Q="$TMP/gone-queue.json"
+python3 - "$GONE_Q" <<'GONEQ'
+import json, sys
+json.dump({"schema": "fleet-queue/1", "updated_at": None, "entries": []},
+          open(sys.argv[1], "w"), indent=2)
+GONEQ
+GONE_OUT="$TMP/out/live-gone.json"
+python3 "$DESK_LIVE" --once --events-dir "$NOW_DIR" --queue-file "$GONE_Q" --out "$GONE_OUT" >/dev/null 2>&1
+assert_py "a plan that is not on this machine invents no task" "$GONE_OUT" \
+  'S["0"]["task"] is None and S["0"]["plan_purpose"] is None and S["0"]["status"]=="running"'
+
+grep -q 'data-elapsed-from' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "floor.js ticks elapsed from the seat_dispatch timestamp" \
+  || bad "floor.js ticks elapsed from the seat_dispatch timestamp"
+grep -q 'setInterval(tickElapsed, 1000)' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "elapsed updates every second in the browser" \
+  || bad "elapsed updates every second in the browser"
+grep -q 'floor-now-list' "$REPO_DIR/scripts/experience_build.py" \
+  && ok "the static Floor snapshot carries the now view" \
+  || bad "the static Floor snapshot carries the now view"
+grep -q 'nowrow.quiet' "$REPO_DIR/templates/experience/site.css" \
+  && ok "quiet seats use the watermark visual language" \
+  || bad "quiet seats use the watermark visual language"
+
 echo ""
 echo "----------------------------------------"
 echo "  passed: $pass   failed: $fail"
