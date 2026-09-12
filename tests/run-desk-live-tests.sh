@@ -712,10 +712,14 @@ from datetime import datetime, timedelta, timezone
 
 out = sys.argv[1]
 now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+# Never before local midnight: a landing stamped N seconds ago must still fall
+# on today's local date when the suite runs just after midnight.
+midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+midnight = midnight.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def ts(delta_s):
-    return (now - timedelta(seconds=delta_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return max(now - timedelta(seconds=delta_s), midnight).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def write(name, rows):
@@ -1199,10 +1203,14 @@ from datetime import datetime, timedelta, timezone
 
 out = sys.argv[1]
 now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+# Never before local midnight: a landing stamped N seconds ago must still fall
+# on today's local date when the suite runs just after midnight.
+midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+midnight = midnight.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def ts(d):
-    return (now - timedelta(seconds=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return max(now - timedelta(seconds=d), midnight).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def write(name, rows):
@@ -1408,6 +1416,24 @@ assert_fn "the task line is cut at 120 characters" \
 assert_fn "the task line passes the same secret scrub as the program token" \
   '"ghp_" not in mod.first_sentence("Push with ghp_abcdefghijklmnopqrstuvwxyz0123456789 now. Then more.") '\
 'and "[redacted]" in mod.first_sentence("Push with ghp_abcdefghijklmnopqrstuvwxyz0123456789 now. Then more.")'
+# The three inputs from the PR 74 review: a home path never reaches the page,
+# and a short opener never lets the rest of the body through.
+assert_fn "review input 1: token redacted and home path marked in a long first sentence" \
+  'mod.first_sentence("Push with ghp_abcdefghijklmnopqrstuvwxyz0123456789 and write /Users/arlenrios/.ssh/id_rsa now.") '\
+'== "Push with [redacted] and write outside-repo now."'
+assert_fn "review input 2: a short opener is cut at its own full stop" \
+  'mod.first_sentence("Go. Then leak ghp_abcdefghijklmnopqrstuvwxyz0123456789 and /Users/arlenrios/.ssh/id_rsa onto the Floor.") == "Go."'
+assert_fn "review input 3: the first sentence only, the path in the body never read" \
+  'mod.first_sentence("Project the sentence. Then the body, with /Users/someone/secret.") == "Project the sentence."'
+assert_fn "a path inside this worktree is kept, repo-relative" \
+  'mod.first_sentence("Edit scripts/desk_live.py and " + mod.REPO_DIR + "/docs/experience-data.md.") '\
+'== "Edit scripts/desk_live.py and docs/experience-data.md."'
+assert_fn "a home, variable or parent-escaping path reads outside-repo" \
+  'mod.first_sentence("Read ~/.ssh/config, $HOME/.netrc and ../other/secret") == "Read outside-repo, outside-repo and outside-repo"'
+assert_fn "a branch slug survives, a file URL does not" \
+  'mod.first_sentence("Push feat/floor-context to origin/main (see file:///Users/x/y).") == "Push feat/floor-context to origin/main (see outside-repo)."'
+assert_fn "no sentence end: cut at exactly 120 characters" \
+  'len(mod.first_sentence("word " * 80)) == 120'
 
 # ── two repos live at once, over real-shaped streams ──────────────────────
 J_PLANS="$TMP/plans-72"
@@ -1449,8 +1475,12 @@ import json, os, sys
 from datetime import datetime, timedelta, timezone
 out = sys.argv[1]
 now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+# Never before local midnight: a landing stamped N seconds ago must still fall
+# on today's local date when the suite runs just after midnight.
+midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+midnight = midnight.astimezone(timezone.utc).replace(tzinfo=None)
 def ts(d):
-    return (now - timedelta(seconds=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return max(now - timedelta(seconds=d), midnight).strftime("%Y-%m-%dT%H:%M:%SZ")
 def write(name, rows):
     with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
         for i, row in enumerate(rows, 1):
@@ -1512,6 +1542,58 @@ assert_py "task_line never carries a secret shape" "$J_OFF" \
 'and not any("ghp_" in json.dumps(s) for s in d["seats"])'
 assert_py "task_line is cut at 120 characters" "$J_OFF" \
   'all(len(s["task_line"] or "")<=120 for s in d["seats"])'
+# Replay: a historical seat still carries repo, issue, task_line and pr (the
+# plan on disk explains it), while summary, repos and now stay empty.
+J_REPLAY="$TMP/out/live-72-replay.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --replay --dispatch-id j-a --events-dir "$J_DIR" --queue-file "$J_Q" --out "$J_REPLAY" >/dev/null 2>&1 \
+  && ok "--once --replay exits 0" || bad "--once --replay exits 0"
+assert_py "a replay seat keeps issue, task_line and pr as the schema says" "$J_REPLAY" \
+  'd["view"]=="replay" and S["0"]["repo"]=="dev-agents" and S["0"]["issue"]["number"]==72 '\
+'and S["0"]["task_line"]=="Project repo, issue and PR onto every seat." and S["0"]["pr"]["branch"]=="feat/floor-context"'
+assert_py "a replay still carries no summary, no repos and no now" "$J_REPLAY" \
+  'd["summary"] is None and d["repos"]==[] and all(s["now"] is None for s in d["seats"])'
+
+# A dispatch that crossed local midnight: no dispatch_end, started yesterday.
+# Still in motion, so still followed and counted; one from before yesterday is not.
+J_NIGHT="$TMP/events-72-night"
+mkdir -p "$J_NIGHT"
+cp "$J_DIR"/*.jsonl "$J_DIR/latest" "$J_NIGHT/"
+python3 - "$J_NIGHT" <<'JNIGHT'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+out = sys.argv[1]
+local_now = datetime.now().astimezone()
+def noon_utc(days_ago):
+    local = (local_now - timedelta(days=days_ago)).replace(hour=12, minute=0, second=0, microsecond=0)
+    return local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def write(name, rows):
+    with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+        for i, row in enumerate(rows, 1):
+            row.update({"schema": "fleet-events/1", "seq": i, "dispatch_id": name[:-6]})
+            fh.write(json.dumps(row) + "\n")
+write("j-overnight.jsonl", [
+    {"ts": noon_utc(1), "event": "dispatch_start", "mode": "wave", "repo": "other-repo",
+     "plan": "overnight.plan"},
+    {"ts": noon_utc(1), "event": "seat_dispatch", "task_id": "9", "agent": "devops",
+     "branch": "feat/overnight", "wave": 1, "provider": "local", "attempt": 1},
+])
+write("j-stale.jsonl", [
+    {"ts": noon_utc(3), "event": "dispatch_start", "mode": "wave", "repo": "other-repo",
+     "plan": "stale.plan"},
+    {"ts": noon_utc(3), "event": "seat_dispatch", "task_id": "8", "agent": "devops",
+     "branch": "feat/stale", "wave": 1, "provider": "local", "attempt": 1},
+])
+JNIGHT
+J_NIGHT_OUT="$TMP/out/live-72-night.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --dispatch-id j-a --events-dir "$J_NIGHT" --queue-file "$J_Q" --out "$J_NIGHT_OUT" >/dev/null 2>&1 \
+  && ok "--once exits 0 with an overnight dispatch on disk" || bad "--once exits 0 with an overnight dispatch on disk"
+assert_py "a dispatch that crossed local midnight is still followed" "$J_NIGHT_OUT" \
+  'sorted(d["today_meta"]["live"])==["j-a","j-b","j-overnight"] and S["9"]["repo"]=="other-repo" and S["9"]["foreign"] is True'
+assert_py "the overnight seat is counted in summary and in its own repo bucket" "$J_NIGHT_OUT" \
+  'd["summary"]["running"]==4 and {r["repo"]: (r["seats_live"], r["dispatches_live"]) for r in d["repos"]}["other-repo"]==(1,1)'
+assert_py "a stream with no end from before yesterday is not live" "$J_NIGHT_OUT" \
+  '"j-stale" not in d["today_meta"]["live"] and "8" not in S'
+
 assert_py "a queue entry names its issue from the stored header line when the plan is gone" "$J_OFF" \
   '{q["plan_basename"]: q["issue"]["number"] for q in d["queue"]}=={"w1c-tile.plan":2799,"no-issue.plan":None} '\
 'and d["queue"][0]["issue"]["source"]=="queue"'

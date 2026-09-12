@@ -39,7 +39,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 SCHEMA = "live/1"
 EVENT_SCHEMA_PREFIX = "fleet-events/"
@@ -526,11 +526,15 @@ def day_streams(events_dir, now):
 def today_view(events_dir, now, entries):
     """Every dispatch that ENDED on this local calendar day, plus the live ones.
 
-    Reads every stream file of the day, not only the newest, so concurrent
-    dispatches all appear. Purpose and plan path come from the queue when the
-    basename matches; the stream only ever carries a basename.
+    Live means still in motion: no ``dispatch_end`` yet and started on this
+    local date or the one before, so a run that crossed local midnight is
+    still followed and counted. Reads every stream file of the day, not only
+    the newest, so concurrent dispatches all appear. Purpose and plan path
+    come from the queue when the basename matches; the stream only ever
+    carries a basename.
     """
     today = local_date(now)
+    live_dates = (today, today - timedelta(days=1))
     index = queue_purpose_index(entries)
     landed, live = [], []
     summaries = day_streams(events_dir, now)
@@ -558,7 +562,7 @@ def today_view(events_dir, now, entries):
                 "failed": summary.get("failed"),
                 "branches": summary.get("branches") or [],
             })
-        elif ended is None and started is not None and local_date(started) == today:
+        elif ended is None and started is not None and local_date(started) in live_dates:
             live.append(summary)
     landed.sort(key=lambda r: r.get("ended_at") or "", reverse=True)
     live.sort(key=lambda r: r.get("started_at") or "")
@@ -705,11 +709,45 @@ def seat_activity(ev, ts):
     return activity
 
 
+def task_path(token):
+    """One slash token of a task line, as the Floor may print it.
+
+    Same law as activity_path: an operator path never reaches the page. A
+    path inside this worktree is kept, repo-relative; anything else that
+    reads as a path (absolute, home, variable, parent escape) becomes the
+    marker. Punctuation around the token stays where it was.
+    """
+    core = token.rstrip(".,;:!?)'\"")
+    tail = token[len(core):]
+    lead = ""
+    if core[:1] in "(\"'":
+        lead, core = core[:1], core[1:]
+    if core.lower().startswith("file:"):
+        core = core[5:]
+    if not core or "/" not in core:
+        return token
+    if os.path.isabs(core):
+        relative = os.path.relpath(core, REPO_DIR)
+        if relative.startswith(os.pardir):
+            return lead + OUTSIDE_REPO + tail
+        core = relative
+    elif core.startswith(("~", "$")) or os.pardir in core.split("/"):
+        return lead + OUTSIDE_REPO + tail
+    return lead + core + tail
+
+
 def first_sentence(value, limit=TASK_MAX):
-    """First sentence of a task line, cut at ``limit``. Never the whole body."""
+    """The one line of a seat task the Floor may print. Never the whole body.
+
+    Scrubbed like now.program and activity.path: control chars out, every
+    slash token checked against the worktree (task_path), secret shapes
+    redacted. Cut at the first sentence end whatever its length, else at
+    ``limit``, so a short opener never lets the rest of the body through.
+    """
     text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
     text = re.sub(r"\s+", " ", text).strip()
-    match = re.match(r"^(.{10,}?[.!?])(?:\s|$)", text)
+    text = " ".join(task_path(tok) if "/" in tok else tok for tok in text.split(" "))
+    match = re.match(r"^(.*?[.!?])(?:\s|$)", text)
     if match:
         text = match.group(1)
     return scrub_text(text, limit)
@@ -1151,8 +1189,8 @@ def repo_summaries(proj, live_summaries):
                   key=lambda r: (-r["seats_live"], -r["dispatches_live"], r["repo"]))
 
 
-def attach_context(proj, queue_entries, live_summaries, plan_cache, gh):
-    """Repo, issue, task_line and PR on seats, queue entries and landings."""
+def attach_seat_context(proj, queue_entries, plan_cache, gh):
+    """Repo, issue, task_line and PR on every seat (live and replay alike)."""
     index = queue_purpose_index(queue_entries)
     for seat in proj.get("seats") or []:
         seat["repo"] = seat.get("repo") or proj.get("repo")
@@ -1162,6 +1200,29 @@ def attach_context(proj, queue_entries, live_summaries, plan_cache, gh):
         seat["issue"] = issue_context(seat["repo"], plan, known, gh)
         seat["task_line"] = seat.get("task") or None
         seat["pr"] = gh.pr(seat["repo"], seat.get("branch"))
+    return proj
+
+
+def attach_replay_context(proj, queue_file, gh):
+    """What a replay seat may still carry: repo, issue, task_line and PR.
+
+    The plan on disk explains a historical seat as well as a live one, and
+    the gh rules are the same (optional, never fatal). The queue is read only
+    to locate plan files; a replay publishes no queue, no day, no repos and
+    no summary, because the past has no present.
+    """
+    entries, _warnings = read_queue(queue_file)
+    plan_cache = {}
+    attach_plan_context(proj, entries, plan_cache)
+    attach_seat_context(proj, entries, plan_cache, gh)
+    proj["gh_enrichment"] = gh.meta()
+    return proj
+
+
+def attach_context(proj, queue_entries, live_summaries, plan_cache, gh):
+    """Repo, issue, task_line and PR on seats, queue entries and landings."""
+    index = queue_purpose_index(queue_entries)
+    attach_seat_context(proj, queue_entries, plan_cache, gh)
     for entry in proj.get("queue") or []:
         plan = cached_plan(plan_cache, entry.get("plan"), queue_entries)
         known = index.get(entry.get("plan_basename"))
@@ -1665,7 +1726,7 @@ def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False,
         # Use the cut seq (or full length when replaying the whole settled run).
         cut = as_of_seq if as_of_seq is not None else total
         mark_replay(proj, cut, total)
-        return proj
+        return attach_replay_context(proj, queue_file, gh)
     return attach_queue_and_day(proj, events_dir, queue_file, now, gh)
 
 
