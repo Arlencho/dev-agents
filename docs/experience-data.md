@@ -305,6 +305,10 @@ Rules:
   the slug matches.
 - Turn it off with `--no-gh` or `FLEET_DESK_NO_GH=1` (status `disabled`).
 
+The live projector (`scripts/desk_live.py`) runs a second, smaller enrichment
+under the same rules for the Ops Floor: one issue milestone per plan and one PR
+per branch. See [Repo, issue, task line and PR](#repo-issue-task-line-and-pr-issue-72).
+
 ## Snapshot (optional, shareable)
 
 ```bash
@@ -780,6 +784,77 @@ Rules the projector enforces:
   for the same reason replay carries no `queue[]` or `today[]`: a historical
   scrub must not borrow the present.
 
+### Repo, issue, task line and PR (issue 72)
+
+With two repos live at once the Floor has to say which repo a seat belongs to
+and which requirement it serves. The projector follows **every live dispatch of
+the day** (the followed run plus every `foreign` one), and `repo` is a
+first-class field on every seat, queue entry and landing. Three more facts ride
+along: the issue the plan header names, the seat's one-line task, and the PR
+for its branch. Only the milestone title and the PR number plus title come from
+`gh`; everything else is read from the stream, the queue and the plan file.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `seats[].repo` | string | Repo of the dispatch the seat belongs to (`dispatch_start.repo`), on followed and `foreign` seats alike. Present on replay seats too |
+| `seats[].issue` | object | The issue this seat's plan serves (shape below). Always present |
+| `seats[].task_line` | string\|null | **First sentence** of that seat's line in the plan file, cut at 120 chars, passed through the same secret scrub as `now.program`. Never more of the task body. `null` when the plan is not on this machine. (`seats[].task` keeps the same value for older readers) |
+| `seats[].pr` | object | The open, else merged, PR for the seat's branch (shape below). Always present |
+| `queue[].repo` | string | Already first-class since #68; the first word of an UP NEXT row |
+| `queue[].issue` | object | Same shape as `seats[].issue`. When the plan file is gone, the number comes from the `issue` field `scripts/queue.sh` stored at `add`/`start`, else from the stored header line (`purpose`) |
+| `today[].repo` | string | Already first-class since #68; the first word of a LANDED TODAY row |
+| `today[].pr` | object | The PR for the landing's branch: the first branch with a PR found, else the first branch's lookup, else a skipped record with reason `no branch` |
+| `today[].prs[]` | array | One `pr` object per entry of `branches[]`, in the same order |
+| `repos[]` | array | One counts object per repo seen today, sorted by `seats_live` then `dispatches_live` descending: `{repo, seats_live, dispatches_live, queued, landed_today, dispatch_ids[]}`. A repo the stream did not name is bucketed as `unknown`. **`[]` on a replay** (the past has no present), like `summary` |
+| `gh_enrichment` | object | What the enrichment did for this projection: `{status, reason, owner, calls, cached, skipped}`. `status` is `ok` · `skipped` (nothing needed a lookup) · `disabled` · `unavailable` · `unauthenticated` · `error` |
+
+`issue` object:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `number` | int\|null | Parsed from the plan header line that names it, pattern `Issue NNNN` (`Issue #NNNN` and any case accepted). `null` when no header line names one |
+| `source` | string | `plan` (header on disk) · `queue` (the `issue` field or the header line `queue.sh` stored) · `none` |
+| `milestone` | string\|null | Milestone title from `gh issue view`, capped at 120 chars and scrubbed. Only present when `lookup` is `verified` |
+| `lookup` | string | `verified` when gh answered for this repo and issue, else `skipped` |
+| `reason` | string\|null | Why it was skipped (`no plan header names an issue`, `disabled (...)`, `gh not on PATH`, `... timed out after 8.0s`, `... failed (exit 1)`, budget spent) |
+
+`pr` object:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `branch` | string\|null | The branch asked about |
+| `number` / `title` / `state` / `url` | mixed | From `gh pr list --head <branch>`: the **open** PR when one exists, else the **merged** one; closed-unmerged PRs are ignored. Title capped at 120 chars and scrubbed. All `null` when none |
+| `lookup` | string | `verified` when gh answered (a verified absence is `verified` with `number: null` and reason `no open or merged PR for this branch`), else `skipped` |
+| `reason` | string\|null | Why nothing is there |
+
+Rules the projector enforces:
+
+* the enrichment **never fails and never blocks the projection**: a missing
+  `gh`, missing auth, a per-call timeout (`FLEET_GH_TIMEOUT_S`, default 8 s), a
+  non-zero exit or a bad payload degrade to `lookup: skipped` with a reason, and
+  `live.json` is written either way;
+* one question per run: answers (and failures) are cached per projection and
+  for 300 s across projections, so the watcher does not ask the same question
+  every two seconds, and a projection spends at most 24 gh calls (the rest are
+  skipped with a budget reason). An idle desk with nothing to look up makes no
+  call at all;
+* a repo name in the stream is a directory name, so the slug asked of gh is
+  `<owner>/<repo>` with the owner from `FLEET_GH_OWNER`, else the owner of this
+  repo's `origin` remote. A lookup is only `verified` when gh answered for that
+  slug, so a wrong owner reads as skipped, never as a guess;
+* the redaction law holds: `task_line` is the first sentence only, cut at 120
+  and scrubbed, and it never carries a path outside the repo; the enrichment adds
+  only the issue number, the milestone title and the PR number plus title
+  (never an issue or PR body, never a comment);
+* honesty rules unchanged: a queued entry is still only `queued`, stale and
+  offline still degrade every element, and a replay carries no `repos[]`;
+* turn the enrichment off with `--no-gh` or `FLEET_DESK_NO_GH=1`
+  (`gh_enrichment.status: disabled`).
+
+`scripts/queue.sh` stores `issue` on every entry at `add` and `start`: the
+number the plan header names, else the number the declared purpose names, else
+`null`. `queue.sh list` prints it as `#NNNN` beside the plan.
+
 ### Phase C — replay API
 
 | Route / flag | Meaning |
@@ -800,6 +875,7 @@ make desk-live-once                # write live.json once, no server (file:// de
 python3 scripts/desk_live.py --watch          # rewrite live.json on a timer, no server
 python3 scripts/desk_live.py --once --dispatch-id 20260729-100000-dev-agents --print
 python3 scripts/desk_live.py --once --dispatch-id ID --as-of-seq 4 --replay
+python3 scripts/desk_live.py --once --no-gh    # no gh enrichment (also FLEET_DESK_NO_GH=1)
 python3 scripts/desk_live.py --list-runs
 ```
 

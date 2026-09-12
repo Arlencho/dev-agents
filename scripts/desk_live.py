@@ -23,7 +23,9 @@ Honesty rules (do not weaken):
   * live state never enters ``data/index.json`` (the settled Almanac contract)
   * a stream that stopped updating reads STALE, then OFFLINE — never "live"
   * replay projections never claim LIVE — ``view=replay`` + watermark
-  * stdlib only; no network access; binds loopback only
+  * stdlib only; binds loopback only; the one thing it ever asks the network
+    for is the optional gh enrichment (issue milestone, PR for a branch), which
+    is cached, budgeted, never fatal and off with --no-gh / FLEET_DESK_NO_GH=1
 
 Python 3.8+ (stdlib only).
 """
@@ -32,6 +34,8 @@ import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -53,6 +57,20 @@ QUIET_AFTER = 90      # running stream with no new events → waiting_on quiet_s
 RECENT_EVENTS = 50    # tail kept in the projection (already redaction-safe)
 QUEUE_SCHEMA = "fleet-queue/1"
 DAY_SCAN_WINDOW_S = 48 * 3600   # mtime prefilter when scanning the day streams
+
+
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, "") or default)
+    except ValueError:
+        return float(default)
+
+
+# Optional gh enrichment (issue milestone, PR for a branch). See GhEnricher.
+GH_TIMEOUT_S = _env_float("FLEET_GH_TIMEOUT_S", 8)   # per call; a slow gh skips
+GH_CALL_BUDGET = 24        # gh calls one projection may spend; the rest skip
+GH_CACHE_TTL_S = 300       # answers reused across builds by the watcher
+GH_TITLE_MAX = 120         # milestone and PR titles are capped like the Almanac
 
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -218,6 +236,11 @@ def empty_projection(now=None, reason="no dispatch has emitted events yet"):
         # build(); zeros here so the key always exists (a replay sets it None).
         "summary": {"running": 0, "queued": 0, "landed_today": 0,
                     "last_event_ts": None},
+        # Issue 72: one counts object per repo seen today, so the Floor can
+        # group NOW by repo. [] here so the key always exists; a replay keeps [].
+        "repos": [],
+        "gh_enrichment": {"status": "skipped", "reason": "no lookup was needed",
+                          "owner": None, "calls": 0, "cached": 0, "skipped": 0},
         "warnings": [],
         "view": "live",  # "live" | "replay" — replay never paints a green LIVE LED
         "replay": None,
@@ -248,6 +271,7 @@ def mark_replay(proj, as_of_seq, total_events):
     # historical scrub has no present, so both stay empty rather than
     # borrowing today's counts.
     proj["summary"] = None
+    proj["repos"] = []
     for seat in proj.get("seats") or []:
         seat["now"] = None
     proj["replay"] = {
@@ -368,7 +392,8 @@ def queue_purpose_index(entries):
         if base and base not in index:
             index[base] = {"plan": plan,
                            "purpose": entry.get("purpose") or None,
-                           "repo": entry.get("repo") or None}
+                           "repo": entry.get("repo") or None,
+                           "issue": entry.get("issue")}
     return index
 
 
@@ -573,6 +598,7 @@ def merge_live_seats(proj, events_dir, now, live_summaries):
             seat["dispatch_id"] = side.get("dispatch_id") or summary["dispatch_id"]
             seat["foreign"] = True     # not the followed run: honest label
             seat["plan"] = side.get("plan") or summary.get("plan")
+            seat["repo"] = side.get("repo") or summary.get("repo")
             proj["seats"].append(seat)
             merged += 1
     if merged:
@@ -689,6 +715,17 @@ def first_sentence(value, limit=TASK_MAX):
     return scrub_text(text, limit)
 
 
+# The issue a plan serves is named in its header, as "Issue NNNN" (issue 72).
+# The same pattern lives in scripts/queue.sh so the queue and the Floor agree.
+ISSUE_RE = re.compile(r"\bIssue\s+#?(\d{1,7})\b", re.IGNORECASE)
+
+
+def parse_issue(text):
+    """Issue number a header line names (pattern ``Issue NNNN``), else None."""
+    match = ISSUE_RE.search(str(text or ""))
+    return int(match.group(1)) if match else None
+
+
 # A plan header carries machine directives as well as prose. The purpose the
 # Floor prints is what a person would read out loud, so a directive line is
 # skipped and the first prose comment wins. Same rule as scripts/queue.sh
@@ -746,20 +783,23 @@ def parse_plan(path):
         return None
 
     purpose = ""
+    issue = None
     lines = []
     for line in raw:
         stripped = line.strip()
         if not stripped:
             continue
         if stripped.startswith("#"):
-            if not purpose:
-                body = stripped.lstrip("#").strip()
-                if body and not is_machine_header(body):
-                    purpose = scrub_text(body)
+            body = stripped.lstrip("#").strip()
+            if issue is None:
+                issue = parse_issue(body)
+            if not purpose and body and not is_machine_header(body):
+                purpose = scrub_text(body)
             continue
         lines.append(stripped)
     if not lines:
-        return {"plan": rel_safe(path), "purpose": purpose, "waves": 0, "seats": []}
+        return {"plan": rel_safe(path), "purpose": purpose, "issue": issue,
+                "waves": 0, "seats": []}
 
     # Format detection: a leading integer field means the plan is wave-aware.
     first_field = lines[0].split("|")[0].strip()
@@ -793,8 +833,16 @@ def parse_plan(path):
             "branch": branch,
             "task": first_sentence(desc),
         })
-    return {"plan": rel_safe(path), "purpose": purpose,
+    return {"plan": rel_safe(path), "purpose": purpose, "issue": issue,
             "waves": len(waves) or 1, "seats": seats}
+
+
+def cached_plan(cache, name, queue_entries):
+    """Parsed plan for a stream's plan basename, parsed once per projection."""
+    base = os.path.basename(str(name or ""))
+    if base not in cache:
+        cache[base] = parse_plan(resolve_plan_path(base, queue_entries))
+    return cache[base]
 
 
 def attach_plan_context(proj, queue_entries, plan_cache=None):
@@ -807,10 +855,7 @@ def attach_plan_context(proj, queue_entries, plan_cache=None):
     cache = {} if plan_cache is None else plan_cache
 
     def plan_for(name):
-        base = os.path.basename(str(name or ""))
-        if base not in cache:
-            cache[base] = parse_plan(resolve_plan_path(base, queue_entries))
-        return cache[base]
+        return cached_plan(cache, name, queue_entries)
 
     # The followed run's plan explains its own seats; a merged foreign seat is
     # explained by the plan of ITS dispatch, looked up the same way.
@@ -833,6 +878,300 @@ def attach_plan_context(proj, queue_entries, plan_cache=None):
         seat["wave_total"] = plan["waves"]
         if match:
             seat["task"] = match["task"] or None
+            # Issue 72 names it task_line: the first sentence of the seat's
+            # plan line, cut at TASK_MAX and scrubbed (first_sentence above).
+            seat["task_line"] = seat["task"]
+    return proj
+
+
+# ── gh enrichment (issue milestone, PR for a branch): optional, never fatal ──
+#
+# The only thing the projector ever asks the network for, and only through the
+# gh CLI, under the Almanac's rules (docs/experience-data.md § gh enrichment):
+# a missing binary, missing auth, a timeout, a non-zero exit or a bad payload
+# all degrade to a lookup marked ``skipped`` with a reason. Nothing here raises
+# and nothing waits past the per-call timeout, so the projection is written
+# with or without answers. Titles only: no issue or PR bodies, no comments.
+# Answers (and failures) are cached per projection and for GH_CACHE_TTL_S
+# across projections, so the watcher does not ask the same question every two
+# seconds, and one projection spends at most GH_CALL_BUDGET calls.
+#
+# A repo name in the stream is a directory name, not a slug. The slug is
+# <owner>/<repo> with the owner from FLEET_GH_OWNER, else the owner of this
+# repo's origin remote. A lookup is only ``verified`` when gh answered for
+# that slug, so a wrong owner reads as skipped, never as a guess.
+
+_GH_CACHE = {}   # (kind, slug, key) -> (expires_at, answer, reason)
+_REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9/_.+-]{0,200}$")
+
+
+def run_gh(args, timeout=None):
+    """Run gh, never raise. (rc, stdout, stderr); 127 missing, 124 timed out."""
+    timeout = GH_TIMEOUT_S if timeout is None else timeout
+    try:
+        proc = subprocess.run(["gh"] + list(args), capture_output=True, text=True,
+                              timeout=timeout, cwd=REPO_DIR)
+        return proc.returncode, proc.stdout, proc.stderr
+    except FileNotFoundError:
+        return 127, "", "gh not found"
+    except subprocess.TimeoutExpired:
+        return 124, "", "timed out after %ss" % timeout
+    except OSError as exc:
+        return 1, "", str(exc)
+
+
+def github_owner():
+    """FLEET_GH_OWNER, else the owner of this repo's origin remote, else None."""
+    owner = os.environ.get("FLEET_GH_OWNER", "").strip()
+    if owner:
+        return owner if _REPO_NAME_RE.match(owner) else None
+    try:
+        proc = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True,
+                              text=True, timeout=5, cwd=REPO_DIR)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    match = re.search(r"github\.com[:/]([A-Za-z0-9_.-]+)/", proc.stdout or "")
+    return match.group(1) if match else None
+
+
+def _gh_fail(what, rc):
+    if rc == 124:
+        return "%s timed out after %ss" % (what, GH_TIMEOUT_S)
+    if rc == 127:
+        return "%s: gh not found" % what
+    return "%s failed (exit %d)" % (what, rc)
+
+
+class GhEnricher:
+    """Per-projection gh lookups behind a call budget and a shared TTL cache."""
+
+    def __init__(self, enabled=True, budget=GH_CALL_BUDGET):
+        self.enabled = enabled
+        self.budget = budget
+        self.calls = 0
+        self.cached = 0
+        self.skipped = 0
+        self.status = None      # resolved on first use, never before
+        self.reason = None
+        self.owner = None
+
+    def _call(self, key, fetch):
+        """(answer, reason). answer None means skipped, and reason says why."""
+        now = time.time()
+        hit = _GH_CACHE.get(key)
+        if hit and hit[0] > now:
+            self.cached += 1
+            return hit[1], hit[2]
+        if self.calls >= self.budget:
+            self.skipped += 1
+            return None, "gh call budget (%d) spent for this projection" % self.budget
+        self.calls += 1
+        answer, reason = fetch()
+        _GH_CACHE[key] = (now + GH_CACHE_TTL_S, answer, reason)
+        return answer, reason
+
+    def probe(self):
+        """True when gh can answer. Decided once per projection, cached across."""
+        if self.status is not None:
+            return self.status == "ok"
+        if not self.enabled:
+            self.status, self.reason = "disabled", "disabled (--no-gh or FLEET_DESK_NO_GH=1)"
+        elif shutil.which("gh") is None:
+            self.status, self.reason = "unavailable", "gh not on PATH"
+        else:
+            def auth():
+                rc, _out, _err = run_gh(["auth", "status"])
+                return (True, None) if rc == 0 else (None, _gh_fail("gh auth status", rc))
+            ok, reason = self._call(("auth",), auth)
+            if not ok:
+                self.status, self.reason = "unauthenticated", reason
+            else:
+                self.owner = github_owner()
+                if self.owner:
+                    self.status, self.reason = "ok", None
+                else:
+                    self.status, self.reason = "error", "no GitHub owner (set FLEET_GH_OWNER)"
+        return self.status == "ok"
+
+    def slug(self, repo):
+        if not self.probe():
+            return None, self.reason
+        name = str(repo or "").strip()
+        if not name or not _REPO_NAME_RE.match(name):
+            return None, "no repo name to look up"
+        return "%s/%s" % (self.owner, name), None
+
+    def issue(self, repo, number):
+        """Milestone title of one issue. Adds nothing but the milestone."""
+        out = {"number": number if isinstance(number, int) else None,
+               "milestone": None, "lookup": "skipped", "reason": None}
+        if out["number"] is None:
+            out["reason"] = "no plan header names an issue"
+            return out
+        slug, reason = self.slug(repo)
+        if not slug:
+            out["reason"] = reason
+            return out
+
+        def fetch():
+            rc, text, _err = run_gh(["issue", "view", str(number), "-R", slug,
+                                     "--json", "number,milestone"])
+            if rc != 0:
+                return None, _gh_fail("gh issue view %s/%d" % (slug, number), rc)
+            try:
+                data = json.loads(text or "")
+            except ValueError:
+                return None, "gh issue view returned no JSON"
+            if not isinstance(data, dict) or data.get("number") != number:
+                return None, "gh issue view returned an unexpected payload"
+            milestone = data.get("milestone")
+            title = milestone.get("title") if isinstance(milestone, dict) else None
+            return {"milestone": scrub_text(title, GH_TITLE_MAX) if title else None}, None
+
+        answer, reason = self._call(("issue", slug, number), fetch)
+        if answer is None:
+            out["reason"] = reason
+            return out
+        out["milestone"] = answer["milestone"]
+        out["lookup"] = "verified"
+        return out
+
+    def pr(self, repo, branch):
+        """The open, else merged, PR for a branch: number, title, state, url."""
+        out = {"branch": branch or None, "number": None, "title": None,
+               "state": None, "url": None, "lookup": "skipped", "reason": None}
+        if not branch:
+            out["reason"] = "no branch"
+            return out
+        if not isinstance(branch, str) or not _BRANCH_RE.match(branch):
+            out["reason"] = "branch is not a plain slug"
+            return out
+        slug, reason = self.slug(repo)
+        if not slug:
+            out["reason"] = reason
+            return out
+
+        def fetch():
+            rc, text, _err = run_gh(["pr", "list", "-R", slug, "--head", branch,
+                                     "--state", "all", "--limit", "10",
+                                     "--json", "number,title,state,url"])
+            if rc != 0:
+                return None, _gh_fail("gh pr list %s %s" % (slug, branch), rc)
+            try:
+                rows = json.loads(text or "")
+            except ValueError:
+                return None, "gh pr list returned no JSON"
+            if not isinstance(rows, list):
+                return None, "gh pr list returned an unexpected payload"
+            pick = None
+            for want in ("OPEN", "MERGED"):
+                pick = next((r for r in rows if isinstance(r, dict)
+                             and r.get("state") == want), None)
+                if pick:
+                    break
+            if not pick:
+                return {}, None
+            return {"number": pick.get("number") if isinstance(pick.get("number"), int) else None,
+                    "title": scrub_text(pick.get("title"), GH_TITLE_MAX) or None,
+                    "state": str(pick.get("state") or "").lower() or None,
+                    "url": scrub_text(pick.get("url"), 200) or None}, None
+
+        answer, reason = self._call(("pr", slug, branch), fetch)
+        if answer is None:
+            out["reason"] = reason
+            return out
+        out.update(answer)
+        out["lookup"] = "verified"
+        if not answer:
+            out["reason"] = "no open or merged PR for this branch"
+        return out
+
+    def meta(self):
+        """What the enrichment did for this projection, for the page and tests."""
+        status = self.status or "skipped"
+        reason = self.reason if self.status else "no lookup was needed"
+        return {"status": status, "reason": reason, "owner": self.owner,
+                "calls": self.calls, "cached": self.cached, "skipped": self.skipped}
+
+
+# ── repo, issue, task line and PR on every seat, queue entry and landing ─────
+#
+# Issue 72: with two repos live at once the Floor must say which repo a seat
+# belongs to and which requirement it serves. Repo is a first-class field
+# everywhere; the issue is the number the plan header names; the milestone
+# and the PR come from gh under the rules above. Every lookup object carries
+# ``lookup`` (verified or skipped) and a reason, so the page never has to
+# guess why a field is empty.
+
+def issue_context(repo, plan, known, gh):
+    """Issue object for one seat or queue entry: number, source, milestone."""
+    number, source = None, "none"
+    if plan and isinstance(plan.get("issue"), int):
+        number, source = plan["issue"], "plan"
+    elif known:
+        candidate = known.get("issue")
+        if not isinstance(candidate, int):
+            candidate = parse_issue(known.get("purpose"))
+        if candidate is not None:
+            number, source = candidate, "queue"
+    out = gh.issue(repo, number)
+    out["source"] = source
+    return out
+
+
+def repo_summaries(proj, live_summaries):
+    """One counts object per repo seen today: seats and dispatches live first."""
+    repos = {}
+
+    def bucket(name):
+        key = str(name) if name else "unknown"
+        if key not in repos:
+            repos[key] = {"repo": key, "seats_live": 0, "dispatches_live": 0,
+                          "queued": 0, "landed_today": 0, "dispatch_ids": []}
+        return repos[key]
+
+    for summary in live_summaries or []:
+        entry = bucket(summary.get("repo"))
+        entry["dispatches_live"] += 1
+        entry["dispatch_ids"].append(summary.get("dispatch_id"))
+    seen = {d for r in repos.values() for d in r["dispatch_ids"]}
+    if proj.get("status") == "running" and proj.get("dispatch_id") not in seen:
+        entry = bucket(proj.get("repo"))
+        entry["dispatches_live"] += 1
+        entry["dispatch_ids"].append(proj.get("dispatch_id"))
+    for seat in proj.get("seats") or []:
+        if seat.get("status") == "running":
+            bucket(seat.get("repo"))["seats_live"] += 1
+    for entry in proj.get("queue") or []:
+        bucket(entry.get("repo"))["queued"] += 1
+    for row in proj.get("today") or []:
+        bucket(row.get("repo"))["landed_today"] += 1
+    return sorted(repos.values(),
+                  key=lambda r: (-r["seats_live"], -r["dispatches_live"], r["repo"]))
+
+
+def attach_context(proj, queue_entries, live_summaries, plan_cache, gh):
+    """Repo, issue, task_line and PR on seats, queue entries and landings."""
+    index = queue_purpose_index(queue_entries)
+    for seat in proj.get("seats") or []:
+        seat["repo"] = seat.get("repo") or proj.get("repo")
+        plan_name = seat.get("plan") or proj.get("plan")
+        plan = cached_plan(plan_cache, plan_name, queue_entries)
+        known = index.get(os.path.basename(str(plan_name or "")))
+        seat["issue"] = issue_context(seat["repo"], plan, known, gh)
+        seat["task_line"] = seat.get("task") or None
+        seat["pr"] = gh.pr(seat["repo"], seat.get("branch"))
+    for entry in proj.get("queue") or []:
+        plan = cached_plan(plan_cache, entry.get("plan"), queue_entries)
+        known = index.get(entry.get("plan_basename"))
+        entry["issue"] = issue_context(entry.get("repo"), plan, known, gh)
+    for row in proj.get("today") or []:
+        row["prs"] = [gh.pr(row.get("repo"), b) for b in row.get("branches") or []]
+        found = next((p for p in row["prs"] if p.get("number") is not None), None)
+        row["pr"] = found or (row["prs"][0] if row["prs"] else gh.pr(row.get("repo"), None))
+    proj["repos"] = repo_summaries(proj, live_summaries)
+    proj["gh_enrichment"] = gh.meta()
     return proj
 
 
@@ -997,6 +1336,12 @@ def _seat(state, task_id):
             "plan_purpose": None,
             "task": None,
             "wave_total": None,
+            # Issue 72: repo first-class, the issue the plan names, the seat's
+            # one-line task, the PR for its branch. Filled by attach_context.
+            "repo": None,
+            "issue": None,
+            "task_line": None,
+            "pr": None,
         }
         state[task_id] = seat
     return seat
@@ -1149,6 +1494,7 @@ def project(events, now=None, source=None, malformed=0):
     # ── seats + pipeline counts ──
     seat_list = [seats[t] for t in order]
     for seat in seat_list:
+        seat["repo"] = out["repo"]
         seat["pipeline"] = PIPELINE.get(seat["status"], "queued")
         if seat["status"] == "running" and out["status"] != "running":
             # Dispatcher is gone but the seat never reported — say unknown, not
@@ -1260,7 +1606,7 @@ def project(events, now=None, source=None, malformed=0):
     return out
 
 
-def attach_queue_and_day(proj, events_dir, queue_file, now):
+def attach_queue_and_day(proj, events_dir, queue_file, now, gh=None):
     """Fold declared intent (queue) and the local day into a projection.
 
     Both are independent of which stream is followed: an idle desk with armed
@@ -1277,14 +1623,21 @@ def attach_queue_and_day(proj, events_dir, queue_file, now):
     for warning in warnings:
         proj.setdefault("warnings", []).append(warning)
     merge_live_seats(proj, events_dir, now, live)
-    attach_plan_context(proj, entries)
+    plan_cache = {}
+    attach_plan_context(proj, entries, plan_cache)
+    attach_context(proj, entries, live, plan_cache, gh or GhEnricher(enabled=False))
     # Last: the sentence needs the queue, the plan context and every live seat.
     attach_now(proj, entries)
     return proj
 
 
+def gh_enabled_default():
+    """gh enrichment is on unless FLEET_DESK_NO_GH=1 (same switch as the Almanac)."""
+    return os.environ.get("FLEET_DESK_NO_GH") != "1"
+
+
 def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False,
-          queue_file=None):
+          queue_file=None, gh_enabled=None):
     """Resolve the current stream and project it (never raises on missing data).
 
     Phase C: pass ``as_of_seq`` and/or ``replay=True`` to get a historical
@@ -1293,11 +1646,12 @@ def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False,
     """
     now = now or utcnow()
     queue_file = DEFAULT_QUEUE_FILE if queue_file is None else queue_file
+    gh = GhEnricher(enabled=gh_enabled_default() if gh_enabled is None else gh_enabled)
     path, resolved_id = resolve_stream(events_dir, dispatch_id)
     if not path:
         proj = empty_projection(
             now, reason="no event stream in %s — run a dispatch (FLEET_EVENTS=1)" % rel(events_dir))
-        return attach_queue_and_day(proj, events_dir, queue_file, now)
+        return attach_queue_and_day(proj, events_dir, queue_file, now, gh)
     events, malformed = read_events(path)
     total = len(events)
     if as_of_seq is not None:
@@ -1312,7 +1666,7 @@ def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False,
         cut = as_of_seq if as_of_seq is not None else total
         mark_replay(proj, cut, total)
         return proj
-    return attach_queue_and_day(proj, events_dir, queue_file, now)
+    return attach_queue_and_day(proj, events_dir, queue_file, now, gh)
 
 
 def write_projection(proj, out_path):
@@ -1337,7 +1691,8 @@ def serve(args, out_path):
     stop = threading.Event()
 
     def refresh():
-        proj = build(args.events_dir, args.dispatch_id, queue_file=args.queue_file)
+        proj = build(args.events_dir, args.dispatch_id, queue_file=args.queue_file,
+                     gh_enabled=False if args.no_gh else None)
         payload = json.dumps(proj)
         if payload != state["json"]:
             state["json"] = payload
@@ -1501,6 +1856,9 @@ def main(argv=None):
     parser.add_argument("--verbose", action="store_true", help="log every HTTP request")
     parser.add_argument("--open", dest="open_browser", action="store_true",
                         help="open the Ops Floor URL in the default browser (follow live)")
+    parser.add_argument("--no-gh", action="store_true",
+                        help="skip the optional gh enrichment (issue milestone, PR per branch); "
+                             "also FLEET_DESK_NO_GH=1. gh failures never fail the projection.")
     args = parser.parse_args(argv)
 
     out_path = args.out or os.path.join(args.site_dir, "data", "live.json")
@@ -1512,14 +1870,19 @@ def main(argv=None):
     if args.once or args.watch:
         proj = build(args.events_dir, args.dispatch_id,
                      as_of_seq=args.as_of_seq, replay=args.replay,
-                     queue_file=args.queue_file)
+                     queue_file=args.queue_file,
+                     gh_enabled=False if args.no_gh else None)
         write_projection(proj, out_path)
         if args.print_json:
             print(json.dumps(proj, indent=2))
         if args.once:
-            print("live.json written: %s (status=%s, seats=%d, view=%s, staleness=%s)"
+            gh_meta = proj.get("gh_enrichment") or {}
+            print("live.json written: %s (status=%s, seats=%d, repos=%d, view=%s, "
+                  "staleness=%s, gh=%s calls=%s)"
                   % (out_path, proj["status"], len(proj["seats"]),
-                     proj.get("view"), proj["staleness"]["state"]),
+                     len(proj.get("repos") or []), proj.get("view"),
+                     proj["staleness"]["state"], gh_meta.get("status"),
+                     gh_meta.get("calls")),
                   file=sys.stderr)
             return 0
         print("desk-live: watching %s → %s (Ctrl-C to stop)" % (args.events_dir, out_path))
@@ -1529,7 +1892,8 @@ def main(argv=None):
                 write_projection(
                     build(args.events_dir, args.dispatch_id,
                           as_of_seq=args.as_of_seq, replay=args.replay,
-                          queue_file=args.queue_file),
+                          queue_file=args.queue_file,
+                          gh_enabled=False if args.no_gh else None),
                     out_path)
         except KeyboardInterrupt:
             print("\ndesk-live: stopped")

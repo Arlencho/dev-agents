@@ -11,6 +11,9 @@
 #   Part I: the plain sentence (issue 69): program-name reduction in the
 #           reader (credential shapes redacted), seats[].now per live seat,
 #           the top-line summary, today[].outcome
+#   Part J: repo, issue, task line and PR on every seat (issue 72): the
+#           parses, two repos live at once, the gh skip, verified, failing
+#           and hanging paths (fake gh on PATH, no network)
 #
 # Offline by design: nothing here binds a socket or touches the network.
 #
@@ -1373,6 +1376,268 @@ grep -q 'landed_today' "$REPO_DIR/docs/experience-data.md" \
 grep -q 'seats\[\].now' "$REPO_DIR/docs/experience-data.md" \
   && ok "the per-seat sentence is documented in the live schema" \
   || bad "the per-seat sentence is documented in the live schema"
+echo ""
+echo "== Part J: repo, issue, task line and PR on every seat (issue 72) =="
+
+# ── the parses, straight on the projector's own functions ──────────────────
+# assert_fn <name> <python expression over mod (desk_live)>
+assert_fn() {
+  local name="$1" expr="$2"
+  if python3 - "$DESK_LIVE" "$expr" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("desk_live", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+sys.exit(0 if eval(sys.argv[2], {"mod": mod}) else 1)
+PY
+  then ok "$name"; else bad "$name"; fi
+}
+
+assert_fn "parse_issue reads Issue NNNN from a header line" \
+  'mod.parse_issue("Make the Floor readable without a legend. Issue 72.") == 72'
+assert_fn "parse_issue accepts a hash and any case" \
+  'mod.parse_issue("issue #2799: the consent screen") == 2799'
+assert_fn "parse_issue ignores bare numbers and words that only contain issue" \
+  'mod.parse_issue("Fix 404 pages, reissue 55 tokens, PR 70") is None'
+assert_fn "parse_issue is None for nothing" \
+  'mod.parse_issue(None) is None and mod.parse_issue("") is None'
+assert_fn "the task line is the first sentence only" \
+  'mod.first_sentence("Project the sentence. Then the body, with /Users/someone/secret.") == "Project the sentence."'
+assert_fn "the task line is cut at 120 characters" \
+  'len(mod.first_sentence("word " * 80)) <= 120'
+assert_fn "the task line passes the same secret scrub as the program token" \
+  '"ghp_" not in mod.first_sentence("Push with ghp_abcdefghijklmnopqrstuvwxyz0123456789 now. Then more.") '\
+'and "[redacted]" in mod.first_sentence("Push with ghp_abcdefghijklmnopqrstuvwxyz0123456789 now. Then more.")'
+
+# ── two repos live at once, over real-shaped streams ──────────────────────
+J_PLANS="$TMP/plans-72"
+mkdir -p "$J_PLANS"
+cat > "$J_PLANS/floor-context.plan" <<'PLAN'
+# DISPATCH: ./scripts/dispatch.sh git@example.invalid:x/y.git plan --auto
+# Floor: repo-first seats with issue, milestone, task line and PR. Issue 72.
+1 | devops | Project repo, issue and PR onto every seat. Never publish this second sentence, nor /Users/someone/secret. | feat/floor-context
+PLAN
+cat > "$J_PLANS/iris-scaffold.plan" <<'PLAN'
+# Assistant Channel W2-A: the Iris service, scaffold and edge. Issue 2800.
+1 | go-backend | Scaffold the Iris service, pushing with ghp_abcdefghijklmnopqrstuvwxyz0123456789 when asked. Second sentence. | feat/iris-scaffold
+1 | go-backend | Wire the edge. | feat/iris-edge
+PLAN
+
+J_Q="$TMP/queue-72.json"
+python3 - "$J_Q" "$J_PLANS" <<'JQ'
+import json, sys
+out, plans = sys.argv[1], sys.argv[2]
+def entry(plan, repo, status, purpose, issue=None, dispatch_id=None):
+    return {"plan": plan, "repo": repo, "purpose": purpose, "issue": issue,
+            "added_at": "2026-09-12T00:00:00Z", "status": status,
+            "dispatch_id": dispatch_id, "settled_at": None, "settled_status": None}
+json.dump({"schema": "fleet-queue/1", "updated_at": "2026-09-12T00:00:00Z", "entries": [
+    entry(plans + "/floor-context.plan", "dev-agents", "running", "", None, "j-a"),
+    entry(plans + "/iris-scaffold.plan", "olympus-platform", "running", "", None, "j-b"),
+    # a queued plan that is not on this machine: the header line queue.sh stored is all there is
+    entry("w1c-tile.plan", "olympus-platform", "queued",
+          "Assistant Channel W1-C: the consent screen. Issue 2799."),
+    # a queued plan whose header names no issue at all
+    entry("no-issue.plan", "olympus-platform", "queued", "A plan without a requirement."),
+]}, open(out, "w"), indent=2)
+JQ
+
+J_DIR="$TMP/events-72"
+mkdir -p "$J_DIR"
+python3 - "$J_DIR" <<'JFIX'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+out = sys.argv[1]
+now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+def ts(d):
+    return (now - timedelta(seconds=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+def write(name, rows):
+    with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+        for i, row in enumerate(rows, 1):
+            row.update({"schema": "fleet-events/1", "seq": i, "dispatch_id": name[:-6]})
+            fh.write(json.dumps(row) + "\n")
+# the followed run: dev-agents, one seat live
+write("j-a.jsonl", [
+    {"ts": ts(600), "event": "dispatch_start", "mode": "wave", "repo": "dev-agents",
+     "plan": "floor-context.plan"},
+    {"ts": ts(590), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/floor-context", "wave": 1, "provider": "local", "attempt": 1},
+    {"ts": ts(10), "event": "seat_heartbeat", "task_id": "0", "agent": "devops",
+     "branch": "feat/floor-context", "wave": 1, "elapsed_s": 580},
+])
+# a second repo live at the same time, two seats
+write("j-b.jsonl", [
+    {"ts": ts(300), "event": "dispatch_start", "mode": "wave", "repo": "olympus-platform",
+     "plan": "iris-scaffold.plan"},
+    # task ids 5 and 6: the test helper S is keyed by task_id, so the two
+    # dispatches must not collide on "0"
+    {"ts": ts(290), "event": "seat_dispatch", "task_id": "5", "agent": "go-backend",
+     "branch": "feat/iris-scaffold", "wave": 1, "provider": "local", "attempt": 1},
+    {"ts": ts(280), "event": "seat_dispatch", "task_id": "6", "agent": "go-backend",
+     "branch": "feat/iris-edge", "wave": 1, "provider": "local", "attempt": 1},
+])
+# a dev-agents run that landed today on the same branch
+write("j-landed.jsonl", [
+    {"ts": ts(2000), "event": "dispatch_start", "mode": "wave", "repo": "dev-agents",
+     "plan": "floor-context.plan"},
+    {"ts": ts(1990), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/floor-context", "wave": 1, "provider": "local"},
+    {"ts": ts(1500), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/floor-context", "wave": 1, "status": "success", "exit": 0, "duration_s": 490},
+    {"ts": ts(1490), "event": "dispatch_end", "status": "completed",
+     "total": 1, "succeeded": 1, "failed": 0, "duration_s": 510},
+])
+JFIX
+printf 'j-a.jsonl\n' > "$J_DIR/latest"
+
+# The skip path: gh disabled. Every field still exists and says it was skipped.
+J_OFF="$TMP/out/live-72-off.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --events-dir "$J_DIR" --queue-file "$J_Q" --out "$J_OFF" >/dev/null 2>&1 \
+  && ok "--once exits 0 with gh disabled" || bad "--once exits 0 with gh disabled"
+assert_py "every seat carries repo, issue, task_line and pr" "$J_OFF" \
+  'all(all(k in s for k in ("repo","issue","task_line","pr")) for s in d["seats"]) and len(d["seats"])==3'
+assert_py "the followed seat carries its repo, the foreign seats carry theirs" "$J_OFF" \
+  '[s["repo"] for s in d["seats"]]==["dev-agents","olympus-platform","olympus-platform"]'
+assert_py "the projector follows every live dispatch of the day" "$J_OFF" \
+  'sorted(d["today_meta"]["live"])==["j-a","j-b"] and d["multi_dispatch"]["merged_seats"]==2'
+assert_py "the issue number comes from the plan header line that names it" "$J_OFF" \
+  'S["0"]["issue"]["number"]==72 and S["0"]["issue"]["source"]=="plan"'
+assert_py "a skipped lookup says so, with the reason, and no milestone" "$J_OFF" \
+  'S["0"]["issue"]["lookup"]=="skipped" and "disabled" in S["0"]["issue"]["reason"] '\
+'and S["0"]["issue"]["milestone"] is None and S["0"]["pr"]["lookup"]=="skipped"'
+assert_py "task_line is the first sentence of the seat line, nothing more" "$J_OFF" \
+  'S["0"]["task_line"]=="Project repo, issue and PR onto every seat."'
+assert_py "task_line never carries a secret shape" "$J_OFF" \
+  '[s for s in d["seats"] if s["branch"]=="feat/iris-scaffold"][0]["task_line"].count("[redacted]")==1 '\
+'and not any("ghp_" in json.dumps(s) for s in d["seats"])'
+assert_py "task_line is cut at 120 characters" "$J_OFF" \
+  'all(len(s["task_line"] or "")<=120 for s in d["seats"])'
+assert_py "a queue entry names its issue from the stored header line when the plan is gone" "$J_OFF" \
+  '{q["plan_basename"]: q["issue"]["number"] for q in d["queue"]}=={"w1c-tile.plan":2799,"no-issue.plan":None} '\
+'and d["queue"][0]["issue"]["source"]=="queue"'
+assert_py "a plan that names no issue says so rather than guessing" "$J_OFF" \
+  'd["queue"][1]["issue"]["source"]=="none" and "names an issue" in d["queue"][1]["issue"]["reason"]'
+assert_py "a landing carries repo first and a pr object per branch" "$J_OFF" \
+  'd["today"][0]["repo"]=="dev-agents" and d["today"][0]["pr"]["branch"]=="feat/floor-context" '\
+'and len(d["today"][0]["prs"])==1'
+assert_py "repos[] carries seats live and dispatches live per repo" "$J_OFF" \
+  '{r["repo"]: (r["seats_live"], r["dispatches_live"], r["queued"], r["landed_today"]) for r in d["repos"]}'\
+'=={"olympus-platform": (2,1,2,0), "dev-agents": (1,1,0,1)}'
+assert_py "repos[] adds up to the global summary from #70" "$J_OFF" \
+  'sum(r["seats_live"] for r in d["repos"])==d["summary"]["running"]==3 '\
+'and sum(r["queued"] for r in d["repos"])==d["summary"]["queued"] '\
+'and sum(r["landed_today"] for r in d["repos"])==d["summary"]["landed_today"]'
+assert_py "gh_enrichment reports disabled and no call was made" "$J_OFF" \
+  'd["gh_enrichment"]["status"]=="disabled" and d["gh_enrichment"]["calls"]==0'
+if grep -q '/Users/' "$J_OFF"; then
+  bad "no operator path reaches the projection through the task line"
+else
+  ok "no operator path reaches the projection through the task line"
+fi
+
+# The verified path: a fake gh on PATH answers, so no network is touched.
+J_BIN="$TMP/bin-72"
+mkdir -p "$J_BIN"
+J_LOG="$TMP/gh-72.log"
+cat > "$J_BIN/gh" <<'SHIM'
+#!/usr/bin/env bash
+# Fake gh for the desk tests: records every call, answers from canned data.
+echo "$*" >> "${GH_SHIM_LOG:?}"
+[ "${GH_SHIM_MODE:-ok}" = "slow" ] && sleep 3
+case "$1 $2" in
+  "auth status") exit 0 ;;
+  "issue view")
+    [ "${GH_SHIM_MODE:-ok}" = "ok" ] || exit 1
+    printf '{"number":%s,"milestone":{"title":"Milestone from shim %s"}}\n' "$3" "$3" ;;
+  "pr list")
+    [ "${GH_SHIM_MODE:-ok}" = "ok" ] || exit 1
+    branch=""; prev=""
+    for a in "$@"; do [ "$prev" = "--head" ] && branch="$a"; prev="$a"; done
+    if [ "$branch" = "feat/floor-context" ]; then
+      printf '[{"number":73,"title":"Floor context data half","state":"OPEN","url":"https://example.invalid/pr/73"}]\n'
+    else
+      printf '[]\n'
+    fi ;;
+  *) exit 1 ;;
+esac
+SHIM
+chmod +x "$J_BIN/gh"
+
+J_ON="$TMP/out/live-72-on.json"
+: > "$J_LOG"
+PATH="$J_BIN:$PATH" GH_SHIM_LOG="$J_LOG" FLEET_GH_OWNER=testowner \
+  python3 "$DESK_LIVE" --once --events-dir "$J_DIR" --queue-file "$J_Q" --out "$J_ON" >/dev/null 2>&1 \
+  && ok "--once exits 0 with gh answering" || bad "--once exits 0 with gh answering"
+assert_py "a verified issue carries the milestone title from gh" "$J_ON" \
+  'S["0"]["issue"]["lookup"]=="verified" and S["0"]["issue"]["milestone"]=="Milestone from shim 72"'
+assert_py "a verified PR carries number, title and state for the seat branch" "$J_ON" \
+  'S["0"]["pr"]["number"]==73 and S["0"]["pr"]["title"]=="Floor context data half" '\
+'and S["0"]["pr"]["state"]=="open" and S["0"]["pr"]["lookup"]=="verified"'
+assert_py "a verified absence reads as no PR, not as a guess" "$J_ON" \
+  '[s for s in d["seats"] if s["branch"]=="feat/iris-edge"][0]["pr"]["lookup"]=="verified" '\
+'and [s for s in d["seats"] if s["branch"]=="feat/iris-edge"][0]["pr"]["number"] is None'
+assert_py "the landing carries the PR of its branch" "$J_ON" \
+  'd["today"][0]["pr"]["number"]==73'
+assert_py "the queue entry off a stored header line is verified through gh too" "$J_ON" \
+  'd["queue"][0]["issue"]["number"]==2799 and d["queue"][0]["issue"]["milestone"]=="Milestone from shim 2799"'
+assert_py "gh_enrichment reports ok with the owner used" "$J_ON" \
+  'd["gh_enrichment"]["status"]=="ok" and d["gh_enrichment"]["owner"]=="testowner"'
+grep -q -- '-R testowner/olympus-platform' "$J_LOG" && grep -q -- '-R testowner/dev-agents' "$J_LOG" \
+  && ok "each lookup goes to the slug of its own repo" \
+  || bad "each lookup goes to the slug of its own repo"
+[ "$(grep -c 'issue view 2800' "$J_LOG")" = "1" ] \
+  && ok "one question per run: the same issue is fetched once" \
+  || bad "one question per run: the same issue is fetched once"
+[ "$(grep -c 'auth status' "$J_LOG")" = "1" ] \
+  && ok "gh auth is probed once per run" || bad "gh auth is probed once per run"
+
+# gh that fails: never fatal, every lookup says skipped and why.
+J_FAIL="$TMP/out/live-72-fail.json"
+: > "$J_LOG"
+PATH="$J_BIN:$PATH" GH_SHIM_LOG="$J_LOG" GH_SHIM_MODE=fail FLEET_GH_OWNER=testowner \
+  python3 "$DESK_LIVE" --once --events-dir "$J_DIR" --queue-file "$J_Q" --out "$J_FAIL" >/dev/null 2>&1 \
+  && ok "--once exits 0 when gh fails" || bad "--once exits 0 when gh fails"
+assert_py "a failed lookup is skipped with the failure as reason, number kept" "$J_FAIL" \
+  'S["0"]["issue"]["lookup"]=="skipped" and "failed" in S["0"]["issue"]["reason"] '\
+'and S["0"]["issue"]["number"]==72 and S["0"]["pr"]["lookup"]=="skipped"'
+
+# gh that hangs: the per-call timeout bounds it, the projection still lands.
+J_SLOW="$TMP/out/live-72-slow.json"
+: > "$J_LOG"
+PATH="$J_BIN:$PATH" GH_SHIM_LOG="$J_LOG" GH_SHIM_MODE=slow FLEET_GH_OWNER=testowner FLEET_GH_TIMEOUT_S=0.5 \
+  python3 "$DESK_LIVE" --once --events-dir "$J_DIR" --queue-file "$J_Q" --out "$J_SLOW" >/dev/null 2>&1 \
+  && ok "--once exits 0 when gh hangs" || bad "--once exits 0 when gh hangs"
+assert_py "a hung gh reads as unauthenticated with a timeout reason, never blocking" "$J_SLOW" \
+  'd["gh_enrichment"]["status"]=="unauthenticated" and "timed out" in d["gh_enrichment"]["reason"] '\
+'and S["0"]["issue"]["lookup"]=="skipped" and "timed out" in S["0"]["issue"]["reason"] and d["summary"]["running"]==3'
+
+# A replay has no repos block: the past has no present.
+J_REPLAY="$TMP/out/live-72-replay.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --events-dir "$J_DIR" --queue-file "$J_Q" \
+  --dispatch-id j-a --replay --out "$J_REPLAY" >/dev/null 2>&1
+assert_py "a replay carries no repos block and still names the repo on its seats" "$J_REPLAY" \
+  'd["view"]=="replay" and d["repos"]==[] and S["0"]["repo"]=="dev-agents"'
+
+# ── queue.sh stores the issue it parsed, so a gone plan still names it ─────
+JQ_FILE="$TMP/queue-72-store.json"
+FLEET_QUEUE_FILE="$JQ_FILE" "$QUEUE" add "$J_PLANS/floor-context.plan" dev-agents >/dev/null 2>&1
+FLEET_QUEUE_FILE="$JQ_FILE" "$QUEUE" add "$J_PLANS/missing.plan" olympus-platform "Consent screen. Issue 2799." >/dev/null 2>&1
+FLEET_QUEUE_FILE="$JQ_FILE" "$QUEUE" add "$J_PLANS/also-missing.plan" olympus-platform "No requirement named." >/dev/null 2>&1
+assert_py "queue add stores the issue the plan header names" "$JQ_FILE" \
+  'd["entries"][0]["issue"]==72'
+assert_py "queue add falls back to the issue the declared purpose names" "$JQ_FILE" \
+  'd["entries"][1]["issue"]==2799'
+assert_py "queue add stores null when nothing names an issue" "$JQ_FILE" \
+  'd["entries"][2]["issue"] is None'
+FLEET_QUEUE_FILE="$JQ_FILE" "$QUEUE" list 2>/dev/null | grep -q '#2799' \
+  && ok "queue list prints the issue beside the plan" || bad "queue list prints the issue beside the plan"
+
+grep -q 'task_line' "$REPO_DIR/docs/experience-data.md" \
+  && ok "task_line is documented in the live schema" || bad "task_line is documented in the live schema"
+grep -q 'gh_enrichment' "$REPO_DIR/docs/experience-data.md" \
+  && ok "gh_enrichment is documented in the live schema" || bad "gh_enrichment is documented in the live schema"
+grep -q 'repos\[\]' "$REPO_DIR/docs/experience-data.md" \
+  && ok "repos[] is documented in the live schema" || bad "repos[] is documented in the live schema"
 echo ""
 echo "----------------------------------------"
 echo "  passed: $pass   failed: $fail"
