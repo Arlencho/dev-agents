@@ -59,6 +59,12 @@ exception_reason() { # <producer>
             # exception "applies only to the Database pair. All other
             # producer-critic pairs MUST cross models."
             echo "UNRESOLVED: undocumented same-seat pair" ;;
+        go-backend|mobile)
+            # config/routing.yaml header, owner decision 2026-09-12: every seat
+            # in the model column runs the flagship and same-model pairs are
+            # accepted by the owner for now. Recorded here so the pair stays a
+            # visible exception rather than a silent one.
+            echo "OWNER 2026-09-12: same-model pair accepted, routing.yaml header" ;;
         *) echo "" ;;
     esac
 }

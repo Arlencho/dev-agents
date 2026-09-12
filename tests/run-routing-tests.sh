@@ -33,20 +33,12 @@ check "kimi + native id" "kimi-for-coding" "$(effective_model kimi kimi-for-codi
 check "grok + sonnet (ignored)" "vendor-default" "$(effective_model grok sonnet)"
 check "grok + empty" "vendor-default" "$(effective_model grok "")"
 
-echo "== routing.yaml quality-first seats =="
-check "db-architect → opus" "opus" "$(get_model db-architect)"
-check "test-engineer → opus" "opus" "$(get_model test-engineer)"
-check "api-designer → opus" "opus" "$(get_model api-designer)"
-check "devops → opus" "opus" "$(get_model devops)"
-check "go-backend → sonnet" "sonnet" "$(get_model go-backend)"
-check "web-frontend → sonnet (ignored by kimi)" "sonnet" "$(get_model web-frontend)"
-check "backend-critic → opus" "opus" "$(get_model backend-critic)"
-check "frontend-critic → opus" "opus" "$(get_model frontend-critic)"
-check "security-reviewer → opus" "opus" "$(get_model security-reviewer)"
-check "cto → opus" "opus" "$(get_model cto)"
-check "docs-writer → claude-fable-5" "claude-fable-5" "$(get_model docs-writer)"
-check "pr-sentinel → sonnet" "sonnet" "$(get_model pr-sentinel)"
-check "unknown role → default sonnet" "sonnet" "$(get_model this-role-does-not-exist-xyz)"
+echo "== routing.yaml: every seat in the model column runs the flagship (owner decision 2026-09-12) =="
+for role in db-architect test-engineer api-designer devops go-backend web-frontend \
+            backend-critic frontend-critic security-reviewer cto docs-writer pr-sentinel; do
+  check "$role → claude-fable-5-1" "claude-fable-5-1" "$(get_model "$role")"
+done
+check "unknown role → default claude-fable-5-1" "claude-fable-5-1" "$(get_model this-role-does-not-exist-xyz)"
 
 echo "== cross-vendor critic seats (non-Anthropic by design) =="
 check "devops-critic → grok" "grok" "$(get_provider devops-critic)"
