@@ -601,6 +601,10 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
    at least 120 px; both stay fixed so the outcome edge is still straight. */
 @media (max-width: 600px) {
   .tlist > li.trow { grid-template-columns: minmax(0, 1fr) 3.75rem 4.25rem; }
+  /* The narrowed timer track is shorter than the longest value fmtMin prints
+     (under a minute), so on a phone the timer wraps inside its own track
+     instead of overflowing left across the outcome badge. */
+  .trow > .timer { white-space: normal; text-align: right; overflow-wrap: normal; }
 }
 
 .waiting .witem { margin: 0 0 4px; font-size: 12.5px; }
