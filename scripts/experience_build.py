@@ -1268,14 +1268,16 @@ class Renderer:
         (seats live, dispatches live) from repos[]; a replay carries no
         repos[], so the counts then come from the seats shown at the
         scrubber position. "Live" in the note is a liveness claim, so off a
-        live stream it is qualified with "at last event".
+        live stream it is qualified with "at last event", and a replay drops
+        the word entirely, the same branch the repo group header follows.
         """
         seats = [s for s in (live.get("seats") or []) if s.get("status") == "running"]
         runs = {s.get("dispatch_id") for s in seats if s.get("dispatch_id")}
         n_runs = len(runs) or 1
+        replay = state == "replay"
         degraded = state in ("stale", "offline")
-        note = (f"{len(seats)} {'seat' if len(seats) == 1 else 'seats'} live"
-                f"{' at last event' if degraded else ''} across "
+        live_claim = "" if replay else " live" + (" at last event" if degraded else "")
+        note = (f"{len(seats)} {'seat' if len(seats) == 1 else 'seats'}{live_claim} across "
                 f"{n_runs} {'dispatch' if n_runs == 1 else 'dispatches'}"
                 if seats else "no seat is live")
         if seats:

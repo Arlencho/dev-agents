@@ -497,11 +497,15 @@
       live.forEach(function (s) { if (s.dispatch_id) runs[s.dispatch_id] = 1; });
       var n = Object.keys(runs).length;
       /* "Live" is a liveness claim like any other on this page: off a live
-         stream it is qualified with "at last event", same as Landed today. */
+         stream it is qualified with "at last event", same as Landed today,
+         and a replay drops the word entirely, same branch the repo group
+         header below already follows (the seats shown are history at the
+         scrubber position). */
+      var replay = st && st.state === "replay";
       var degraded = st && (st.state === "stale" || st.state === "offline");
+      var liveClaim = replay ? "" : " live" + (degraded ? " at last event" : "");
       note.textContent = live.length
-        ? live.length + (live.length === 1 ? " seat live" : " seats live") +
-          (degraded ? " at last event" : "") +
+        ? live.length + (live.length === 1 ? " seat" : " seats") + liveClaim +
           " across " + (n || 1) + ((n || 1) === 1 ? " dispatch" : " dispatches")
         : "no seat is live";
     }
