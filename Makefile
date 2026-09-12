@@ -178,3 +178,9 @@ local-sentinel-status: ## Check if the launchd service is loaded
 
 local-sentinel-logs: ## Tail the local sentinel log file
 	@tail -f ~/Library/Logs/local-pr-sentinel.log
+
+worktree-sweep-install: ## Install the daily worktree sweep backstop (launchd, sweeps the olympus-platform checkout)
+	@./scripts/worktree-sweep-install.sh
+
+worktree-sweep-uninstall: ## Remove the daily worktree sweep backstop
+	@./scripts/worktree-sweep-uninstall.sh

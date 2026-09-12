@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Worktree Sweep backstop - macOS launchd configuration
+
+INSTALLATION (recommended):
+  cd dev-agents
+  make worktree-sweep-install
+
+This will:
+  - Copy this plist to ~/Library/LaunchAgents/
+  - Load it with launchctl
+
+After installation the sweep runs once a day and removes worktrees and local
+branches whose PR has already merged. scripts/land.sh runs the same sweep at
+the end of every landing; this is the backstop for runs that never land.
+
+The checkout it sweeps comes from OLYMPUS_ROOT, defaulting to the same
+dev-projects/AI-Orchestration parent the PR Sentinel plist points at. Override
+it with:  launchctl setenv OLYMPUS_ROOT /path/to/olympus-platform
+
+RunAtLoad is deliberately false: installing the backstop should not start
+deleting branches at that same moment. The first run is one interval later.
+
+USEFUL COMMANDS:
+  launchctl list | grep worktree-sweep
+  tail -f ~/Library/Logs/worktree-sweep.log
+  make worktree-sweep-uninstall
+
+Log file: ~/Library/Logs/worktree-sweep.log
+
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.arlen.worktree-sweep</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-c</string>
+        <string>cd "${OLYMPUS_ROOT:-/Users/arlenrios/Desktop/dev-projects/AI-Orchestration/olympus-platform}" &amp;&amp; make worktree-sweep-apply &gt;&gt; ~/Library/Logs/worktree-sweep.log 2&gt;&amp;1</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>86400</integer>   <!-- once a day -->
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/arlenrios/Library/Logs/worktree-sweep.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/arlenrios/Library/Logs/worktree-sweep.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
