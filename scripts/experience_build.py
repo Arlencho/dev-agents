@@ -1147,7 +1147,7 @@ class Renderer:
     </div>
 
     <div class="pipeline" role="group" aria-label="Pipeline">
-      <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">—</span></div><div class="desc" id="pipe-queued-desc">no queue declared in this build</div></div>
+      <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">&mdash;</span></div><div class="desc" id="pipe-queued-desc">no queue declared in this build</div></div>
       <div class="pipe wip"><div class="ph">Running <span class="n" id="pipe-inflight">—</span></div><div class="desc">no seat live</div></div>
       <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">—</span></div><div class="desc">—</div></div>
       <div class="pipe done"><div class="ph">Done <span class="n" id="pipe-settled">—</span></div><div class="desc">settled work lives in the <a href="../work/index.html">Almanac</a></div></div>

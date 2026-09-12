@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once desk-follow experience-live
+.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once desk-follow experience-live queue-add queue-list queue-rm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -50,6 +50,15 @@ experience-live: desk-live ## Alias for make desk-live (live Ops Floor during a 
 
 desk-live-once: ## Write site/experience/data/live.json once from the newest event stream (no server)
 	@python3 ./scripts/desk_live.py --once $(LIVE_FLAGS)
+
+queue-add: ## Arm a plan on the Ops Floor queue (usage: make queue-add PLAN=path REPO=name PURPOSE="one line")
+	@./scripts/queue.sh add "$(PLAN)" "$(REPO)" "$(PURPOSE)"
+
+queue-list: ## Show the Ops Floor queue in declared order (logs/fleet-queue.json)
+	@./scripts/queue.sh list
+
+queue-rm: ## Drop a plan from the Ops Floor queue (usage: make queue-rm PLAN=path)
+	@./scripts/queue.sh rm "$(PLAN)"
 
 dispatch: ## Dispatch wave plan (usage: make dispatch REPO=x PLAN=y)
 	@./scripts/dispatch.sh $(REPO) $(PLAN)

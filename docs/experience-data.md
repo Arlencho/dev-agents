@@ -474,6 +474,133 @@ Honesty rules the projector enforces:
 * **Phase C:** when `view=replay` (or `--as-of-seq` / `--replay`), `staleness.state`
   is forced to **`replay`** and `replay.watermark` is **`REPLAY`** — never a green LIVE LED.
 
+### Ops Floor queue (`logs/fleet-queue.json`, schema `fleet-queue/1`)
+
+The event stream says what **ran**. The queue says what the orchestrator
+**declared** should run next, in which order, and why. They are different kinds
+of truth and are stored separately: the stream is per-machine runtime (gitignored),
+the queue is intent and is **tracked in git** so the order survives a machine.
+
+```text
+scripts/queue.sh  ──►  logs/fleet-queue.json   (schema fleet-queue/1)
+scripts/dispatch.sh ─┘         │                start / settle, best effort
+                               ▼
+                     scripts/desk_live.py  ──► live.json: queue[] + today[]
+```
+
+| Piece | File |
+|-------|------|
+| Store + CLI | `scripts/queue.sh` (`make queue-add`, `make queue-list`, `make queue-rm`) |
+| Writer (machine) | `scripts/dispatch.sh` at `dispatch_start` / `dispatch_end` |
+| Reader / projector | `scripts/desk_live.py` |
+| Tests | `tests/run-desk-live-tests.sh` Part F |
+
+#### Document
+
+```json
+{
+  "schema": "fleet-queue/1",
+  "updated_at": "2026-09-12T15:40:00Z",
+  "entries": [
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-12-w2b-read-tools.plan",
+      "repo": "olympus-platform",
+      "purpose": "Assistant Channel W2-B: the six read tools and the cost quota. Issue 2800.",
+      "added_at": "2026-09-12T15:40:00Z",
+      "status": "queued",
+      "dispatch_id": null,
+      "settled_at": null,
+      "settled_status": null
+    }
+  ]
+}
+```
+
+| Field | Notes |
+|-------|-------|
+| `plan` | Plan path **relative to the repo**; an absolute path inside the repo is rewritten, one outside keeps its basename |
+| `repo` | Target repo slug the plan dispatches into (`olympus-platform`), not the plan's own repo |
+| `purpose` | One line the orchestrator writes. Defaults to the **first comment line of the plan file**; never a task body |
+| `added_at` | UTC ISO-8601, when the entry was declared. The newest one stamps the Floor block |
+| `status` | `queued` · `running` · `settled` |
+| `dispatch_id` | Set when a dispatch claims the plan; matches the event-stream id |
+| `settled_at`, `settled_status` | Written at `dispatch_end` (`completed` · `aborted`) |
+
+`entries` is **ordered**: position 1 is next. Order is intent, never motion.
+
+#### Commands
+
+```bash
+./scripts/queue.sh add <plan> <repo> [purpose]   # append (purpose defaults to the plan header)
+./scripts/queue.sh rm <plan>                     # drop
+./scripts/queue.sh mv <plan> <position>          # reorder (1-based)
+./scripts/queue.sh start <plan> [dispatch_id]    # mark running (dispatch.sh calls this)
+./scripts/queue.sh settle <plan> [status]        # mark settled (dispatch.sh calls this)
+./scripts/queue.sh list                          # print the order
+make queue-add PLAN=wave-plans/x.plan REPO=olympus-platform PURPOSE="one line"
+make queue-list
+make queue-rm PLAN=wave-plans/x.plan
+```
+
+Every subcommand prints the resulting order. A plan is matched by repo-relative
+path first, then by basename, so the same entry is reachable from any spelling.
+
+#### Rules
+
+* **Append-safe.** Every write lands in a temp file in the same directory, is
+  fsynced, then renamed over the queue: a reader never sees a half file and an
+  interrupted write never loses an entry. Concurrent writers take an exclusive
+  lock on `<queue>.lock` (5s timeout), so two dispatches cannot clobber each
+  other (the suite proves 8 parallel adds keep 8 entries).
+* **Never destructive on bad input.** A malformed or off-schema queue is refused
+  with a non-zero exit and left byte-for-byte untouched.
+* **Machine-maintained.** `dispatch.sh` marks the plan `running` with the
+  dispatch id at `dispatch_start` (appending it as `running` when it was never
+  armed) and `settled` at `dispatch_end`, aborted runs included. Both calls are
+  best effort: a missing `queue.sh`, an unwritable `logs/`, a busy lock or a
+  missing `python3` are swallowed. **A dispatch is never blocked by its queue.**
+* **Same redaction law as the stream.** Purposes come from the plan header only.
+  No task description, prompt or handoff prose ever enters the queue.
+* Opt-out: `FLEET_QUEUE=0` silences every write. Override the path with
+  `FLEET_QUEUE_FILE=/path` (or `--queue-file` on `desk_live.py`).
+
+### Queue + day fields in the projection (`live/1`)
+
+`desk_live.py` folds the queue and the whole local day into the same
+`live.json`. These keys always exist, so a page never has to guess why they are
+missing.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `queue[]` | array | Entries with status `queued`, **in declared order**: `position`, `plan`, `plan_basename`, `repo`, `purpose`, `added_at`, `status` (always `queued`) |
+| `queue_meta` | object | `{source, declared, declared_at, total, queued, running, settled}`. `declared_at` is the `added_at` of the **newest** entry and stamps the Floor block |
+| `today[]` | array | One entry per dispatch whose **`dispatch_end` falls on the local calendar day**: `dispatch_id`, `source`, `plan`, `plan_basename`, `repo`, `purpose` (+ `purpose_source`: `queue` or `none`), `status` (`settled` · `aborted`), `end_status`, `duration_s`, `started_at`, `ended_at`, `seats`, `succeeded`, `failed`, `branches[]` |
+| `today_meta` | object | `{date, streams_read, live[], ended}`: the local day, how many streams were read, which dispatch ids are still live |
+| `multi_dispatch` | object | Present only when a second dispatch is live on the day: `{live[], followed, merged_seats}` |
+| `seats[].dispatch_id` | string | Which run a seat belongs to |
+| `seats[].foreign` | bool | `true` when the seat comes from a live dispatch other than the followed one |
+
+Rules the projector enforces:
+
+* the day view reads **every stream file of the day**, not only the newest, so
+  concurrent dispatches all appear (files are mtime-prefiltered to a 48h window
+  and summaries are cached by mtime and size);
+* the single-dispatch follow is unchanged: the resolved stream still owns
+  `status`, `wave`, `waiting_on` and the event tail. When more than one dispatch
+  is live, the other seats are **appended** and labelled `foreign`, never merged
+  into the followed run's identity;
+* a queued plan is only ever `queued`, so the Floor cannot claim it is running;
+* a malformed queue degrades to an empty `queue[]` plus a `warnings[]` line;
+* **replay projections carry neither `queue[]` nor `today[]`**: a historical
+  scrub must not borrow today's intent.
+
+On the Floor: the **Queued** pipeline cell counts declared plans (with the file
+named under it), **Up next** lists position, purpose, repo and plan basename with
+the dashed "declared, not observed" treatment, and **Landed today** lists
+purpose, status, duration and the branches created. `make experience` rebuilds
+`data/`, so write the projection after it (`make desk-live-once`, or leave
+`make desk-live` running and the page repaints itself).
+
 ### Phase C — replay API
 
 | Route / flag | Meaning |

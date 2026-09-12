@@ -770,6 +770,24 @@ python3 "$DESK_LIVE" --once --events-dir "$DAY_DIR" --queue-file "$BAD_FILE" --o
 assert_py "malformed queue is an empty queue plus a warning" "$BAD_OUT" \
   'd["queue"]==[] and any("queue file" in w for w in d["warnings"])'
 
+grep -q 'fleet-queue/1' "$REPO_DIR/docs/experience-data.md" \
+  && ok "docs/experience-data.md documents the fleet-queue/1 schema" \
+  || bad "docs/experience-data.md documents the fleet-queue/1 schema"
+grep -q 'queue_meta' "$REPO_DIR/docs/experience-data.md" \
+  && ok "docs/experience-data.md documents the new live.json fields" \
+  || bad "docs/experience-data.md documents the new live.json fields"
+for t in queue-add queue-list queue-rm; do
+  grep -qE "^$t:.*## " "$REPO_DIR/Makefile" \
+    && ok "make $t exists with help text" || bad "make $t exists with help text"
+done
+grep -q 'floor-queue-list' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "floor.js renders the Up next list" || bad "floor.js renders the Up next list"
+grep -q 'floor-today-list' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "floor.js renders the Landed today list" || bad "floor.js renders the Landed today list"
+grep -q 'floor-queue-list' "$REPO_DIR/scripts/experience_build.py" \
+  && ok "the static Floor snapshot carries the same regions" \
+  || bad "the static Floor snapshot carries the same regions"
+
 # Replay must not carry today's queue into a historical scrub.
 REPLAY_OUT="$TMP/out/live-replay-queue.json"
 python3 "$DESK_LIVE" --once --events-dir "$DAY_DIR" --queue-file "$Q_FILE" \
