@@ -17,7 +17,10 @@
 #   Part K: NEEDS YOU and INITIATIVES (Floor v3, wave A): one fixture with a
 #           BLOCK comment, a SAFE plus CLEAN PR, a quiet seat, a failed
 #           dispatch, a PROPOSED row and a missing variable; the six entries
-#           with gh answering, the unverified marks with gh absent
+#           with gh answering, the unverified marks with gh absent; round 2:
+#           an offline stream with no close-out is no quiet seat, a verdict
+#           quoted on the first line is no verdict, a variable gh could not
+#           check is no item, a fallback initiative row carries every key
 #
 # Offline by design: nothing here binds a socket or touches the network.
 #
@@ -216,15 +219,15 @@ assert_py "failover recorded with both vendors" "$OUT" \
 assert_py "providers_tried keeps the honest trail" "$OUT" \
   'S["1"]["providers_tried"]==["claude","kimi"]'
 assert_py "ratecap flagged on the lane" "$OUT" 'S["1"]["ratecapped"] is True'
-assert_py "wave 2 seat is in flight" "$OUT" \
-  'S["2"]["status"]=="running" and S["2"]["wave"]==2 and S["2"]["pipeline"]=="in_flight"'
+assert_py "wave 2 seat with no close-out on an offline stream reads unknown, never running" "$OUT" \
+  'S["2"]["status"]=="unknown" and S["2"]["wave"]==2 and S["2"]["pipeline"]=="blocked"'
 assert_py "pipeline counts add up" "$OUT" \
-  'd["counts"]["settled"]==2 and d["counts"]["in_flight"]==1 and d["counts"]["total"]==3'
+  'd["counts"]["settled"]==2 and d["counts"]["blocked"]==1 and d["counts"]["in_flight"]==0 and d["counts"]["total"]==3'
 assert_py "wave position known" "$OUT" 'd["wave"]["current"]==2 and d["wave"]["total"]==2'
 assert_py "resolved human gate is not still waiting" "$OUT" \
   'not any(w["kind"]=="human_gate" for w in W)'
-assert_py "waiting_on falls back to the running seat" "$OUT" \
-  'any(w.get("kind")=="seat" and w.get("task_id")=="2" for w in W)'
+assert_py "waiting_on names the quiet stream, never a seat the stream stopped reporting" "$OUT" \
+  'any(w.get("kind")=="quiet_stream" for w in W) and not any(w.get("kind")=="seat" for w in W)'
 assert_py "last_event_ts is the newest event" "$OUT" 'd["last_event_ts"]=="2026-07-29T10:20:02Z"'
 assert_py "old stream reads offline, never live" "$OUT" 'd["staleness"]["state"]=="offline"'
 assert_py "staleness thresholds are published" "$OUT" \
@@ -1557,8 +1560,10 @@ assert_py "a replay seat keeps issue, task_line and pr as the schema says" "$J_R
 assert_py "a replay still carries no summary, no repos and no now" "$J_REPLAY" \
   'd["summary"] is None and d["repos"]==[] and all(s["now"] is None for s in d["seats"])'
 
-# A dispatch that crossed local midnight: no dispatch_end, started yesterday.
-# Still in motion, so still followed and counted; one from before yesterday is not.
+# A dispatch that crossed local midnight: no dispatch_end, started yesterday,
+# a heartbeat 30 s ago. Still in motion, so still followed and counted; one
+# from before yesterday is not. (Without the heartbeat the stream would be
+# offline and its seat would read unknown: Part K covers that.)
 J_NIGHT="$TMP/events-72-night"
 mkdir -p "$J_NIGHT"
 cp "$J_DIR"/*.jsonl "$J_DIR/latest" "$J_NIGHT/"
@@ -1570,6 +1575,8 @@ local_now = datetime.now().astimezone()
 def noon_utc(days_ago):
     local = (local_now - timedelta(days=days_ago)).replace(hour=12, minute=0, second=0, microsecond=0)
     return local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def ago(seconds):
+    return (local_now - timedelta(seconds=seconds)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 def write(name, rows):
     with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
         for i, row in enumerate(rows, 1):
@@ -1580,6 +1587,7 @@ write("j-overnight.jsonl", [
      "plan": "overnight.plan"},
     {"ts": noon_utc(1), "event": "seat_dispatch", "task_id": "9", "agent": "devops",
      "branch": "feat/overnight", "wave": 1, "provider": "local", "attempt": 1},
+    {"ts": ago(30), "event": "seat_heartbeat", "task_id": "9", "agent": "devops", "elapsed_s": 86370},
 ])
 write("j-stale.jsonl", [
     {"ts": noon_utc(3), "event": "dispatch_start", "mode": "wave", "repo": "other-repo",
@@ -1736,6 +1744,14 @@ assert_fn "critic_record reads a verdict that opens a body line" \
   'mod.critic_record("IC_2", "u", "2026-09-13T10:00:00Z", "CRITIC W2A IRIS SCAFFOLD ROUND 4\nVerdict: BLOCK-FIX on B4.\n")["verdict"]=="BLOCK-FIX"'
 assert_fn "a verdict quoted mid-sentence is never a verdict" \
   'mod.critic_record("IC_3", "u", "2026-09-13T10:00:00Z", "CRITIC K NOTE\nThe options were SAFE-TO-MERGE or BLOCK-FIX.") is None'
+assert_fn "a verdict quoted mid-sentence on the first line is not a verdict either" \
+  'mod.critic_record("IC_3b", "u", "2026-09-13T10:00:00Z", "CRITIC V3A NOTE: the last review said BLOCK-FIX but this is not a verdict.\nMore prose.") is None'
+assert_fn "a heading word BLOCK never steals BLOCK-FIX after the colon" \
+  'mod.critic_record("IC_3c", "u", "2026-09-13T10:00:00Z", "CRITIC V3A BLOCK: BLOCK-FIX\nOne finding.")["verdict"]=="BLOCK-FIX"'
+assert_fn "a heading word SAFE never steals SAFE-TO-MERGE after the colon" \
+  'mod.critic_record("IC_3d", "u", "2026-09-13T10:00:00Z", "CRITIC SAFE HARBOR ROUND 2: SAFE-TO-MERGE\nAll clear.")["verdict"]=="SAFE-TO-MERGE"'
+assert_fn "a verdict that closes the first line counts, with no colon" \
+  'mod.critic_record("IC_3e", "u", "2026-09-13T10:00:00Z", "CRITIC FLOOR V3A BLOCK-FIX\nFour findings.")["verdict"]=="BLOCK-FIX"'
 assert_fn "a comment whose first line is not a critic heading is ignored" \
   'mod.critic_record("IC_4", "u", "2026-09-13T10:00:00Z", "Starting work on the block-fix: BLOCK-FIX items 1 and 2") is None'
 assert_fn "the heading stops at the first lower-case word" \
@@ -1843,6 +1859,14 @@ write("k-live.jsonl", [
     {"ts": ts(610), "event": "dispatch_start", "mode": "wave", "repo": "olympus-platform", "plan": "k-live.plan"},
     {"ts": ts(600), "event": "seat_dispatch", "task_id": "7", "agent": "devops", "branch": "feat/k-quiet", "wave": 1, "provider": "local", "attempt": 1},
 ])
+# offline: last event 1000 s ago (past offline_after_s 900), no close-out. Not
+# clamped to midnight: a run that started yesterday is still in live_dates.
+def raw(d):
+    return (now - timedelta(seconds=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+write("k-offline.jsonl", [
+    {"ts": raw(1060), "event": "dispatch_start", "mode": "wave", "repo": "olympus-platform", "plan": "k-offline.plan"},
+    {"ts": raw(1000), "event": "seat_dispatch", "task_id": "9", "agent": "devops", "branch": "feat/k-offline", "wave": 1, "provider": "local", "attempt": 1},
+])
 KFIX
 printf 'k-live.jsonl\n' > "$K_DIR/latest"
 
@@ -1904,7 +1928,7 @@ case "$1 $2" in
       *) exit 1 ;;
     esac ;;
   "api repos/testowner/olympus-platform/issues/900/comments"*)
-    printf '[{"id":9001,"html_url":"https://example.invalid/issues/900#c9001","created_at":"%s","body":"CRITIC K BLOCKED ROUND 2: BLOCK-FIX\\nStill open on PR 101 in the body."},{"id":9002,"html_url":"https://example.invalid/issues/900#c9002","created_at":"%s","body":"CRITIC K NOTE\\nThe options were SAFE-TO-MERGE or BLOCK-FIX, on PR 102."}]\n' "$NOW" "$NOW" ;;
+    printf '[{"id":9001,"html_url":"https://example.invalid/issues/900#c9001","created_at":"%s","body":"CRITIC K BLOCKED ROUND 2: BLOCK-FIX\\nStill open on PR 101 in the body."},{"id":9002,"html_url":"https://example.invalid/issues/900#c9002","created_at":"%s","body":"CRITIC K NOTE\\nThe options were SAFE-TO-MERGE or BLOCK-FIX, on PR 102."},{"id":9003,"html_url":"https://example.invalid/issues/900#c9003","created_at":"%s","body":"CRITIC K NOTE: the last review said BLOCK-FIX but this is not a verdict, on PR 102.\\nProse in the body."}]\n' "$NOW" "$NOW" "$NOW" ;;
   "api repos/testowner/olympus-platform/milestones"*)
     printf '[{"title":"Track K","number":1,"html_url":"https://example.invalid/milestone/1","open_issues":5,"closed_issues":1,"updated_at":"%s"},{"title":"Old Track","number":2,"html_url":"https://example.invalid/milestone/2","open_issues":3,"closed_issues":0,"updated_at":"2026-01-01T00:00:00Z"}]\n' "$NOW" ;;
   "variable list") printf '[{"name":"OLYMPUS_API_URL"}]\n' ;;
@@ -1943,6 +1967,12 @@ assert_py "every check ran" "$K_ON" \
   'all(c["status"]=="ok" for c in d["needs_you_meta"]["checks"]) and d["needs_you_meta"]["count"]==6 and d["needs_you_meta"]["unverified"]==0'
 assert_py "the top line counts needs_you" "$K_ON" \
   'd["summary"]["needs_you"]==6'
+assert_py "the offline stream with no close-out is no quiet seat: one quiet_seat, the live one" "$K_ON" \
+  '[e["branch"] for e in d["needs_you"] if e["type"]=="quiet_seat"]==["feat/k-quiet"]'
+assert_py "its seat is merged as foreign and reads unknown, never running" "$K_ON" \
+  'S["9"]["dispatch_id"]=="k-offline" and S["9"]["foreign"] is True and S["9"]["status"]=="unknown" and S["9"]["pipeline"]=="blocked" and d["summary"]["running"]==1'
+assert_py "a verdict quoted on the first line of the newest comment is no BLOCK: PR 102 stays ready" "$K_ON" \
+  'not any(e["type"]=="critic_block" and e["pr"]==102 for e in d["needs_you"]) and any(e["type"]=="ready_to_merge" and e["pr"]==102 for e in d["needs_you"])'
 assert_py "the queued plan shows why it is blocked, in place" "$K_ON" \
   '(lambda q: q["blocked"] and q["blocked_by"]["type"] in ("prd_proposed","missing_variable") and q["blocked_by"]["source"]["kind"]=="file")({q["plan_basename"]: q for q in d["queue"]}["k-queued.plan"])'
 assert_py "a reason stored by queue.sh block wins and is marked so" "$K_ON" \
@@ -1968,6 +1998,19 @@ fi
 grep -q 'variable list -R testowner/olympus-platform' "$K_LOG" \
   && ok "variables are listed by name only" || bad "variables are listed by name only"
 
+# ── the offline stream followed directly: offline, seat unknown, no quiet_seat ──
+K_OFFLINE="$TMP/out/live-k-offline.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --dispatch-id k-offline --events-dir "$K_DIR" --queue-file "$K_Q" --out "$K_OFFLINE" >/dev/null 2>&1 \
+  && ok "--once exits 0 following the offline stream" || bad "--once exits 0 following the offline stream"
+assert_py "the followed stream reads offline and its seat unknown" "$K_OFFLINE" \
+  'd["staleness"]["state"]=="offline" and d["staleness"]["seconds"]>=d["staleness"]["offline_after_s"] and S["9"]["status"]=="unknown"'
+assert_py "no quiet_seat for the offline stream; the live foreign seat is still one" "$K_OFFLINE" \
+  '[e["branch"] for e in d["needs_you"] if e["type"]=="quiet_seat"]==["feat/k-quiet"] and {c["check"]: c["status"] for c in d["needs_you_meta"]["checks"]}["quiet_seat"]=="ok"'
+K_OFFLINE_REPLAY="$TMP/out/live-k-offline-replay.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --replay --dispatch-id k-offline --events-dir "$K_DIR" --queue-file "$K_Q" --out "$K_OFFLINE_REPLAY" >/dev/null 2>&1
+assert_py "a replay keeps the stream's own word on the seat: the past has no offline" "$K_OFFLINE_REPLAY" \
+  'd["view"]=="replay" and d["staleness"]["state"]=="replay" and S["9"]["status"]=="running" and d["needs_you"]==[]'
+
 # ── gh absent: what the streams and files alone can prove, the rest marked ──
 K_NOGH="$TMP/nogh"; mkdir -p "$K_NOGH"
 ln -sf "$(command -v python3)" "$K_NOGH/python3"
@@ -1987,12 +2030,23 @@ assert_py "the stream and file entries are still there, verified" "$K_OFF" \
   'sorted(e["type"] for e in d["needs_you"] if e["verified"])==["failed_dispatch","prd_proposed","quiet_seat"]'
 assert_py "no BLOCK and no ready PR is invented without gh" "$K_OFF" \
   'not any(e["type"] in ("critic_block","ready_to_merge") for e in d["needs_you"])'
-assert_py "the variable the contract requires is listed unverified, not as set" "$K_OFF" \
-  '(lambda e: e["verified"] is False and "not checked" in e["text"] and e["source"]["lookup"]=="skipped")([e for e in d["needs_you"] if e["type"]=="missing_variable"][0]) and d["needs_you_meta"]["unverified"]==1'
+assert_py "a variable gh could not check is no item: the skipped check row is the record" "$K_OFF" \
+  'not any(e["type"]=="missing_variable" for e in d["needs_you"]) and {c["check"]: c for c in d["needs_you_meta"]["checks"]}["missing_variable"]["status"]=="skipped" and d["needs_you_meta"]["unverified"]==0'
+assert_py "summary.needs_you counts verified items only" "$K_OFF" \
+  'd["summary"]["needs_you"]==3 and d["summary"]["needs_you"]==sum(1 for e in d["needs_you"] if e["verified"])'
 assert_py "the gh checks are marked skipped with the reason" "$K_OFF" \
   '{c["check"]: c["status"] for c in d["needs_you_meta"]["checks"]}=={"critic_block":"skipped","ready_to_merge":"skipped","quiet_seat":"ok","failed_dispatch":"ok","prd_proposed":"ok","missing_variable":"skipped"} and all(c["reason"] for c in d["needs_you_meta"]["checks"] if c["status"]=="skipped")'
 assert_py "the fallback initiative row comes from streams and queue alone and says so" "$K_OFF" \
   '(lambda r: r["lookup"]=="skipped" and r["reason"] and r["number"] is None and r["open_issues"] is None and r["exit"] is None and r["waves"]["planned"]==4 and r["waves"]["landed"]==2 and r["waves"]["landed_ids"]==["W1-A","W1-B"] and r["source"]["landed"]=="streams of the day")({r["title"]: r for r in d["initiatives"]}["Track K"]) and d["initiatives_meta"]["repos"][0]["lookup"]=="skipped"'
+assert_py "the fallback row carries epic_title and exit_lookup as the schema says" "$K_OFF" \
+  '(lambda r: r["epic"] is None and r["epic_title"] is None and r["exit"] is None and r["exit_lookup"]=="skipped")({r["title"]: r for r in d["initiatives"]}["Track K"])'
+if python3 - "$K_ON" "$K_OFF" <<'KEYS'
+import json, sys
+on = json.load(open(sys.argv[1]))["initiatives"][0]
+off = json.load(open(sys.argv[2]))["initiatives"][0]
+sys.exit(0 if set(on) == set(off) else 1)
+KEYS
+then ok "a fallback initiative row has the same keys as a verified one"; else bad "a fallback initiative row has the same keys as a verified one"; fi
 
 # A replay carries neither: the past has no present.
 K_REPLAY="$TMP/out/live-k-replay.json"

@@ -554,6 +554,10 @@ Honesty rules the projector enforces:
 
 * a seat still marked `running` after `dispatch_end` becomes **`unknown`**, never
   an eternal spinner;
+* a seat still marked `running` on a stream that has gone `offline` (no event
+  for `offline_after_s`, no `dispatch_end`) becomes **`unknown`** the same way,
+  in the live view: a crashed wave is not a running seat. A replay keeps the
+  stream's own word, because the past has no "now";
 * an old stream reads `stale` then `offline` — never `live`;
 * an empty events dir projects `idle` with a reason, not an empty "running" desk;
 * malformed lines are skipped and counted in `warnings`, never guessed at;
@@ -899,7 +903,7 @@ with its reason, so the page can say "critic verdicts unverified" instead of
 |-----|------|---------|
 | `needs_you[]` | array | One entry per item, **newest first** by `at`. Shape below |
 | `needs_you_meta` | object | `{count, unverified, checks[], comment_lookback_days, quiet_after_s}`. `checks[]` has one `{check, status, reason, looked_at}` per type: `status` is `ok` or `skipped`, `looked_at` how many candidates the check inspected |
-| `summary.needs_you` | int | `len(needs_you)`, for the status strip |
+| `summary.needs_you` | int | The count of **verified** entries, for the status strip |
 | `queue[].blocked` | string\|null | Why a queued plan is not ready, in place: the reason `scripts/queue.sh block` stored, else the text of the NEEDS YOU item that names the plan (a PRD row awaiting sign-off, a variable unset) or `PR N awaits merge` when a ready PR sits on one of the plan's branches. `null` when nothing names it |
 | `queue[].blocked_by` | object\|null | `{type, source}`: the item type (`queue` for a stored reason) and the same `source` object the item carries |
 | `initiatives[]` | array | One row per open milestone with activity in the last 30 days, in each repo the queue or the day names. Shape below |
@@ -913,7 +917,7 @@ with its reason, so the page can say "critic verdicts unverified" instead of
 | `text` | string | One line in plain words, ≤ 160 chars, scrubbed |
 | `action` | string | The one action: `open the comment` · `merge` · `check the log` · `see the output` · `approve or edit` · `set it` |
 | `source` | object | Where the item came from; `kind` is `comment`, `pr`, `stream` or `file` (fields below) |
-| `verified` | bool | `true` when the fact was confirmed at its source. Stream and file items always are; a gh item is `true` only when gh answered; a contract variable that could not be checked is listed with `false` |
+| `verified` | bool | `true` when the fact was confirmed at its source. Stream and file items always are; a gh item is `true` only when gh answered. A check that could not run adds no entry at all: the `skipped` row in `needs_you_meta.checks` is the record |
 | `at` | string\|null | The time that orders the list: the comment time, the stream event time, or the queue entry's `added_at` for file items |
 | `repo` / `branch` / `pr` / `plan` | mixed | What the item names, so the queue and the seat cards can join to it; each `null` when not applicable |
 
@@ -923,16 +927,21 @@ Types, their rule and their source:
 |------|------|----------|
 | `critic_block` | The newest comment of a critic thread on an open PR, or on the findings issue a plan's critic seat posts to, is `BLOCK-FIX`, `BLOCK-ESCALATE`, `BLOCK-CLOSE` or `BLOCK`, and no fix wave is running or queued for that branch or PR (a running seat on the branch, or a queued or running plan whose file lists the branch or whose header names the PR). Through gh | `{kind: comment, repo, comment_id, url, pr, issue, verdict, round, stem}` |
 | `ready_to_merge` | The PR is open, not a draft, every critic thread's newest verdict is `SAFE-TO-MERGE`, `SAFE` or `APPROVE-MERGE`, and `mergeStateStatus` is `CLEAN` (`UNKNOWN`, `BEHIND`, `DIRTY`, `BLOCKED` are not ready). Through gh | `{kind: pr, repo, pr, url, merge_state, comments[]}` (the verdict comments, reduced as below) |
-| `quiet_seat` | A running seat with `quiet: true` (no heartbeat for `quiet_after_s`, 90 s). From the stream | `{kind: stream, dispatch_id, event: seat_heartbeat or seat_dispatch, task_id, ts}` |
+| `quiet_seat` | A running seat with `quiet: true` (no heartbeat for `quiet_after_s`, 90 s). Never when the seat's own stream is `offline` (no event for `offline_after_s`, 900 s): that stream has stopped, its seats with no close-out read `unknown`, and a crashed wave is not a quiet seat. From the stream | `{kind: stream, dispatch_id, event: seat_heartbeat or seat_dispatch, task_id, ts}` |
 | `failed_dispatch` | A `today[]` row whose `outcome` is `failed` or `aborted`. From the stream | `{kind: stream, dispatch_id, stream (basename), event: dispatch_end, ts}` |
 | `prd_proposed` | A queued plan names `S<n>` and a table row whose first cell is `S<n>` under `docs/prd/` of the target checkout carries `PROPOSED` and not `ACCEPTED`. Grep of the checkout | `{kind: file, checkout (repo name), file (relative to it), line, named_by (plan basename)}` |
-| `missing_variable` | A queued plan names an `UPPER_SNAKE` name, a row of `docs/operations/env-vars-*.md` in the target checkout says it comes from a repository variable (or secret), and `gh variable list` (or `gh secret list`, names only) does not have it. When gh could not answer the entry is kept with `verified: false` and the text says `not checked` | `{kind: file, checkout, file, line, named_by, lookup, reason}` |
+| `missing_variable` | A queued plan names an `UPPER_SNAKE` name, a row of `docs/operations/env-vars-*.md` in the target checkout says it comes from a repository variable (or secret), and `gh variable list` (or `gh secret list`, names only) does not have it. When gh could not answer there is no entry: the `missing_variable` check reads `skipped` with the reason in `needs_you_meta.checks`, because an item with action `set it` would ask the owner to set a value nobody checked | `{kind: file, checkout, file, line, named_by, lookup, reason}` |
 
 The critic first-line convention, as read: the first line of the comment
-carries the word `CRITIC`; the verdict is on that line, else it opens a later
-line of its own (`BLOCK-FIX on two items`, `Verdict: SAFE-TO-MERGE`); a
-verdict quoted mid-sentence never counts; `ROUND n` names the round (1 when
-absent). A thread is the heading of the first line (its leading run of
+carries the word `CRITIC`; the verdict opens the text after a colon on that
+line or closes the line (`CRITIC K ROUND 2: BLOCK-FIX on two items`, `CRITIC
+FLOOR V3A BLOCK-FIX`), else it opens a later line of its own (`BLOCK-FIX on
+two items`, `Verdict: SAFE-TO-MERGE`); the same start-of-token rule on both,
+so a verdict quoted mid-sentence never counts (`CRITIC V3A NOTE: the last
+review said BLOCK-FIX but this is not a verdict.` is no verdict) and a heading
+word `BLOCK` or `SAFE` before the colon never steals `BLOCK-FIX` or
+`SAFE-TO-MERGE` after it (`CRITIC V3A BLOCK: BLOCK-FIX` reads `BLOCK-FIX`);
+`ROUND n` names the round (1 when absent). A thread is the heading of the first line (its leading run of
 upper-case words, verdict and round removed), and the newest comment of each
 thread is its current verdict, so one critic's re-review replaces its own
 earlier round and never another critic's. PR comments and PR reviews are
@@ -954,7 +963,7 @@ this machine marks the check `skipped`.
 | Key | Type | Meaning |
 |-----|------|---------|
 | `repo` / `title` / `number` / `url` | mixed | The milestone. `number` and `url` are `null` on a fallback row |
-| `lookup` / `reason` | string | `verified` when gh listed the milestone, else `skipped` and why (the row then comes from the streams and the queue alone) |
+| `lookup` / `reason` | string | `verified` when gh listed the milestone, else `skipped` and why (the row then comes from the streams and the queue alone). A fallback row carries every key of this table: `number`, `url`, `epic`, `epic_title`, `exit`, `open_issues`, `last_landed` and `updated_at` are `null` and `exit_lookup` is `skipped` |
 | `epic` / `epic_title` | int\|null, string\|null | The issue of the milestone whose title carries the word `epic`, when there is one |
 | `exit` / `exit_lookup` | string\|null | The exit criterion sentence from the epic body: the text after a line opening `Exit criterion:`, `Exit:`, `Done when:` or `Definition of done:`, first sentence, ≤ 200 chars, scrubbed. `null` when the body carries none (`exit_lookup: verified`) or when it was not read (`skipped`). The body is read in-process only; nothing else leaves it |
 | `waves` | object | `{landed, planned, landed_ids[], planned_ids[]}`. Planned: the distinct wave ids of the plans that belong to the milestone, from the plan naming convention (`W2-A` in the header, else `-w2a-` in the file name) across `wave-plans/` and the queue. Landed: those whose plan landed today in the streams or whose branch has a merged PR (`gh pr list --state merged`, the newest 100) |

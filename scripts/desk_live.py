@@ -1523,11 +1523,14 @@ COMMENT_LOOKBACK_DAYS = 7
 STEM_MAX = 80
 
 # The critic first-line convention: the first line of the comment carries the
-# word CRITIC, the verdict is on that line or opens a later line, and a
-# re-review says ROUND n. "CRITIC TILE CONNECT GUIDE ROUND 2: SAFE-TO-MERGE".
+# word CRITIC, the verdict opens the text after a colon on that line or closes
+# it (else it opens a later line of its own), and a re-review says ROUND n.
+# "CRITIC TILE CONNECT GUIDE ROUND 2: SAFE-TO-MERGE". See first_line_verdict.
 CRITIC_LINE_RE = re.compile(r"\bCRITIC\b")
-VERDICT_RE = re.compile(
-    r"\b(BLOCK-ESCALATE|BLOCK-FIX|BLOCK-CLOSE|SAFE-TO-MERGE|APPROVE-MERGE|BLOCK|SAFE)\b")
+VERDICT_WORDS = "BLOCK-ESCALATE|BLOCK-FIX|BLOCK-CLOSE|SAFE-TO-MERGE|APPROVE-MERGE|BLOCK|SAFE"
+VERDICT_RE = re.compile(r"\b(%s)\b" % VERDICT_WORDS)
+# A verdict that closes the first line ("CRITIC FLOOR V3A BLOCK-FIX").
+VERDICT_TAIL_RE = re.compile(r"(?:^|\s)(%s)$" % VERDICT_WORDS)
 ROUND_RE = re.compile(r"\bROUND\s+(\d{1,3})\b", re.IGNORECASE)
 BLOCK_VERDICTS = frozenset(("BLOCK-ESCALATE", "BLOCK-FIX", "BLOCK-CLOSE", "BLOCK"))
 SAFE_VERDICTS = frozenset(("SAFE-TO-MERGE", "APPROVE-MERGE", "SAFE"))
@@ -1603,13 +1606,35 @@ def track_name(purpose):
     return scrub_text(name, 80) or None
 
 
+def first_line_verdict(first_line):
+    """The verdict the first line of a critic comment carries, else None.
+
+    Same start-of-token rule as a body line: the verdict opens the text after
+    a colon ("CRITIC K ROUND 2: BLOCK-FIX on two items") or closes the line
+    ("CRITIC FLOOR V3A BLOCK-FIX"). A verdict quoted mid-sentence ("the last
+    review said BLOCK-FIX but this is not a verdict") never counts, and a
+    heading word BLOCK or SAFE before the colon never steals BLOCK-FIX or
+    SAFE-TO-MERGE after it ("CRITIC V3A BLOCK: BLOCK-FIX" reads BLOCK-FIX).
+    """
+    text = str(first_line or "")
+    for segment in text.split(":")[1:]:
+        match = VERDICT_RE.match(segment.strip(" \t*_`"))
+        if match:
+            return match.group(1)
+    tail = text.rstrip(" \t.!*_`)")
+    match = VERDICT_TAIL_RE.search(tail)
+    if match:
+        return match.group(1)
+    return None
+
+
 def critic_verdict(first_line, body):
     """The verdict a critic comment carries, from its first line else a line
     of its own in the body ("BLOCK-FIX on two items", "Verdict: SAFE-TO-MERGE").
     A verdict quoted mid-sentence ("SAFE-TO-MERGE or BLOCK-FIX") never counts."""
-    match = VERDICT_RE.search(first_line)
-    if match:
-        return match.group(1)
+    verdict = first_line_verdict(first_line)
+    if verdict:
+        return verdict
     for line in str(body or "").splitlines()[1:]:
         clean = re.sub(r"^[\s*#>_`-]+", "", line).strip()
         clean = re.sub(r"^verdict\s*[:.]\s*", "", clean, flags=re.IGNORECASE)
@@ -1822,9 +1847,16 @@ def needs_you_view(proj, queue_entries, plan_cache, gh, now):
             at=row.get("ended_at"), repo=row.get("repo"), plan=row.get("plan_basename"),
             branch=(row.get("branches") or [None])[0])
 
-    # 3: a live seat quiet past the threshold (from the stream).
+    # 3: a live seat quiet past the threshold (from the stream). A stream
+    # whose own age is at or past offline_after_s has no quiet seat: it has
+    # stopped, and project() already reads its seats as unknown. The guard
+    # here keeps the rule visible where the item is made.
+    stream_age = (proj.get("staleness") or {}).get("seconds")
+    stream_offline = isinstance(stream_age, int) and stream_age >= OFFLINE_AFTER
     for seat in seats:
         if seat.get("status") != "running":
+            continue
+        if stream_offline and seat.get("dispatch_id") in (None, proj.get("dispatch_id")):
             continue
         checks["quiet_seat"]["looked_at"] += 1
         if not seat.get("quiet"):
@@ -1883,9 +1915,9 @@ def needs_you_view(proj, queue_entries, plan_cache, gh, now):
         source = {"kind": "file", "checkout": repo, "file": row["file"], "line": row["line"],
                   "named_by": base, "lookup": present["lookup"], "reason": present["reason"]}
         if present["lookup"] != "verified":
+            # No item: "set it" would be a guess. The check row in
+            # needs_you_meta.checks carries the skip and its reason.
             skip("missing_variable", present["reason"])
-            add("missing_variable", "%s not checked in %s (%s)" % (name, repo, present["reason"]),
-                source, verified=False, at=entry.get("added_at"), repo=repo, plan=base)
         elif name not in present["names"]:
             add("missing_variable", "%s unset in %s, needed by %s" % (name, repo, base),
                 source, at=entry.get("added_at"), repo=repo, plan=base)
@@ -2123,7 +2155,8 @@ def initiatives_view(proj, queue_entries, plan_cache, gh, now):
                 rows.append({
                     "repo": repo, "title": name, "number": None, "url": None,
                     "lookup": "skipped", "reason": answer.get("reason"),
-                    "epic": None, "exit": None, "waves": waves,
+                    "epic": None, "epic_title": None, "exit": None, "exit_lookup": "skipped",
+                    "waves": waves,
                     "open_issues": None, "last_landed": None, "updated_at": None,
                     "plans": sorted(members),
                     "source": {"milestone": None, "plans": "wave-plans and queue",
@@ -2255,7 +2288,7 @@ def attach_now(proj, queue_entries):
         "running": running,
         "queued": (proj.get("queue_meta") or {}).get("queued") or 0,
         "landed_today": len(proj.get("today") or []),
-        "needs_you": len(proj.get("needs_you") or []),
+        "needs_you": sum(1 for e in proj.get("needs_you") or [] if e.get("verified")),
         "last_event_ts": proj.get("last_event_ts"),
     }
     return proj
@@ -2366,7 +2399,7 @@ def _seat(state, task_id):
     return seat
 
 
-def project(events, now=None, source=None, malformed=0):
+def project(events, now=None, source=None, malformed=0, replay=False):
     """Fold an event list into the live/1 projection. Pure function."""
     now = now or utcnow()
     out = empty_projection(now)
@@ -2510,14 +2543,34 @@ def project(events, now=None, source=None, malformed=0):
                 if ev.get(key) is not None:
                     out.setdefault("totals", {})[key] = ev[key]
 
+    # ── staleness (before the seats: an offline stream has no running seat) ──
+    out["last_event_ts"] = fmt_ts(last_ts)
+    if last_ts is None:
+        state, age = "none", None
+    else:
+        age = max(0, int((now - last_ts).total_seconds()))
+        if age >= OFFLINE_AFTER:
+            state = "offline"
+        elif age >= STALE_AFTER:
+            state = "stale"
+        else:
+            state = "live"
+    out["staleness"] = {"seconds": age, "state": state,
+                        "stale_after_s": STALE_AFTER, "offline_after_s": OFFLINE_AFTER,
+                        "quiet_after_s": QUIET_AFTER}
+
     # ── seats + pipeline counts ──
     seat_list = [seats[t] for t in order]
     for seat in seat_list:
         seat["repo"] = out["repo"]
         seat["pipeline"] = PIPELINE.get(seat["status"], "queued")
-        if seat["status"] == "running" and out["status"] != "running":
-            # Dispatcher is gone but the seat never reported — say unknown, not
-            # "running". Honesty beats a spinner that never stops.
+        if seat["status"] == "running" and (out["status"] != "running"
+                                            or (state == "offline" and not replay)):
+            # Dispatcher is gone but the seat never reported, or the whole
+            # stream stopped updating past OFFLINE_AFTER with no close-out:
+            # say unknown, not "running". Honesty beats a spinner that never
+            # stops, and a crashed wave is not a quiet seat. A replay is the
+            # past and has no "now", so only the close-out rule applies there.
             seat["status"] = "unknown"
             seat["pipeline"] = "blocked"
         if seat["status"] == "running" and seat["started_at"]:
@@ -2579,22 +2632,6 @@ def project(events, now=None, source=None, malformed=0):
                 "seconds": slowest.get("elapsed_s"),
             })
     out["waiting_on"] = waiting
-
-    # ── staleness ──
-    out["last_event_ts"] = fmt_ts(last_ts)
-    if last_ts is None:
-        state, age = "none", None
-    else:
-        age = max(0, int((now - last_ts).total_seconds()))
-        if age >= OFFLINE_AFTER:
-            state = "offline"
-        elif age >= STALE_AFTER:
-            state = "stale"
-        else:
-            state = "live"
-    out["staleness"] = {"seconds": age, "state": state,
-                        "stale_after_s": STALE_AFTER, "offline_after_s": OFFLINE_AFTER,
-                        "quiet_after_s": QUIET_AFTER}
 
     # Hang honesty: a still-running dispatch with no new events for QUIET_AFTER
     # surfaces first-class on waiting_on so the Floor does not look "fine".
@@ -2678,11 +2715,11 @@ def build(events_dir, dispatch_id=None, now=None, as_of_seq=None, replay=False,
     total = len(events)
     if as_of_seq is not None:
         events = truncate_events(events, as_of_seq)
-    proj = project(events, now=now, source=rel(path), malformed=malformed)
-    if not proj.get("dispatch_id"):
-        proj["dispatch_id"] = resolved_id
     # Replay when asked, or when the caller is scrubbing (as_of_seq set).
     force_replay = replay or as_of_seq is not None
+    proj = project(events, now=now, source=rel(path), malformed=malformed, replay=force_replay)
+    if not proj.get("dispatch_id"):
+        proj["dispatch_id"] = resolved_id
     if force_replay:
         # Use the cut seq (or full length when replaying the whole settled run).
         cut = as_of_seq if as_of_seq is not None else total
