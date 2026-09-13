@@ -1531,6 +1531,10 @@ VERDICT_WORDS = "BLOCK-ESCALATE|BLOCK-FIX|BLOCK-CLOSE|SAFE-TO-MERGE|APPROVE-MERG
 VERDICT_RE = re.compile(r"\b(%s)\b" % VERDICT_WORDS)
 # A verdict that closes the first line ("CRITIC FLOOR V3A BLOCK-FIX").
 VERDICT_TAIL_RE = re.compile(r"(?:^|\s)(%s)$" % VERDICT_WORDS)
+# A verdict standing as a token of its own, markdown and closing punctuation
+# allowed around it ("**BLOCK-FIX**", "(BLOCK-FIX)"). A heading word followed
+# by a colon ("BLOCK:") is not one. See first_line_verdict.
+VERDICT_TOKEN_RE = re.compile(r"(?<!\S)[*_`(]*(%s)[*_`).!,]*(?!\S)" % VERDICT_WORDS)
 ROUND_RE = re.compile(r"\bROUND\s+(\d{1,3})\b", re.IGNORECASE)
 BLOCK_VERDICTS = frozenset(("BLOCK-ESCALATE", "BLOCK-FIX", "BLOCK-CLOSE", "BLOCK"))
 SAFE_VERDICTS = frozenset(("SAFE-TO-MERGE", "APPROVE-MERGE", "SAFE"))
@@ -1615,8 +1619,19 @@ def first_line_verdict(first_line):
     review said BLOCK-FIX but this is not a verdict") never counts, and a
     heading word BLOCK or SAFE before the colon never steals BLOCK-FIX or
     SAFE-TO-MERGE after it ("CRITIC V3A BLOCK: BLOCK-FIX" reads BLOCK-FIX).
+
+    Two different verdict words standing as tokens of their own where the
+    verdict is read (after the first colon, else anywhere on a line with no
+    colon) make the line ambiguous, and it carries no verdict: "CRITIC FLOOR
+    V3A BLOCK-FIX SAFE-TO-MERGE", with or without a colon, in either order,
+    invents neither a block nor a ready item. The same word twice ("BLOCK-FIX
+    (round 1 BLOCK-FIX stands)") is one verdict. A heading that itself holds
+    a verdict word wants the colon form: only what follows the colon is read.
     """
     text = str(first_line or "")
+    scope = text.split(":", 1)[1] if ":" in text else text
+    if len(set(VERDICT_TOKEN_RE.findall(scope))) > 1:
+        return None
     for segment in text.split(":")[1:]:
         match = VERDICT_RE.match(segment.strip(" \t*_`"))
         if match:

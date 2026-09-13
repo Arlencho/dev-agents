@@ -940,8 +940,13 @@ two items`, `Verdict: SAFE-TO-MERGE`); the same start-of-token rule on both,
 so a verdict quoted mid-sentence never counts (`CRITIC V3A NOTE: the last
 review said BLOCK-FIX but this is not a verdict.` is no verdict) and a heading
 word `BLOCK` or `SAFE` before the colon never steals `BLOCK-FIX` or
-`SAFE-TO-MERGE` after it (`CRITIC V3A BLOCK: BLOCK-FIX` reads `BLOCK-FIX`);
-`ROUND n` names the round (1 when absent). A thread is the heading of the first line (its leading run of
+`SAFE-TO-MERGE` after it (`CRITIC V3A BLOCK: BLOCK-FIX` reads `BLOCK-FIX`).
+Two different verdict words standing as tokens of their own where the
+verdict is read (after the first colon, else anywhere on a line with no
+colon) make the first line ambiguous and it carries no verdict: `CRITIC
+FLOOR V3A BLOCK-FIX SAFE-TO-MERGE`, with or without a colon, in either
+order, invents neither a `critic_block` nor a `ready_to_merge`; a critic
+who wants one read writes one token. `ROUND n` names the round (1 when absent). A thread is the heading of the first line (its leading run of
 upper-case words, verdict and round removed), and the newest comment of each
 thread is its current verdict, so one critic's re-review replaces its own
 earlier round and never another critic's. PR comments and PR reviews are

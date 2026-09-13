@@ -1752,6 +1752,16 @@ assert_fn "a heading word SAFE never steals SAFE-TO-MERGE after the colon" \
   'mod.critic_record("IC_3d", "u", "2026-09-13T10:00:00Z", "CRITIC SAFE HARBOR ROUND 2: SAFE-TO-MERGE\nAll clear.")["verdict"]=="SAFE-TO-MERGE"'
 assert_fn "a verdict that closes the first line counts, with no colon" \
   'mod.critic_record("IC_3e", "u", "2026-09-13T10:00:00Z", "CRITIC FLOOR V3A BLOCK-FIX\nFour findings.")["verdict"]=="BLOCK-FIX"'
+assert_fn "two verdict tokens on the first line, no colon: ambiguous, no verdict" \
+  'mod.first_line_verdict("CRITIC FLOOR V3A BLOCK-FIX SAFE-TO-MERGE") is None and mod.critic_record("IC_3f", "u", "2026-09-13T10:00:00Z", "CRITIC FLOOR V3A BLOCK-FIX SAFE-TO-MERGE\nTwo tokens, no colon.") is None'
+assert_fn "two verdict tokens after a colon: ambiguous, no verdict" \
+  'mod.first_line_verdict("CRITIC FLOOR V3A: BLOCK-FIX SAFE-TO-MERGE") is None and mod.critic_record("IC_3g", "u", "2026-09-13T10:00:00Z", "CRITIC FLOOR V3A: BLOCK-FIX SAFE-TO-MERGE\nTwo tokens after a colon.") is None'
+assert_fn "two verdict tokens reversed, no colon: ambiguous, no verdict" \
+  'mod.first_line_verdict("CRITIC FLOOR V3A SAFE-TO-MERGE BLOCK-FIX") is None and mod.critic_record("IC_3h", "u", "2026-09-13T10:00:00Z", "CRITIC FLOOR V3A SAFE-TO-MERGE BLOCK-FIX\nReversed, no colon.") is None'
+assert_fn "two verdict tokens reversed after a colon: ambiguous, no verdict" \
+  'mod.first_line_verdict("CRITIC FLOOR V3A: SAFE-TO-MERGE BLOCK-FIX") is None and mod.critic_record("IC_3i", "u", "2026-09-13T10:00:00Z", "CRITIC FLOOR V3A: SAFE-TO-MERGE BLOCK-FIX\nReversed after a colon.") is None'
+assert_fn "the same verdict word twice is one verdict, a heading word before the colon is none" \
+  'mod.first_line_verdict("CRITIC K ROUND 2: BLOCK-FIX (round 1 BLOCK-FIX stands)")=="BLOCK-FIX" and mod.first_line_verdict("CRITIC SAFE HARBOR ROUND 2: SAFE-TO-MERGE")=="SAFE-TO-MERGE" and mod.first_line_verdict("CRITIC V3A BLOCK: BLOCK-FIX")=="BLOCK-FIX"'
 assert_fn "a comment whose first line is not a critic heading is ignored" \
   'mod.critic_record("IC_4", "u", "2026-09-13T10:00:00Z", "Starting work on the block-fix: BLOCK-FIX items 1 and 2") is None'
 assert_fn "the heading stops at the first lower-case word" \
@@ -1848,6 +1858,18 @@ def landed(name, plan, branch, agent, start):
     ])
 landed("k-landed-blocked.jsonl", "k-blocked.plan", "feat/k-blocked", "devops", 4000)
 landed("k-landed-ready.jsonl", "k-ready.plan", "feat/k-ready", "go-backend", 3000)
+# landed today, three seats whose PRs each carry two verdict tokens on the
+# first line of the critic comment (finding 5, round 2): no item may come of them
+write("k-landed-two.jsonl", [
+    {"ts": ts(2600), "event": "dispatch_start", "mode": "wave", "repo": "olympus-platform", "plan": "k-two.plan"},
+    {"ts": ts(2595), "event": "seat_dispatch", "task_id": "0", "agent": "devops", "branch": "feat/k-twotail", "wave": 1, "provider": "local"},
+    {"ts": ts(2594), "event": "seat_dispatch", "task_id": "1", "agent": "devops", "branch": "feat/k-twocolon", "wave": 1, "provider": "local"},
+    {"ts": ts(2593), "event": "seat_dispatch", "task_id": "2", "agent": "devops", "branch": "feat/k-tworev", "wave": 1, "provider": "local"},
+    {"ts": ts(2300), "event": "seat_exit", "task_id": "0", "agent": "devops", "branch": "feat/k-twotail", "wave": 1, "status": "success", "exit": 0, "duration_s": 295},
+    {"ts": ts(2299), "event": "seat_exit", "task_id": "1", "agent": "devops", "branch": "feat/k-twocolon", "wave": 1, "status": "success", "exit": 0, "duration_s": 295},
+    {"ts": ts(2298), "event": "seat_exit", "task_id": "2", "agent": "devops", "branch": "feat/k-tworev", "wave": 1, "status": "success", "exit": 0, "duration_s": 295},
+    {"ts": ts(2290), "event": "dispatch_end", "status": "completed", "total": 3, "succeeded": 3, "failed": 0, "duration_s": 310},
+])
 write("k-failed.jsonl", [
     {"ts": ts(2000), "event": "dispatch_start", "mode": "wave", "repo": "olympus-platform", "plan": "k-failed.plan"},
     {"ts": ts(1995), "event": "seat_dispatch", "task_id": "0", "agent": "devops", "branch": "feat/k-failed", "wave": 1, "provider": "local"},
@@ -1918,6 +1940,9 @@ case "$1 $2" in
       case "$branch" in
         feat/k-blocked) printf '[{"number":101,"title":"Blocked PR","state":"OPEN","url":"https://example.invalid/pr/101"}]\n' ;;
         feat/k-ready)   printf '[{"number":102,"title":"Ready PR","state":"OPEN","url":"https://example.invalid/pr/102"}]\n' ;;
+        feat/k-twotail)  printf '[{"number":301,"title":"Two tail","state":"OPEN","url":"https://example.invalid/pr/301"}]\n' ;;
+        feat/k-twocolon) printf '[{"number":302,"title":"Two colon","state":"OPEN","url":"https://example.invalid/pr/302"}]\n' ;;
+        feat/k-tworev)   printf '[{"number":303,"title":"Two rev","state":"OPEN","url":"https://example.invalid/pr/303"}]\n' ;;
         *) printf '[]\n' ;;
       esac
     fi ;;
@@ -1925,6 +1950,9 @@ case "$1 $2" in
     case "$3" in
       101) printf '{"number":101,"title":"Blocked PR","state":"OPEN","isDraft":false,"mergeStateStatus":"BLOCKED","url":"https://example.invalid/pr/101","headRefName":"feat/k-blocked","comments":[{"id":"IC_101_1","url":"https://example.invalid/pr/101#c1","createdAt":"%s","body":"CRITIC K BLOCKED ROUND 1: BLOCK-FIX\\nTwo findings in the body."}],"reviews":[]}\n' "$NOW" ;;
       102) printf '{"number":102,"title":"Ready PR","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","url":"https://example.invalid/pr/102","headRefName":"feat/k-ready","comments":[{"id":"IC_102_1","url":"https://example.invalid/pr/102#c1","createdAt":"%s","body":"CRITIC K READY: SAFE-TO-MERGE\\nAll clear in the body."},{"id":"IC_102_2","url":"https://example.invalid/pr/102#c2","createdAt":"%s","body":"Starting work, nothing to see."}],"reviews":[{"id":"PRR_1","url":"https://example.invalid/pr/102#r1","submittedAt":"%s","state":"APPROVED","body":"SECURITY CRITIC K READY ROUND 1\\nVerdict: SAFE-TO-MERGE\\nNo secrets in the body."}]}\n' "$NOW" "$NOW" "$NOW" ;;
+      301) printf '{"number":301,"title":"Two tail","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","url":"https://example.invalid/pr/301","headRefName":"feat/k-twotail","comments":[{"id":"IC_301","url":"https://example.invalid/pr/301#c1","createdAt":"%s","body":"CRITIC FLOOR V3A BLOCK-FIX SAFE-TO-MERGE\\nTwo tokens, no colon, in the body."}],"reviews":[]}\n' "$NOW" ;;
+      302) printf '{"number":302,"title":"Two colon","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","url":"https://example.invalid/pr/302","headRefName":"feat/k-twocolon","comments":[{"id":"IC_302","url":"https://example.invalid/pr/302#c1","createdAt":"%s","body":"CRITIC FLOOR V3A: BLOCK-FIX SAFE-TO-MERGE\\nTwo tokens after a colon, in the body."}],"reviews":[]}\n' "$NOW" ;;
+      303) printf '{"number":303,"title":"Two rev","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","url":"https://example.invalid/pr/303","headRefName":"feat/k-tworev","comments":[{"id":"IC_303","url":"https://example.invalid/pr/303#c1","createdAt":"%s","body":"CRITIC FLOOR V3A SAFE-TO-MERGE BLOCK-FIX\\nReversed two tokens, no colon, in the body."}],"reviews":[]}\n' "$NOW" ;;
       *) exit 1 ;;
     esac ;;
   "api repos/testowner/olympus-platform/issues/900/comments"*)
@@ -1973,6 +2001,10 @@ assert_py "its seat is merged as foreign and reads unknown, never running" "$K_O
   'S["9"]["dispatch_id"]=="k-offline" and S["9"]["foreign"] is True and S["9"]["status"]=="unknown" and S["9"]["pipeline"]=="blocked" and d["summary"]["running"]==1'
 assert_py "a verdict quoted on the first line of the newest comment is no BLOCK: PR 102 stays ready" "$K_ON" \
   'not any(e["type"]=="critic_block" and e["pr"]==102 for e in d["needs_you"]) and any(e["type"]=="ready_to_merge" and e["pr"]==102 for e in d["needs_you"])'
+assert_py "two verdict tokens on the first line (no colon, colon, reversed): CLEAN PRs 301-303 are neither ready nor blocked" "$K_ON" \
+  'not any(e["pr"] in (301,302,303) for e in d["needs_you"]) and d["summary"]["needs_you"]==6'
+assert_py "those three PRs were looked at, not skipped" "$K_ON" \
+  '(lambda c: c["status"]=="ok" and c["looked_at"]==5)({c["check"]: c for c in d["needs_you_meta"]["checks"]}["ready_to_merge"])'
 assert_py "the queued plan shows why it is blocked, in place" "$K_ON" \
   '(lambda q: q["blocked"] and q["blocked_by"]["type"] in ("prd_proposed","missing_variable") and q["blocked_by"]["source"]["kind"]=="file")({q["plan_basename"]: q for q in d["queue"]}["k-queued.plan"])'
 assert_py "a reason stored by queue.sh block wins and is marked so" "$K_ON" \
