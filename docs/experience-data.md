@@ -305,9 +305,14 @@ Rules:
   the slug matches.
 - Turn it off with `--no-gh` or `FLEET_DESK_NO_GH=1` (status `disabled`).
 
-The live projector (`scripts/desk_live.py`) runs a second, smaller enrichment
-under the same rules for the Ops Floor: one issue milestone per plan and one PR
-per branch. See [Repo, issue, task line and PR](#repo-issue-task-line-and-pr-issue-72).
+The live projector (`scripts/desk_live.py`) runs a second enrichment under the
+same rules for the Ops Floor: one issue milestone per plan and one PR per
+branch (see [Repo, issue, task line and PR](#repo-issue-task-line-and-pr-issue-72)),
+and for Floor v3 the critic verdicts on the PRs in play, the repository
+variable names, the open milestones and the newest merged PRs (see
+[NEEDS YOU, INITIATIVES and blocked queue entries](#needs-you-initiatives-and-blocked-queue-entries-floor-v3-wave-a)).
+Comment and issue bodies are read in-process to find a verdict or an exit
+criterion sentence and are never published.
 
 ## Snapshot (optional, shareable)
 
@@ -608,6 +613,7 @@ scripts/dispatch.sh ─┘         │                start / settle, best effor
 | `status` | `queued` · `running` · `settled` |
 | `dispatch_id` | Set when a dispatch claims the plan; matches the event-stream id |
 | `settled_at`, `settled_status` | Written at `dispatch_end` (`completed` · `aborted`) |
+| `blocked` | Optional. A reason set by `queue.sh block <plan> <reason>` (the queue runner sets it when a plan cannot start, an operator can too); `queue.sh unblock` clears it. The projection shows it as `queue[].blocked` and the runner skips the plan while it is set |
 
 `entries` is **ordered**: position 1 is next. Order is intent, never motion.
 
@@ -839,7 +845,7 @@ Rules the projector enforces:
   `live.json` is written either way;
 * one question per run: answers (and failures) are cached per projection and
   for 300 s across projections, so the watcher does not ask the same question
-  every two seconds, and a projection spends at most 24 gh calls (the rest are
+  every two seconds, and a projection spends at most 60 gh calls (the rest are
   skipped with a budget reason). An idle desk with nothing to look up makes no
   call at all;
 * a repo name in the stream is a directory name, so the slug asked of gh is
@@ -874,6 +880,110 @@ are history); each seat card reads repo, issue and milestone (with a
 task line, the status clause, the branch dim, and the PR number and title
 when one exists; UP NEXT and LANDED TODAY rows lead with the repo and carry
 the issue or PR number when present.
+
+### NEEDS YOU, INITIATIVES and blocked queue entries (Floor v3, wave A)
+
+Law: [`docs/proposals/floor-v3-purpose.md`](proposals/floor-v3-purpose.md)
+§ 4.2, § 4.4 and § 4.5. The page exists so the owner never has to ask "is
+anything waiting on me" and "where does each initiative stand". Both answers
+are projected as data first; the page (wave v3-B) only reads them.
+
+**The honesty rule: `needs_you` never invents an item.** Every entry cites
+where it came from (a comment id, a stream event, or a file and line) and
+carries a `verified` flag. A check that could not run (gh absent, no
+checkout on this machine) is listed in `needs_you_meta.checks` as `skipped`
+with its reason, so the page can say "critic verdicts unverified" instead of
+"nothing needs you". A check that ran and found nothing is `ok`.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `needs_you[]` | array | One entry per item, **newest first** by `at`. Shape below |
+| `needs_you_meta` | object | `{count, unverified, checks[], comment_lookback_days, quiet_after_s}`. `checks[]` has one `{check, status, reason, looked_at}` per type: `status` is `ok` or `skipped`, `looked_at` how many candidates the check inspected |
+| `summary.needs_you` | int | `len(needs_you)`, for the status strip |
+| `queue[].blocked` | string\|null | Why a queued plan is not ready, in place: the reason `scripts/queue.sh block` stored, else the text of the NEEDS YOU item that names the plan (a PRD row awaiting sign-off, a variable unset) or `PR N awaits merge` when a ready PR sits on one of the plan's branches. `null` when nothing names it |
+| `queue[].blocked_by` | object\|null | `{type, source}`: the item type (`queue` for a stored reason) and the same `source` object the item carries |
+| `initiatives[]` | array | One row per open milestone with activity in the last 30 days, in each repo the queue or the day names. Shape below |
+| `initiatives_meta` | object | `{count, repos[], active_days, plans_seen}`; `repos[]` says per repo whether gh listed its milestones (`verified`) or the row is a fallback (`skipped` + reason) |
+
+`needs_you[]` entry:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `type` | string | `critic_block` · `ready_to_merge` · `quiet_seat` · `failed_dispatch` · `prd_proposed` · `missing_variable` |
+| `text` | string | One line in plain words, ≤ 160 chars, scrubbed |
+| `action` | string | The one action: `open the comment` · `merge` · `check the log` · `see the output` · `approve or edit` · `set it` |
+| `source` | object | Where the item came from; `kind` is `comment`, `pr`, `stream` or `file` (fields below) |
+| `verified` | bool | `true` when the fact was confirmed at its source. Stream and file items always are; a gh item is `true` only when gh answered; a contract variable that could not be checked is listed with `false` |
+| `at` | string\|null | The time that orders the list: the comment time, the stream event time, or the queue entry's `added_at` for file items |
+| `repo` / `branch` / `pr` / `plan` | mixed | What the item names, so the queue and the seat cards can join to it; each `null` when not applicable |
+
+Types, their rule and their source:
+
+| Type | Rule | `source` |
+|------|------|----------|
+| `critic_block` | The newest comment of a critic thread on an open PR, or on the findings issue a plan's critic seat posts to, is `BLOCK-FIX`, `BLOCK-ESCALATE`, `BLOCK-CLOSE` or `BLOCK`, and no fix wave is running or queued for that branch or PR (a running seat on the branch, or a queued or running plan whose file lists the branch or whose header names the PR). Through gh | `{kind: comment, repo, comment_id, url, pr, issue, verdict, round, stem}` |
+| `ready_to_merge` | The PR is open, not a draft, every critic thread's newest verdict is `SAFE-TO-MERGE`, `SAFE` or `APPROVE-MERGE`, and `mergeStateStatus` is `CLEAN` (`UNKNOWN`, `BEHIND`, `DIRTY`, `BLOCKED` are not ready). Through gh | `{kind: pr, repo, pr, url, merge_state, comments[]}` (the verdict comments, reduced as below) |
+| `quiet_seat` | A running seat with `quiet: true` (no heartbeat for `quiet_after_s`, 90 s). From the stream | `{kind: stream, dispatch_id, event: seat_heartbeat or seat_dispatch, task_id, ts}` |
+| `failed_dispatch` | A `today[]` row whose `outcome` is `failed` or `aborted`. From the stream | `{kind: stream, dispatch_id, stream (basename), event: dispatch_end, ts}` |
+| `prd_proposed` | A queued plan names `S<n>` and a table row whose first cell is `S<n>` under `docs/prd/` of the target checkout carries `PROPOSED` and not `ACCEPTED`. Grep of the checkout | `{kind: file, checkout (repo name), file (relative to it), line, named_by (plan basename)}` |
+| `missing_variable` | A queued plan names an `UPPER_SNAKE` name, a row of `docs/operations/env-vars-*.md` in the target checkout says it comes from a repository variable (or secret), and `gh variable list` (or `gh secret list`, names only) does not have it. When gh could not answer the entry is kept with `verified: false` and the text says `not checked` | `{kind: file, checkout, file, line, named_by, lookup, reason}` |
+
+The critic first-line convention, as read: the first line of the comment
+carries the word `CRITIC`; the verdict is on that line, else it opens a later
+line of its own (`BLOCK-FIX on two items`, `Verdict: SAFE-TO-MERGE`); a
+verdict quoted mid-sentence never counts; `ROUND n` names the round (1 when
+absent). A thread is the heading of the first line (its leading run of
+upper-case words, verdict and round removed), and the newest comment of each
+thread is its current verdict, so one critic's re-review replaces its own
+earlier round and never another critic's. PR comments and PR reviews are
+read from `gh pr view`; findings-issue comments from
+`gh api .../issues/N/comments?since=` (7 days) and attributed to a PR by the
+`PR N` it names or the branch name it carries. What is published of a
+comment is `{id, url, at, kind, verdict, round, stem}`: **never the body**.
+Bodies are read in-process to find the verdict and the attribution, and
+dropped.
+
+The target checkout for the file checks is `FLEET_CHECKOUTS` (colon-separated
+roots holding `<repo>/`), else the fetch point `scripts/run-remote.sh` keeps at
+`~/dev/<repo>`, else a sibling of this repo. Only the repo name and a path
+relative to it are published, never where the checkout is. No checkout on
+this machine marks the check `skipped`.
+
+`initiatives[]` row:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `repo` / `title` / `number` / `url` | mixed | The milestone. `number` and `url` are `null` on a fallback row |
+| `lookup` / `reason` | string | `verified` when gh listed the milestone, else `skipped` and why (the row then comes from the streams and the queue alone) |
+| `epic` / `epic_title` | int\|null, string\|null | The issue of the milestone whose title carries the word `epic`, when there is one |
+| `exit` / `exit_lookup` | string\|null | The exit criterion sentence from the epic body: the text after a line opening `Exit criterion:`, `Exit:`, `Done when:` or `Definition of done:`, first sentence, ≤ 200 chars, scrubbed. `null` when the body carries none (`exit_lookup: verified`) or when it was not read (`skipped`). The body is read in-process only; nothing else leaves it |
+| `waves` | object | `{landed, planned, landed_ids[], planned_ids[]}`. Planned: the distinct wave ids of the plans that belong to the milestone, from the plan naming convention (`W2-A` in the header, else `-w2a-` in the file name) across `wave-plans/` and the queue. Landed: those whose plan landed today in the streams or whose branch has a merged PR (`gh pr list --state merged`, the newest 100) |
+| `open_issues` | int\|null | From the milestone; `null` on a fallback row |
+| `last_landed` | object\|null | `{number, title, branch, merged_at, milestone}` of the newest merged PR whose branch belongs to a plan of the milestone, or that carries the milestone, or whose title names one of its issues |
+| `updated_at` | string\|null | Milestone activity time; rows sort by it, newest first |
+| `plans` | array | Basenames of the plans that belong to the milestone: header names an issue of the milestone or its epic, or carries the milestone title |
+| `source` | object | What each field came from and whether that lookup was `verified` |
+
+Fallback rows (gh absent, disabled, unauthenticated or over budget): one row
+per track name the plan headers name before their wave id ("Assistant
+Channel W2-A: …" reads as "Assistant Channel"), over the plans landed today,
+queued, or live; `lookup: skipped` with the reason, milestone number, open
+issues, exit and last landed all `null`, and `waves` from the streams and
+the queue alone.
+
+Rules the projector enforces:
+
+* every entry cites its source and says whether it was verified; a check
+  that could not run is `skipped` with a reason in `needs_you_meta.checks`,
+  never silently empty;
+* no comment body, issue body or PR body reaches the projection; no checkout
+  path either;
+* a queued plan is still only `queued`; `blocked` explains why it is not
+  ready, it never claims the plan ran;
+* **a replay carries neither `needs_you[]` nor `initiatives[]`** (both `[]`),
+  for the same reason it carries no queue and no day;
+* the gh rules are unchanged: optional, cached, budgeted (60 calls per
+  projection), never fatal, off with `--no-gh` or `FLEET_DESK_NO_GH=1`.
 
 ### Phase C — replay API
 

@@ -14,6 +14,10 @@
 #   Part J: repo, issue, task line and PR on every seat (issue 72): the
 #           parses, two repos live at once, the gh skip, verified, failing
 #           and hanging paths (fake gh on PATH, no network)
+#   Part K: NEEDS YOU and INITIATIVES (Floor v3, wave A): one fixture with a
+#           BLOCK comment, a SAFE plus CLEAN PR, a quiet seat, a failed
+#           dispatch, a PROPOSED row and a missing variable; the six entries
+#           with gh answering, the unverified marks with gh absent
 #
 # Offline by design: nothing here binds a socket or touches the network.
 #
@@ -1720,6 +1724,287 @@ grep -q 'gh_enrichment' "$REPO_DIR/docs/experience-data.md" \
   && ok "gh_enrichment is documented in the live schema" || bad "gh_enrichment is documented in the live schema"
 grep -q 'repos\[\]' "$REPO_DIR/docs/experience-data.md" \
   && ok "repos[] is documented in the live schema" || bad "repos[] is documented in the live schema"
+# ── Part K: NEEDS YOU, INITIATIVES and blocked queue entries (Floor v3-A) ──
+echo "== Part K: NEEDS YOU + INITIATIVES (Floor v3, wave A) =="
+
+# The parses, on the projector's own functions.
+assert_fn "critic_record reads a verdict from the first line" \
+  'mod.critic_record("IC_1", "https://example.invalid/c/1", "2026-09-13T10:00:00Z", "CRITIC TILE CONNECT GUIDE ROUND 2: SAFE-TO-MERGE\nAll clear.")["verdict"]=="SAFE-TO-MERGE"'
+assert_fn "critic_record reads the round and the heading without the verdict" \
+  '(lambda r: r["round"]==2 and r["stem"]=="CRITIC TILE CONNECT GUIDE")(mod.critic_record("IC_1", "u", "2026-09-13T10:00:00Z", "CRITIC TILE CONNECT GUIDE ROUND 2: SAFE-TO-MERGE\nAll clear."))'
+assert_fn "critic_record reads a verdict that opens a body line" \
+  'mod.critic_record("IC_2", "u", "2026-09-13T10:00:00Z", "CRITIC W2A IRIS SCAFFOLD ROUND 4\nVerdict: BLOCK-FIX on B4.\n")["verdict"]=="BLOCK-FIX"'
+assert_fn "a verdict quoted mid-sentence is never a verdict" \
+  'mod.critic_record("IC_3", "u", "2026-09-13T10:00:00Z", "CRITIC K NOTE\nThe options were SAFE-TO-MERGE or BLOCK-FIX.") is None'
+assert_fn "a comment whose first line is not a critic heading is ignored" \
+  'mod.critic_record("IC_4", "u", "2026-09-13T10:00:00Z", "Starting work on the block-fix: BLOCK-FIX items 1 and 2") is None'
+assert_fn "the heading stops at the first lower-case word" \
+  'mod.critic_record("IC_5", "u", "2026-09-13T10:00:00Z", "API CRITIC W2C PR 2833 head fae97478 at start: BLOCK-FIX")["stem"]=="API CRITIC W2C PR 2833"'
+assert_fn "the body never leaves critic_record" \
+  '(lambda c: all(not k.startswith("_") for k in c) and "Two findings" not in str(c) and "feat/x" not in str(c))(mod.public_comment(mod.critic_record("IC_6", "u", "2026-09-13T10:00:00Z", "CRITIC K: BLOCK-FIX\nTwo findings in feat/x.")))'
+assert_fn "latest_round keeps the newest comment per heading" \
+  '[(r["stem"], r["round"], r["verdict"]) for r in mod.latest_round([mod.critic_record("a","u","2026-09-13T09:00:00Z","CRITIC K: BLOCK-FIX\n"), mod.critic_record("b","u","2026-09-13T10:00:00Z","CRITIC K ROUND 2: SAFE-TO-MERGE\n"), mod.critic_record("c","u","2026-09-13T09:30:00Z","SECURITY CRITIC K: SAFE\n")])]==[("CRITIC K",2,"SAFE-TO-MERGE"),("SECURITY CRITIC K",1,"SAFE")]'
+assert_fn "wave_id reads W2-A from the header and -w2a- from the file name" \
+  'mod.wave_id("Assistant Channel W2-A: the Iris service", "x.plan")=="W2-A" and mod.wave_id("", "2026-09-12-w2a-iris.plan")=="W2-A" and mod.wave_id("W0: contract", "x")=="W0" and mod.wave_id("no wave", "x.plan") is None'
+assert_fn "track_name is the header before the wave id" \
+  'mod.track_name("Assistant Channel W2-A: the Iris service")=="Assistant Channel" and mod.track_name("Fix wave after BLOCK-FIX") is None'
+assert_fn "plan_refs reads S numbers, variables, the findings issue and the repo" \
+  '(lambda r: r["s_numbers"]==[11] and r["variables"]==["IRIS_PUBLIC_URL"] and r["findings_issues"]==[2340] and r["repo"]=="olympus-platform" and r["epic"]==2797 and r["prs"]==[2829])(mod.plan_refs("# W2-A fixes. PR 2829, epic 2797.\n# DISPATCH: ./scripts/dispatch.sh git@github.com:x/olympus-platform.git p.plan --auto\n1 | devops | Move S11 to ACCEPTED, set IRIS_PUBLIC_URL. Post ONE comment on issue 2340. | feat/x\n", "p.plan"))'
+
+# ── the fixture: one of each ────────────────────────────────────────────────
+K_PLANS="$TMP/plans-k"; mkdir -p "$K_PLANS"
+K_DISPATCH='# DISPATCH: ./scripts/dispatch.sh git@example.invalid:testowner/olympus-platform.git plan --auto'
+cat > "$K_PLANS/k-w0.plan" <<PLAN
+# Track K W0: the contract. Issue 500, epic 500.
+$K_DISPATCH
+1 | docs-writer | Write the contract. | feat/k-w0
+PLAN
+cat > "$K_PLANS/k-blocked.plan" <<PLAN
+# Track K W1-A: the blocked wave. Issue 501, epic 500.
+$K_DISPATCH
+1 | devops | Do the blocked thing. | feat/k-blocked
+2 | backend-critic | READ-ONLY REVIEW. Post ONE comment on issue 900 with SAFE-TO-MERGE or BLOCK-FIX. | feat/k-blocked
+PLAN
+cat > "$K_PLANS/k-ready.plan" <<PLAN
+# Track K W1-B: the ready wave. Issue 502, epic 500.
+$K_DISPATCH
+1 | go-backend | Do the ready thing. | feat/k-ready
+PLAN
+cat > "$K_PLANS/k-failed.plan" <<PLAN
+# Track K W1-C: the failed wave. Issue 504, epic 500.
+$K_DISPATCH
+1 | devops | Fail loudly. | feat/k-failed
+PLAN
+cat > "$K_PLANS/k-live.plan" <<PLAN
+# Track K W1-D: the quiet wave. Issue 505, epic 500.
+$K_DISPATCH
+1 | devops | Be quiet for a long time. | feat/k-quiet
+PLAN
+cat > "$K_PLANS/k-queued.plan" <<PLAN
+# Track K W2-A: the next wave. Issue 503, epic 500.
+$K_DISPATCH
+1 | devops | Move S11 to ACCEPTED and set IRIS_PUBLIC_URL from repository variables. | feat/k-next
+PLAN
+
+K_Q="$TMP/queue-k.json"
+python3 - "$K_Q" "$K_PLANS" <<'KQ'
+import json, sys
+out, plans = sys.argv[1], sys.argv[2]
+def entry(name, status, dispatch_id=None, blocked=None):
+    e = {"plan": plans + "/" + name, "repo": "olympus-platform", "purpose": "", "issue": None,
+         "added_at": "2026-09-12T00:00:00Z", "status": status,
+         "dispatch_id": dispatch_id, "settled_at": None, "settled_status": None}
+    if blocked is not None:
+        e["blocked"] = blocked
+    return e
+json.dump({"schema": "fleet-queue/1", "updated_at": "2026-09-12T00:00:00Z", "entries": [
+    entry("k-w0.plan", "settled", "k-w0"),
+    entry("k-blocked.plan", "settled", "k-landed-blocked"),
+    entry("k-ready.plan", "settled", "k-landed-ready"),
+    entry("k-failed.plan", "settled", "k-failed"),
+    entry("k-live.plan", "running", "k-live"),
+    entry("k-queued.plan", "queued"),
+    entry("k-held.plan", "queued", blocked="held by the operator"),
+]}, open(out, "w"), indent=2)
+KQ
+
+K_DIR="$TMP/events-k"; mkdir -p "$K_DIR"
+python3 - "$K_DIR" <<'KFIX'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+out = sys.argv[1]
+now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+midnight = midnight.astimezone(timezone.utc).replace(tzinfo=None)
+def ts(d):
+    return max(now - timedelta(seconds=d), midnight).strftime("%Y-%m-%dT%H:%M:%SZ")
+def write(name, rows):
+    with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+        for i, row in enumerate(rows, 1):
+            row.update({"schema": "fleet-events/1", "seq": i, "dispatch_id": name[:-6]})
+            fh.write(json.dumps(row) + "\n")
+def landed(name, plan, branch, agent, start):
+    write(name, [
+        {"ts": ts(start), "event": "dispatch_start", "mode": "wave", "repo": "olympus-platform", "plan": plan},
+        {"ts": ts(start - 5), "event": "seat_dispatch", "task_id": "0", "agent": agent, "branch": branch, "wave": 1, "provider": "local"},
+        {"ts": ts(start - 300), "event": "seat_exit", "task_id": "0", "agent": agent, "branch": branch, "wave": 1, "status": "success", "exit": 0, "duration_s": 295},
+        {"ts": ts(start - 305), "event": "dispatch_end", "status": "completed", "total": 1, "succeeded": 1, "failed": 0, "duration_s": 305},
+    ])
+landed("k-landed-blocked.jsonl", "k-blocked.plan", "feat/k-blocked", "devops", 4000)
+landed("k-landed-ready.jsonl", "k-ready.plan", "feat/k-ready", "go-backend", 3000)
+write("k-failed.jsonl", [
+    {"ts": ts(2000), "event": "dispatch_start", "mode": "wave", "repo": "olympus-platform", "plan": "k-failed.plan"},
+    {"ts": ts(1995), "event": "seat_dispatch", "task_id": "0", "agent": "devops", "branch": "feat/k-failed", "wave": 1, "provider": "local"},
+    {"ts": ts(1558), "event": "seat_exit", "task_id": "0", "agent": "devops", "branch": "feat/k-failed", "wave": 1, "status": "failed", "exit": 1, "duration_s": 437},
+    {"ts": ts(1550), "event": "dispatch_end", "status": "completed", "total": 1, "succeeded": 0, "failed": 1, "duration_s": 450},
+])
+# live, one seat dispatched 600 s ago and never heard from since: quiet
+write("k-live.jsonl", [
+    {"ts": ts(610), "event": "dispatch_start", "mode": "wave", "repo": "olympus-platform", "plan": "k-live.plan"},
+    {"ts": ts(600), "event": "seat_dispatch", "task_id": "7", "agent": "devops", "branch": "feat/k-quiet", "wave": 1, "provider": "local", "attempt": 1},
+])
+KFIX
+printf 'k-live.jsonl\n' > "$K_DIR/latest"
+
+# The target repo checkout: a PRD row still PROPOSED and the env contract.
+K_CO="$TMP/checkouts"; mkdir -p "$K_CO/olympus-platform/docs/prd/pages" "$K_CO/olympus-platform/docs/operations"
+cat > "$K_CO/olympus-platform/docs/prd/pages/k.md" <<'MD'
+## 9. New strings
+| # | String | Where | Note |
+|---|---|---|---|
+| S10 | `Connected` | tile | New. ACCEPTED, co-founder sign-off 2026-09-12. |
+| S11 | `Not available right now.` | kill switch | New. PROPOSED. |
+MD
+cat > "$K_CO/olympus-platform/docs/operations/env-vars-iris.md" <<'MD'
+# Env contract (Iris)
+| Env var | Value (prod) | Local default | Set in prod by | Notes |
+|---|---|---|---|---|
+| `PORT` | `8080` | `8082` | Cloud Run | Injected. |
+| `OLYMPUS_API_URL` | `https://api.example.invalid` | `http://localhost:8080` | `deploy-iris.yml`, from repository variable `OLYMPUS_API_URL` | The API origin. |
+| `IRIS_PUBLIC_URL` | `https://iris.example.invalid` | `http://localhost:8082` | `deploy-iris.yml`, from repository variable `IRIS_PUBLIC_URL` | This service's own origin. |
+MD
+
+# The fake gh: canned answers, every call logged, no network.
+K_BIN="$TMP/bin-k"; mkdir -p "$K_BIN"; K_LOG="$TMP/gh-k.log"
+cat > "$K_BIN/gh" <<'SHIM'
+#!/usr/bin/env bash
+echo "$*" >> "${GH_SHIM_LOG:?}"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+branch=""; prev=""; state=""; json=""
+for a in "$@"; do
+  [ "$prev" = "--head" ] && branch="$a"
+  [ "$prev" = "--state" ] && state="$a"
+  [ "$prev" = "--json" ] && json="$a"
+  prev="$a"
+done
+case "$1 $2" in
+  "auth status") exit 0 ;;
+  "issue view")
+    if [ "$json" = "body" ]; then
+      [ "$3" = "500" ] && printf '{"body":"# Epic\\n\\nSome prose.\\n\\n**Exit criterion:** five distinct testers complete a checkout. Then more.\\n"}\n' || printf '{"body":"no criterion here"}\n'
+    else
+      printf '{"number":%s,"milestone":{"title":"Track K"}}\n' "$3"
+    fi ;;
+  "issue list")
+    printf '[{"number":500,"title":"[Track K] Epic: the whole thing","state":"OPEN"},{"number":501,"title":"W1-A","state":"CLOSED"},{"number":502,"title":"W1-B","state":"OPEN"},{"number":503,"title":"W2-A","state":"OPEN"},{"number":504,"title":"W1-C","state":"OPEN"},{"number":505,"title":"W1-D","state":"OPEN"}]\n' ;;
+  "pr list")
+    if [ "$state" = "merged" ]; then
+      printf '[{"number":95,"title":"feat: the contract (#500)","headRefName":"feat/k-w0","mergedAt":"2026-09-01T10:00:00Z","milestone":null}]\n'
+    else
+      case "$branch" in
+        feat/k-blocked) printf '[{"number":101,"title":"Blocked PR","state":"OPEN","url":"https://example.invalid/pr/101"}]\n' ;;
+        feat/k-ready)   printf '[{"number":102,"title":"Ready PR","state":"OPEN","url":"https://example.invalid/pr/102"}]\n' ;;
+        *) printf '[]\n' ;;
+      esac
+    fi ;;
+  "pr view")
+    case "$3" in
+      101) printf '{"number":101,"title":"Blocked PR","state":"OPEN","isDraft":false,"mergeStateStatus":"BLOCKED","url":"https://example.invalid/pr/101","headRefName":"feat/k-blocked","comments":[{"id":"IC_101_1","url":"https://example.invalid/pr/101#c1","createdAt":"%s","body":"CRITIC K BLOCKED ROUND 1: BLOCK-FIX\\nTwo findings in the body."}],"reviews":[]}\n' "$NOW" ;;
+      102) printf '{"number":102,"title":"Ready PR","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","url":"https://example.invalid/pr/102","headRefName":"feat/k-ready","comments":[{"id":"IC_102_1","url":"https://example.invalid/pr/102#c1","createdAt":"%s","body":"CRITIC K READY: SAFE-TO-MERGE\\nAll clear in the body."},{"id":"IC_102_2","url":"https://example.invalid/pr/102#c2","createdAt":"%s","body":"Starting work, nothing to see."}],"reviews":[{"id":"PRR_1","url":"https://example.invalid/pr/102#r1","submittedAt":"%s","state":"APPROVED","body":"SECURITY CRITIC K READY ROUND 1\\nVerdict: SAFE-TO-MERGE\\nNo secrets in the body."}]}\n' "$NOW" "$NOW" "$NOW" ;;
+      *) exit 1 ;;
+    esac ;;
+  "api repos/testowner/olympus-platform/issues/900/comments"*)
+    printf '[{"id":9001,"html_url":"https://example.invalid/issues/900#c9001","created_at":"%s","body":"CRITIC K BLOCKED ROUND 2: BLOCK-FIX\\nStill open on PR 101 in the body."},{"id":9002,"html_url":"https://example.invalid/issues/900#c9002","created_at":"%s","body":"CRITIC K NOTE\\nThe options were SAFE-TO-MERGE or BLOCK-FIX, on PR 102."}]\n' "$NOW" "$NOW" ;;
+  "api repos/testowner/olympus-platform/milestones"*)
+    printf '[{"title":"Track K","number":1,"html_url":"https://example.invalid/milestone/1","open_issues":5,"closed_issues":1,"updated_at":"%s"},{"title":"Old Track","number":2,"html_url":"https://example.invalid/milestone/2","open_issues":3,"closed_issues":0,"updated_at":"2026-01-01T00:00:00Z"}]\n' "$NOW" ;;
+  "variable list") printf '[{"name":"OLYMPUS_API_URL"}]\n' ;;
+  "secret list") printf '[]\n' ;;
+  *) exit 1 ;;
+esac
+SHIM
+chmod +x "$K_BIN/gh"
+
+# ── with gh answering: the six entries ──────────────────────────────────────
+K_ON="$TMP/out/live-k-on.json"; : > "$K_LOG"
+PATH="$K_BIN:$PATH" GH_SHIM_LOG="$K_LOG" FLEET_GH_OWNER=testowner FLEET_CHECKOUTS="$K_CO" \
+  python3 "$DESK_LIVE" --once --events-dir "$K_DIR" --queue-file "$K_Q" --out "$K_ON" >/dev/null 2>&1 \
+  && ok "--once exits 0 with the v3 fixture and gh answering" || bad "--once exits 0 with the v3 fixture and gh answering"
+assert_py "six entries, one of each type" "$K_ON" \
+  'sorted(e["type"] for e in d["needs_you"])==["critic_block","failed_dispatch","missing_variable","prd_proposed","quiet_seat","ready_to_merge"]'
+assert_py "newest first" "$K_ON" \
+  '[e["at"] for e in d["needs_you"]]==sorted([e["at"] for e in d["needs_you"]], reverse=True)'
+assert_py "every entry has a type, a one-line text, one action, a source and a verified flag" "$K_ON" \
+  'all(set(("type","text","action","source","verified","at","repo","branch","pr","plan"))<=set(e) and e["text"] and "\n" not in e["text"] and e["source"].get("kind") for e in d["needs_you"])'
+assert_py "the BLOCK: the newest round on the findings issue, cited by comment id" "$K_ON" \
+  '(lambda e: e["pr"]==101 and e["branch"]=="feat/k-blocked" and "round 2" in e["text"] and "BLOCK-FIX" in e["text"] and e["action"]=="open the comment" and e["source"]["kind"]=="comment" and e["source"]["comment_id"]==9001 and e["source"]["issue"]==900 and e["verified"] is True)([e for e in d["needs_you"] if e["type"]=="critic_block"][0])'
+assert_py "the ready PR: every latest verdict safe and merge state CLEAN, cited by PR and comments" "$K_ON" \
+  '(lambda e: e["pr"]==102 and e["action"]=="merge" and e["source"]["kind"]=="pr" and e["source"]["merge_state"]=="CLEAN" and sorted(c["verdict"] for c in e["source"]["comments"])==["SAFE-TO-MERGE","SAFE-TO-MERGE"] and {c["kind"] for c in e["source"]["comments"]}=={"comment","review"} and e["verified"] is True)([e for e in d["needs_you"] if e["type"]=="ready_to_merge"][0])'
+assert_py "the quiet seat: cited by its stream event" "$K_ON" \
+  '(lambda e: e["branch"]=="feat/k-quiet" and "devops" in e["text"] and "quiet for" in e["text"] and e["action"]=="check the log" and e["source"]["kind"]=="stream" and e["source"]["dispatch_id"]=="k-live" and e["source"]["event"]=="seat_dispatch" and e["source"]["task_id"]=="7" and e["verified"] is True)([e for e in d["needs_you"] if e["type"]=="quiet_seat"][0])'
+assert_py "the failed dispatch: cited by dispatch_end, stream named by basename" "$K_ON" \
+  '(lambda e: "failed after" in e["text"] and e["action"]=="see the output" and e["source"]=={"kind":"stream","dispatch_id":"k-failed","stream":"k-failed.jsonl","event":"dispatch_end","ts":e["at"]} and e["verified"] is True)([e for e in d["needs_you"] if e["type"]=="failed_dispatch"][0])'
+assert_py "the PROPOSED row: cited by file and line in the target checkout" "$K_ON" \
+  '(lambda e: e["text"].startswith("S11 awaits sign-off") and e["action"]=="approve or edit" and e["source"]=={"kind":"file","checkout":"olympus-platform","file":"docs/prd/pages/k.md","line":5,"named_by":"k-queued.plan"} and e["plan"]=="k-queued.plan" and e["verified"] is True)([e for e in d["needs_you"] if e["type"]=="prd_proposed"][0])'
+assert_py "the missing variable: named by the plan, required by the contract, absent from gh" "$K_ON" \
+  '(lambda e: e["text"].startswith("IRIS_PUBLIC_URL unset") and e["action"]=="set it" and e["source"]["kind"]=="file" and e["source"]["file"]=="docs/operations/env-vars-iris.md" and e["source"]["line"]==6 and e["source"]["lookup"]=="verified" and e["verified"] is True)([e for e in d["needs_you"] if e["type"]=="missing_variable"][0])'
+assert_py "a variable the contract lists and gh has is not an item" "$K_ON" \
+  'not any("OLYMPUS_API_URL" in e["text"] for e in d["needs_you"])'
+assert_py "every check ran" "$K_ON" \
+  'all(c["status"]=="ok" for c in d["needs_you_meta"]["checks"]) and d["needs_you_meta"]["count"]==6 and d["needs_you_meta"]["unverified"]==0'
+assert_py "the top line counts needs_you" "$K_ON" \
+  'd["summary"]["needs_you"]==6'
+assert_py "the queued plan shows why it is blocked, in place" "$K_ON" \
+  '(lambda q: q["blocked"] and q["blocked_by"]["type"] in ("prd_proposed","missing_variable") and q["blocked_by"]["source"]["kind"]=="file")({q["plan_basename"]: q for q in d["queue"]}["k-queued.plan"])'
+assert_py "a reason stored by queue.sh block wins and is marked so" "$K_ON" \
+  '(lambda q: q["blocked"]=="held by the operator" and q["blocked_by"]["type"]=="queue")({q["plan_basename"]: q for q in d["queue"]}["k-held.plan"])'
+assert_py "one initiative row per active milestone, the stale one dropped" "$K_ON" \
+  '[r["title"] for r in d["initiatives"]]==["Track K"] and d["initiatives_meta"]["repos"][0]["lookup"]=="verified"'
+assert_py "waves landed of waves planned, from streams, merged PRs, plans and queue" "$K_ON" \
+  '(lambda r: r["waves"]["landed"]==3 and r["waves"]["planned"]==6 and r["waves"]["planned_ids"]==["W0","W1-A","W1-B","W1-C","W1-D","W2-A"] and r["waves"]["landed_ids"]==["W0","W1-A","W1-B"])(d["initiatives"][0])'
+assert_py "open issues, last landed PR, epic and its exit criterion sentence" "$K_ON" \
+  '(lambda r: r["open_issues"]==5 and r["last_landed"]["number"]==95 and r["last_landed"]["title"].startswith("feat: the contract") and r["epic"]==500 and r["exit"]=="five distinct testers complete a checkout." and r["exit_lookup"]=="verified" and r["lookup"]=="verified")(d["initiatives"][0])'
+if grep -q 'in the body' "$K_ON"; then
+  bad "no comment or issue body reaches the projection"
+else
+  ok "no comment or issue body reaches the projection"
+fi
+if grep -q "$K_CO" "$K_ON"; then
+  bad "no checkout path reaches the projection"
+else
+  ok "no checkout path reaches the projection"
+fi
+[ "$(grep -c 'issue view 500 -R testowner/olympus-platform --json body' "$K_LOG")" = "1" ] \
+  && ok "the epic body is fetched once" || bad "the epic body is fetched once"
+grep -q 'variable list -R testowner/olympus-platform' "$K_LOG" \
+  && ok "variables are listed by name only" || bad "variables are listed by name only"
+
+# ── gh absent: what the streams and files alone can prove, the rest marked ──
+K_NOGH="$TMP/nogh"; mkdir -p "$K_NOGH"
+ln -sf "$(command -v python3)" "$K_NOGH/python3"
+K_PATH="$K_NOGH:/usr/bin:/bin"
+if PATH="$K_PATH" command -v gh >/dev/null 2>&1; then
+  echo "  note: gh is on the system PATH; using the disabled switch instead"
+  K_PATH="$PATH"; K_OFF_ENV="FLEET_DESK_NO_GH=1"; K_OFF_STATUS="disabled"
+else
+  K_OFF_ENV="FLEET_DESK_NO_GH="; K_OFF_STATUS="unavailable"
+fi
+K_OFF="$TMP/out/live-k-off.json"
+env PATH="$K_PATH" $K_OFF_ENV FLEET_CHECKOUTS="$K_CO" \
+  python3 "$DESK_LIVE" --once --events-dir "$K_DIR" --queue-file "$K_Q" --out "$K_OFF" >/dev/null 2>&1 \
+  && ok "--once exits 0 with gh absent" || bad "--once exits 0 with gh absent"
+assert_py "gh absent reads as $K_OFF_STATUS" "$K_OFF" "d[\"gh_enrichment\"][\"status\"]==\"$K_OFF_STATUS\""
+assert_py "the stream and file entries are still there, verified" "$K_OFF" \
+  'sorted(e["type"] for e in d["needs_you"] if e["verified"])==["failed_dispatch","prd_proposed","quiet_seat"]'
+assert_py "no BLOCK and no ready PR is invented without gh" "$K_OFF" \
+  'not any(e["type"] in ("critic_block","ready_to_merge") for e in d["needs_you"])'
+assert_py "the variable the contract requires is listed unverified, not as set" "$K_OFF" \
+  '(lambda e: e["verified"] is False and "not checked" in e["text"] and e["source"]["lookup"]=="skipped")([e for e in d["needs_you"] if e["type"]=="missing_variable"][0]) and d["needs_you_meta"]["unverified"]==1'
+assert_py "the gh checks are marked skipped with the reason" "$K_OFF" \
+  '{c["check"]: c["status"] for c in d["needs_you_meta"]["checks"]}=={"critic_block":"skipped","ready_to_merge":"skipped","quiet_seat":"ok","failed_dispatch":"ok","prd_proposed":"ok","missing_variable":"skipped"} and all(c["reason"] for c in d["needs_you_meta"]["checks"] if c["status"]=="skipped")'
+assert_py "the fallback initiative row comes from streams and queue alone and says so" "$K_OFF" \
+  '(lambda r: r["lookup"]=="skipped" and r["reason"] and r["number"] is None and r["open_issues"] is None and r["exit"] is None and r["waves"]["planned"]==4 and r["waves"]["landed"]==2 and r["waves"]["landed_ids"]==["W1-A","W1-B"] and r["source"]["landed"]=="streams of the day")({r["title"]: r for r in d["initiatives"]}["Track K"]) and d["initiatives_meta"]["repos"][0]["lookup"]=="skipped"'
+
+# A replay carries neither: the past has no present.
+K_REPLAY="$TMP/out/live-k-replay.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --replay --dispatch-id k-live --events-dir "$K_DIR" --queue-file "$K_Q" --out "$K_REPLAY" >/dev/null 2>&1
+assert_py "a replay carries no needs_you and no initiatives" "$K_REPLAY" \
+  'd["view"]=="replay" and d["needs_you"]==[] and d["initiatives"]==[]'
+
+for key in 'needs_you\[\]' 'initiatives\[\]' 'queue\[\].blocked' 'never invents'; do
+  grep -q "$key" "$REPO_DIR/docs/experience-data.md" \
+    && ok "$key is documented in the live schema" || bad "$key is documented in the live schema"
+done
+
 echo ""
 echo "----------------------------------------"
 echo "  passed: $pass   failed: $fail"
