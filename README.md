@@ -104,6 +104,7 @@ Static **Almanac** (settled record) + live **Ops Floor** (motion during dispatch
 ```bash
 make experience-open   # Almanac (file://) — companies, missions, trails
 make desk-follow       # Ops Floor at http://127.0.0.1:8777/live/ (leave open)
+make floor             # the same Floor in the terminal (reads live.json, refreshes every 5 s, q quits)
 
 # Terminal B — work that the Floor can see:
 ./scripts/dispatch.sh git@github.com:you/repo.git wave-plans/your.plan

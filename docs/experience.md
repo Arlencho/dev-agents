@@ -166,8 +166,22 @@ while serving the desk on `http://127.0.0.1:8777/live/` with SSE at `/events`.
 make desk-follow        # **recommended** — serve Floor + open browser (live, no reload)
 make desk-live          # same watcher without auto-opening the browser
 make desk-live-once     # write live.json once, no server (file:// desks)
+make floor              # the Floor in the terminal: the same live.json, plain text, refreshes every 5 s, q quits
+make floor FLOOR_FLAGS=--once    # print once and exit 0 (scripting); FLOOR_FLAGS=--color adds colour
 FLEET_EVENTS=0 ./scripts/dispatch.sh ...   # opt out of the stream entirely
 ```
+
+`make floor` (`scripts/floor_tty.py`) renders `site/experience/data/live.json`
+in the order of the page (status line, NEEDS YOU, NOW by repo, UP NEXT,
+INITIATIVES, FAILED and LANDED today) within 60 lines and 100 columns. It
+never reads the event streams, only the projection, and it applies the page's
+gate (a JSON object with `schema` `live/1`, anything else is refused, never
+painted), so it can only say what the page says: a queued plan is only queued,
+stale and offline are said in words before any number and mark every section,
+a replay carries its watermark, a key the projection lacks reads as it does on
+the page (no figure without a summary, the same empty copy for a missing or
+empty list), and no prompt, path or secret is printed. Run `make desk-live`
+(or `make desk-live-once`) in another terminal to keep the file fresh.
 
 ### Follow live (not only after finish)
 

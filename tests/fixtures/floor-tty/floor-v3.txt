@@ -1,0 +1,32 @@
+3 running, 3 up next, 2 landed, 1 failed, 1 aborted, needs you: 6, last event 3 s ago
+
+NEEDS YOU
+  devops on feat/w2a-iris-deploy quiet for 7...  check the log: run 20260913-094000-olympus-platform
+  Iris scaffold round 2 blocked by backend critic,...  open the comment: comment 9001 on issue 2340
+  PR 2829 ready to merge, every critic safe, checks clean  merge: PR 2829
+  olympus-platform W1-D security seat faile...  see the output: run 20260913-081000-olympus-platform
+  S11 awaits sign-off, named by 2026-09-13-...  approve or edit: docs/prd/pages/assistant-channel...
+  IRIS_PUBLIC_URL unset, needed by 2026-09-13-w2...  set it: docs/operations/env-vars-iris.md line 6
+
+NOW
+  olympus-platform: 2 seats live, 1 dispatch live
+    olympus-platform  go-backend  #2800 (As...  Scaffold the Iris s...  tests with go,...  20 min in
+    olympus-platform  devops  #2800  Add the deploy-iris workf...  quiet for 7 min, at...  8 min in
+  dev-agents: 1 seat live, 1 dispatch live
+    dev-agents  web-frontend  #72 (Ops...  Add the yesterday toggle...  edit, wave 1 of 1  5 min in
+
+UP NEXT
+  1.  olympus-platform  #2800  Assistant Channel W2-B: the six read...  blocked: S11 awaits sign-off
+  2.  olympus-platform  #2800  Assistant Channel W2-C: update_trip, the enforcement matri...  queued
+  3.  dev-agents  #72  Floor in the terminal: the same live.json a...  blocked: held by the operator
+
+INITIATIVES
+  No open milestone with recent activity is known to this projection.
+
+FAILED today
+  olympus-platform  Assistant Channel W1-D: the security review seat.  failed after 8 min
+  olympus-platform  2026-09-13-w1e-hosts.plan  aborted after 2 min
+
+LANDED today
+  olympus-platform  Assistant Channel W1-C: t...  landed after 30 min  PR 2829 feat(tile): consen...
+  dev-agents  Floor v3-B: the page in the...  landed after 1 h 6 min  PR 80 Floor v3-B: the page,...
