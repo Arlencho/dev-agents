@@ -38,6 +38,18 @@ REPO="${LAND_REPO:-Arlencho/olympus-platform}"
 ROOT="${LAND_ROOT:-/Users/arlenrios/Desktop/dev-projects/AI-Orchestration/olympus-platform}"
 API_URL=""
 
+# Another repo's PR must never be landed standing in the product checkout: the
+# fetch and the sweep below would run in the wrong tree. A caller that names
+# the repo names the checkout too, or is refused before anything is touched.
+if [ -n "${LAND_REPO:-}" ] && [ -z "${LAND_ROOT:-}" ]; then
+  printf 'land.sh: LAND_REPO=%s given without LAND_ROOT; refusing to stand in the default checkout\n' "$LAND_REPO" >&2
+  exit 2
+fi
+if [ ! -d "$ROOT/.git" ]; then
+  printf 'land.sh: %s is not a git checkout; refusing\n' "$ROOT" >&2
+  exit 2
+fi
+
 cd "$ROOT" || exit 1
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }

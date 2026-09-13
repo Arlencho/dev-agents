@@ -723,9 +723,9 @@ Floor. `make stops-list` prints them.
 | `key` | The dispatch id the stop belongs to; `memory-guard` for the guard |
 | `state` | `open` · `cleared` |
 | `kind` | `guard` · `second_block` · `escalate` · `close` · `unparsed` · `critic_silent` · `red_checks` · `not_clean` · `merge_refused` · `no_pr` · `pr_closed` · `no_producer` |
-| `sentence` | The first line of the critic comment (the verdict line), or the runner's own one-line reason. Scrubbed, capped, **never the body** |
+| `sentence` | The critic's verdict line **as parsed** (heading, round, verdict: `CRITIC W2B ROUND 2: BLOCK-FIX`), or the runner's own one-line reason. Never the raw first line, **never the body**. Every text field of a record goes through the task-line law of `seats[].task_line` (`desk_live.first_sentence`): first sentence only, a slash token outside this worktree reads `outside-repo`, secret shapes redacted, capped at 200 |
 | `action` | One action per kind, the words the NEEDS YOU row ends with |
-| `plan` | Basename only. No absolute path ever enters the file |
+| `plan` | Basename only. No absolute path ever enters the file, in this or any other field |
 
 Clearance is automatic: the guard's stop clears when memory recovers; a
 dispatch stop clears when its PR merges or closes (one `gh pr view` per open

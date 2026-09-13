@@ -2968,16 +2968,6 @@ def critic_record(comment_id, url, created_at, body, kind="comment"):
     if verdict is None:
         return None
     round_match = ROUND_RE.search(first)
-    stem = ROUND_RE.sub(" ", VERDICT_RE.sub(" ", first))
-    stem = re.sub(r"[^A-Za-z0-9 ]+", " ", stem)
-    # The heading is the leading run of upper-case words: a critic who wrote a
-    # sentence on the first line still keys one thread, not one per round.
-    words = []
-    for token in stem.split():
-        if token.upper() != token:
-            break
-        words.append(token)
-    stem = " ".join(words) or stem
     return {
         "id": comment_id,
         "url": scrub_text(url, 200) or None,
@@ -2985,23 +2975,45 @@ def critic_record(comment_id, url, created_at, body, kind="comment"):
         "kind": kind,
         "verdict": verdict,
         "round": int(round_match.group(1)) if round_match else 1,
-        "stem": scrub_text(stem, STEM_MAX) or "CRITIC",
+        "stem": critic_stem(first),
         "_prs": {int(n) for n in PR_REF_RE.findall(text)},
         "_slugs": {tok.strip(".,;:()'\"`") for tok in text.split() if "/" in tok},
     }
 
 
+def critic_stem(first_line):
+    """The heading of a critic first line: the thread key, the words the Floor
+    and the runner may print. Verdict words and the ROUND token are removed,
+    punctuation becomes space, and the heading is the leading run of upper-case
+    words: a critic who wrote a sentence on the first line still keys one
+    thread, not one per round, and nothing after the heading (a path, a prompt,
+    a token) survives. Never empty: "CRITIC" when nothing else is left.
+    """
+    stem = ROUND_RE.sub(" ", VERDICT_RE.sub(" ", str(first_line or "")))
+    stem = re.sub(r"[^A-Za-z0-9 ]+", " ", stem)
+    words = []
+    for token in stem.split():
+        if token.upper() != token:
+            break
+        words.append(token)
+    return scrub_text(" ".join(words), STEM_MAX) or "CRITIC"
+
+
 def latest_round(records):
     """The newest comment of every critic thread (thread = first-line heading).
 
-    A re-review replaces its own earlier round, never another critic's, so a
-    PR is only clean when every thread's newest verdict is safe.
+    Newest by time of posting: a critic who takes a SAFE back with a later
+    BLOCK is heard, whatever ROUND token either line carries (a ROUND 2 SAFE
+    followed by a plain BLOCK-FIX reads BLOCK-FIX). The round only breaks a
+    tie between comments with the same timestamp or none. A re-review
+    replaces its own earlier verdict, never another critic's, so a PR is only
+    clean when every thread's newest verdict is safe.
     """
     threads = {}
     for rec in records:
         key = rec["stem"].upper()
         current = threads.get(key)
-        if current is None or (rec["round"], rec["at"] or "") > (current["round"], current["at"] or ""):
+        if current is None or (rec["at"] or "", rec["round"]) > (current["at"] or "", current["round"]):
             threads[key] = rec
     return sorted(threads.values(), key=lambda r: r["at"] or "", reverse=True)
 

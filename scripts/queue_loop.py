@@ -6,11 +6,16 @@ and the one start per tick. This module owns the judgment the tick needs and
 the bookkeeping around it, in four subcommands the runner calls in order:
 
   settle      look at every detached dispatch that has ended since the last
-              tick and act on its critic verdicts: one automatic fix round on
-              BLOCK-FIX, a landing through scripts/land.sh when every critic
-              said SAFE-TO-MERGE or APPROVE-MERGE and the PR is green and
-              clean, a stop for everything else. Also clears stops whose PR
-              has since merged or closed.
+              tick and act on its critic verdicts, in this order: a block from
+              any critic (one automatic fix round on BLOCK-FIX, once per plan;
+              a stop for BLOCK-ESCALATE, BLOCK-CLOSE, a BLOCK-FIX naming an
+              escalation reason, a bare word, or a silence that replaced a
+              verdict); then the head must be green (a run on another commit
+              or a cancelled workflow is red); then every assigned critic
+              seat must have said SAFE-TO-MERGE or APPROVE-MERGE under its own
+              heading; then the PR must be CLEAN and this machine must hold a
+              checkout of the repo; then a landing through scripts/land.sh.
+              Also clears stops whose PR has since merged or closed.
   guard       read free memory and swap; say once per change of state whether
               starts are held, and write that into the queue (hold) and the
               stops file so the Floor shows why nothing starts.
@@ -61,6 +66,26 @@ STOPS_SCHEMA = "fleet-stops/1"
 GUARD_KEY = "memory-guard"
 LANDING_VERDICTS = frozenset(("SAFE-TO-MERGE", "APPROVE-MERGE"))
 ESCALATION_RE = re.compile(r"\b(BLOCK-ESCALATE|BLOCK-CLOSE)\b")
+# The five reasons a BLOCK-ESCALATE names (the charter's list, the only one).
+# A BLOCK-FIX that carries one anywhere in its body is a judgment case: it is
+# read as BLOCK-ESCALATE and fires nothing.
+ESCALATION_REASONS = ("scope grew", "PRD is wrong or silent", "pre-existing defect found",
+                      "cheaper path exists", "security judgment")
+ESCALATION_REASON_RE = re.compile(
+    r"\b(%s)\b" % "|".join(re.escape(r) for r in ESCALATION_REASONS), re.IGNORECASE)
+# A workflow run (check suite) that ended one of these ways is not a green
+# head, whatever its surviving check runs say.
+RUN_NOT_GREEN = frozenset(("CANCELLED", "FAILURE", "TIMED_OUT", "ACTION_REQUIRED",
+                           "STARTUP_FAILURE", "STALE"))
+# What a critic seat's plan line says about its comment heading.
+HEADING_RE = re.compile(r"first line (?:reads|carries|is|says|must read)\s+[\"'`*]*(CRITIC\b[^.\n]*)",
+                        re.IGNORECASE)
+# The head commit's own check rollup, every run naming its commit and suite.
+HEAD_CHECKS_QUERY = (
+    "query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){"
+    "object(oid:$oid){... on Commit{oid statusCheckRollup{contexts(last:100){nodes{__typename "
+    "... on CheckRun{name status conclusion checkSuite{status conclusion commit{oid}}} "
+    "... on StatusContext{context state}}}}}}}}")
 AFTER_RE = re.compile(r"^#\s*AFTER:\s*(\S+)", re.IGNORECASE)
 FIX_ROUND_RE = re.compile(r"^#\s*FIX-ROUND:\s*(\d+)\s+of\s+(\S+)", re.IGNORECASE)
 DISPATCH_RE = re.compile(r"^#\s*DISPATCH:\s*(.*)$", re.IGNORECASE)
@@ -271,6 +296,25 @@ def append_stop(stops_file, record, dry_run):
         say("cannot write %s: %s" % (stops_file, exc))
 
 
+def stop_text(value, limit=200):
+    """One line as the stops file may carry it. The same law as a seat's task
+    line on the Floor (desk_live.first_sentence): the first sentence only,
+    every slash token checked against this worktree (an operator path, a home
+    path, a variable reads outside-repo), control chars out, secret shapes
+    redacted, capped. Nothing else reaches the file."""
+    return desk_live.first_sentence(value, limit)
+
+
+def verdict_line(rec):
+    """The verdict line as parsed (heading, round, verdict): what the stops
+    file and the log carry instead of the raw first line, so nothing a critic
+    wrote after the verdict (a path, a prompt, a token) travels with it."""
+    if rec.get("verdict") is None:
+        return "%s: no single verdict word on its newest first line" % rec["stem"]
+    rnd = " ROUND %d" % rec["round"] if (rec.get("round") or 1) > 1 else ""
+    return "%s%s: %s" % (rec["stem"], rnd, rec["verdict"])
+
+
 def open_stop(stops_file, key, kind, dry_run, **fields):
     """One stop: a line in the stops file, a line in the log. Never a merge."""
     record = {"key": key, "state": "open", "kind": kind,
@@ -280,8 +324,10 @@ def open_stop(stops_file, key, kind, dry_run, **fields):
             continue
         if name == "plan":
             value = os.path.basename(str(value))
-        elif isinstance(value, str):
+        elif name == "pr_url":
             value = desk_live.scrub_text(value)
+        elif isinstance(value, str):
+            value = stop_text(value)
         record[name] = value
     append_stop(stops_file, record, dry_run)
     where = ""
@@ -293,7 +339,7 @@ def open_stop(stops_file, key, kind, dry_run, **fields):
 
 
 def clear_stop(stops_file, key, why, dry_run, **fields):
-    record = {"key": key, "state": "cleared", "reason": desk_live.scrub_text(why)}
+    record = {"key": key, "state": "cleared", "reason": stop_text(why)}
     record.update({k: v for k, v in fields.items() if v is not None})
     append_stop(stops_file, record, dry_run)
     note("%sstop cleared (%s): %s" % ("would mark " if dry_run else "", key, why))
@@ -346,6 +392,29 @@ class Gh(object):
             return None, why
         return data, None
 
+    def head_checks(self, slug, head):
+        """The head commit's own check rollup from GitHub, each run naming the
+        commit and the suite it belongs to. (rollup, None), ([], None) when the
+        commit has no checks at all, else (None, why)."""
+        owner, _sep, name = str(slug or "").partition("/")
+        data, why = self.json(
+            ["api", "graphql", "-f", "owner=%s" % owner, "-f", "name=%s" % name,
+             "-f", "oid=%s" % head, "-f", "query=%s" % HEAD_CHECKS_QUERY],
+            "gh api graphql checks of %s" % str(head)[:8])
+        if data is None:
+            return None, why
+        try:
+            commit = data["data"]["repository"]["object"]
+        except (KeyError, TypeError):
+            return None, "gh api graphql returned no commit"
+        if not isinstance(commit, dict):
+            return None, "head %s is not on GitHub" % str(head)[:8]
+        rollup = commit.get("statusCheckRollup")
+        if not isinstance(rollup, dict):
+            return [], None
+        nodes = (rollup.get("contexts") or {}).get("nodes") or []
+        return [n for n in nodes if isinstance(n, dict)], None
+
     def pr_ready(self, slug, number):
         self.calls += 1
         rc, out, err = run(["gh", "pr", "ready", str(number), "-R", slug])
@@ -394,36 +463,182 @@ def checks_state(rollup):
     return "green", "checks green (%d)" % len(rollup)
 
 
+def item_commit(item):
+    """The commit a rollup item names (on itself or on its check suite), else None."""
+    for holder in (item, item.get("checkSuite")):
+        commit = holder.get("commit") if isinstance(holder, dict) else None
+        if isinstance(commit, dict) and commit.get("oid"):
+            return str(commit["oid"])
+    return None
+
+
+def item_run_conclusion(item):
+    """How the workflow run (check suite) behind a check run ended, upper-cased,
+    else an empty string."""
+    suite = item.get("checkSuite")
+    if not isinstance(suite, dict):
+        return ""
+    run = suite.get("workflowRun")
+    if isinstance(run, dict) and run.get("conclusion"):
+        return str(run["conclusion"]).upper()
+    return str(suite.get("conclusion") or "").upper()
+
+
+def rollup_named(rollup):
+    """True when every check run in the rollup names the commit it ran on.
+
+    gh pr list's rollup names none: it is the PR's last commit by gh's own
+    query, but no item says so and no item carries its suite's conclusion.
+    Such a payload is a pre-filter; before a landing the runner asks the head
+    commit itself (Gh.head_checks). A payload that names its commits is
+    judged as it stands."""
+    runs = [i for i in rollup or [] if isinstance(i, dict)
+            and (i.get("__typename") or "CheckRun") == "CheckRun" and "context" not in i]
+    return bool(runs) and all(item_commit(i) for i in runs)
+
+
+def head_checks_state(rollup, head):
+    """checks_state, bound to the head commit.
+
+    A run that names another commit is stale and red (a green run on the
+    previous push is not a green head). A run whose workflow run was cancelled,
+    failed or timed out is red even when the run itself reads success or
+    skipped (a cancelled workflow is not a green head). Then the per-run
+    states, as checks_state reads them."""
+    head = str(head or "")
+    red = []
+    for item in rollup or []:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("context") or "check"
+        oid = item_commit(item)
+        if oid and head and oid != head:
+            red.append("%s ran on %s, head is %s" % (name, oid[:8], head[:8]))
+            continue
+        conclusion = item_run_conclusion(item)
+        if conclusion in RUN_NOT_GREEN:
+            red.append("%s: its workflow run %s" % (name, conclusion.lower().replace("_", " ")))
+    if red:
+        return "red", "red checks: " + ", ".join(red[:5])
+    return checks_state(rollup)
+
+
+def escalation_reason(body):
+    """The escalation word or charter reason a comment body carries, else None."""
+    match = ESCALATION_RE.search(str(body or "")) or ESCALATION_REASON_RE.search(str(body or ""))
+    return match.group(1) if match else None
+
+
 def critic_threads(pr, since):
-    """Newest verdict per critic thread among the PR's comments and reviews
-    posted at or after ``since`` (the dispatch start), plus the raw bodies so
-    an escalation sentence inside a BLOCK-FIX comment can be seen."""
+    """The newest record of every critic thread (thread = first-line heading)
+    among the PR's comments and reviews posted at or after ``since`` (the
+    dispatch start), newest first.
+
+    A comment whose first line carries CRITIC and no single verdict word is
+    silence (the fleet rule). Silence never opens a thread; but a later
+    silence under a heading that had a verdict supersedes it, so the thread
+    comes back with verdict None and the runner stops for a person instead of
+    landing on the earlier SAFE. Each thread carries ``_body`` (raw, for the
+    escalation sentence) and ``_line`` (the parsed verdict line, the only form
+    of it the stops file and the log ever carry)."""
     records, bodies = [], {}
+
+    def add(cid, url, at, body, kind):
+        text = str(body or "")
+        if since and isinstance(at, str) and at < since:
+            return
+        rec = desk_live.critic_record(cid, url, at, text, kind=kind)
+        if rec is None:
+            lines = text.strip().splitlines()
+            first = lines[0].strip() if lines else ""
+            if not desk_live.CRITIC_LINE_RE.search(first):
+                return
+            rnd = desk_live.ROUND_RE.search(first)
+            rec = {"id": cid, "at": at if isinstance(at, str) else None, "kind": kind,
+                   "verdict": None, "round": int(rnd.group(1)) if rnd else 1,
+                   "stem": desk_live.critic_stem(first)}
+        records.append(rec)
+        bodies[cid] = text
+
     for c in pr.get("comments") or []:
-        if not isinstance(c, dict):
-            continue
-        at = c.get("createdAt")
-        if since and isinstance(at, str) and at < since:
-            continue
-        rec = desk_live.critic_record(c.get("id"), c.get("url"), at, c.get("body"))
-        if rec:
-            records.append(rec)
-            bodies[rec["id"]] = str(c.get("body") or "")
+        if isinstance(c, dict):
+            add(c.get("id"), c.get("url"), c.get("createdAt"), c.get("body"), "comment")
     for r in pr.get("reviews") or []:
-        if not isinstance(r, dict):
-            continue
-        at = r.get("submittedAt")
-        if since and isinstance(at, str) and at < since:
-            continue
-        rec = desk_live.critic_record(r.get("id"), r.get("url"), at, r.get("body"), kind="review")
-        if rec:
-            records.append(rec)
-            bodies[rec["id"]] = str(r.get("body") or "")
-    threads = desk_live.latest_round(records)
+        if isinstance(r, dict):
+            add(r.get("id"), r.get("url"), r.get("submittedAt"), r.get("body"), "review")
+    spoke = {r["stem"].upper() for r in records if r["verdict"] is not None}
+    threads = [t for t in desk_live.latest_round(records) if t["stem"].upper() in spoke]
     for rec in threads:
         rec["_body"] = bodies.get(rec["id"], "")
-        rec["_first"] = rec["_body"].strip().splitlines()[0].strip() if rec["_body"].strip() else ""
+        rec["_line"] = verdict_line(rec)
     return threads
+
+
+def heading_in_task(text):
+    """The comment heading a critic seat's plan line names ("... first line
+    reads CRITIC ZETA with SAFE-TO-MERGE or BLOCK-FIX"), as a thread stem,
+    else None."""
+    match = HEADING_RE.search(str(text or ""))
+    if not match:
+        return None
+    stem = desk_live.critic_stem(match.group(1))
+    return stem if stem != "CRITIC" else None
+
+
+def seat_headings(parsed_seats, critics, branch):
+    """(role, heading or None) per critic seat of the run on ``branch``: the
+    stream's critic seats, in task order, matched to the plan's critic lines
+    of the same role and branch. A seat the plan does not name gets None."""
+    lines = [s for s in parsed_seats
+             if (s.get("branch") or "") == branch and is_critic(s.get("agent"))]
+    out = []
+    for tid in sorted(critics, key=lambda t: (len(t), t)):
+        seat = critics[tid]
+        if (seat.get("branch") or "") != branch:
+            continue
+        heading = None
+        for i, line in enumerate(lines):
+            if line.get("agent") == seat.get("agent"):
+                heading = heading_in_task(line.get("task_text") or line.get("task"))
+                lines.pop(i)
+                break
+        out.append((seat.get("agent"), heading))
+    return out
+
+
+def assign_threads(threads, headings, plan):
+    """Bind every assigned critic seat to one thread, by stem.
+
+    A seat whose plan line names a heading needs a thread under that stem,
+    exactly. A seat the plan does not name takes an unclaimed thread whose
+    heading shares a word with the run (the named headings minus CRITIC, or
+    the plan's own name); any other stem is somebody else's comment and covers
+    nobody. Returns the seats left without a thread, by heading or role."""
+    by_stem = {t["stem"].upper(): t for t in threads}
+    run_words = set()
+    for _role, heading in headings:
+        if heading:
+            run_words |= set(heading.upper().split()) - {"CRITIC"}
+    stem_name = os.path.basename(str(plan or "")).rsplit(".", 1)[0].upper()
+    run_words |= {w for w in re.split(r"[^A-Z0-9]+", stem_name) if w}
+    claimed, missing = set(), []
+    for _role, heading in headings:
+        if heading is None:
+            continue
+        key = heading.upper()
+        if key in by_stem and key not in claimed:
+            claimed.add(key)
+        else:
+            missing.append(heading)
+    for role, heading in headings:
+        if heading is not None:
+            continue
+        free = sorted(k for k in by_stem if k not in claimed and set(k.split()) & run_words)
+        if free:
+            claimed.add(free[0])
+        else:
+            missing.append(role or "critic")
+    return missing
 
 
 # ── the fix plan ─────────────────────────────────────────────────────────────
@@ -484,6 +699,26 @@ def queue_call(queue_sh, args):
 
 # ── settle: act on ended dispatches ──────────────────────────────────────────
 
+def spent_plans(runs_dir):
+    """Plans whose one fix round the runner already fired, from its own marks:
+    every <id>.loop that reads fix-round names, through its pid file, the plan
+    it settled. The FIX-ROUND header and the -fixN suffix are hints; this is
+    the state, whatever the plan file says."""
+    spent = set()
+    for pid_path in list_pid_files(runs_dir):
+        try:
+            with open(pid_path[:-4] + ".loop", "r", encoding="utf-8") as fh:
+                mark = fh.read().split("\t", 1)[0].strip()
+        except OSError:
+            continue
+        if mark != "fix-round":
+            continue
+        info = read_pid_file(pid_path)
+        if info and info.get("plan"):
+            spent.add(os.path.basename(norm_plan(info["plan"])))
+    return spent
+
+
 def land_root(url):
     """The checkout land.sh fetches and sweeps in, when this machine has one."""
     name = repo_name(url)
@@ -529,7 +764,8 @@ def settle_one(args, gh, pid_path, info, stream_path):
     parsed = desk_live.parse_plan(plan_abs, full_task=True) or {"seats": []}
     mark = None
     for branch in sorted({s.get("branch") or "" for s in critics.values()}):
-        n_critics = sum(1 for s in critics.values() if (s.get("branch") or "") == branch)
+        headings = seat_headings(parsed.get("seats") or [], critics, branch)
+        n_critics = len(headings)
         pr, why = gh.pr_for_branch(slug, branch)
         if pr is None and why and not why.startswith("no PR"):
             say("%s: %s; will look again next tick" % (dispatch_id, why))
@@ -553,18 +789,24 @@ def settle_one(args, gh, pid_path, info, stream_path):
             continue
 
         threads = critic_threads(pr, summary.get("started_at"))
-        if len(threads) < n_critics:
-            open_stop(args.stops, dispatch_id, "critic_silent", dry,
-                      sentence="%d of %d critic seats posted a verdict since the run started"
-                      % (len(threads), n_critics), **common)
-            mark = "stop:critic_silent"
-            continue
         verdicts = [t["verdict"] for t in threads]
-        first = threads[0]
-        sentence = first.get("_first") or first.get("stem")
+        sentence = threads[0]["_line"] if threads else "no critic verdict since the run started"
 
-        if any(v in ("BLOCK-ESCALATE",) for v in verdicts) or any(
-                ESCALATION_RE.search(t["_body"]) for t in threads if t["verdict"] == "BLOCK-FIX"):
+        # 1. A block from any critic acts first, whoever posted it, and a later
+        #    block or silence has already replaced that critic's earlier SAFE.
+        silent = [t for t in threads if t["verdict"] is None]
+        if silent:
+            open_stop(args.stops, dispatch_id, "unparsed", dry,
+                      sentence="%s; the earlier verdict no longer stands" % silent[0]["_line"],
+                      **common)
+            mark = "stop:unparsed"
+            continue
+        escalated = [(t, escalation_reason(t["_body"])) for t in threads if t["verdict"] == "BLOCK-FIX"]
+        escalated = [(t, reason) for t, reason in escalated if reason]
+        if "BLOCK-ESCALATE" in verdicts or escalated:
+            if "BLOCK-ESCALATE" not in verdicts:
+                block, reason = escalated[0]
+                sentence = "%s; names %s" % (block["_line"], reason)
             open_stop(args.stops, dispatch_id, "escalate", dry, verdict="BLOCK-ESCALATE",
                       sentence=sentence, **common)
             mark = "stop:escalate"
@@ -574,8 +816,8 @@ def settle_one(args, gh, pid_path, info, stream_path):
                       sentence=sentence, **common)
             mark = "stop:close"
             continue
-        if any(v not in LANDING_VERDICTS and v != "BLOCK-FIX" for v in verdicts):
-            bad = [v for v in verdicts if v not in LANDING_VERDICTS and v != "BLOCK-FIX"]
+        bad = [v for v in verdicts if v not in LANDING_VERDICTS and v != "BLOCK-FIX"]
+        if bad:
             open_stop(args.stops, dispatch_id, "unparsed", dry, verdict=bad[0],
                       sentence="%s (verdict word %s is not one the runner acts on)" % (sentence, bad[0]),
                       **common)
@@ -583,8 +825,11 @@ def settle_one(args, gh, pid_path, info, stream_path):
             continue
         if "BLOCK-FIX" in verdicts:
             block = [t for t in threads if t["verdict"] == "BLOCK-FIX"][0]
-            sentence = block.get("_first") or sentence
-            if header[1] is not None or re.search(r"-fix\d+\.plan$", plan):
+            sentence = block["_line"]
+            spent = (header[1] is not None or re.search(r"-fix\d+\.plan$", plan)
+                     or os.path.basename(plan) in spent_plans(args.runs_dir)
+                     or os.path.isfile(os.path.join(REPO_DIR, fix_plan_path(plan))))
+            if spent:
                 open_stop(args.stops, dispatch_id, "second_block", dry, verdict="BLOCK-FIX",
                           sentence=sentence, **common)
                 mark = "stop:second_block"
@@ -616,30 +861,87 @@ def settle_one(args, gh, pid_path, info, stream_path):
                 continue
             if dry:
                 note("would write %s and queue it for %s after %s (BLOCK-FIX on PR #%s: %s)"
-                     % (fix_path, repo, os.path.basename(plan), number, desk_live.scrub_text(sentence)))
+                     % (fix_path, repo, os.path.basename(plan), number, sentence))
             else:
                 ok, err = queue_call(args.queue_sh, ["add", fix_path, repo, fix_purpose])
                 if ok:
                     queue_call(args.queue_sh, ["mv", fix_path, "1"])
                     note("fix round 1: wrote %s and queued it first for %s, AFTER %s "
                          "(BLOCK-FIX on PR #%s: %s)" % (fix_path, repo, os.path.basename(plan),
-                                                        number, desk_live.scrub_text(sentence)))
+                                                        number, sentence))
                 else:
                     note("fix round 1: wrote %s but could not queue it: %s" % (fix_path, err))
             mark = "fix-round"
             continue
 
-        # Every thread says SAFE-TO-MERGE or APPROVE-MERGE: the landing path.
-        checks, check_sentence = checks_state(pr.get("statusCheckRollup"))
+        # 2. The head must be green before any verdict is counted: a run that
+        #    names another commit, or a cancelled workflow, is red here.
+        head = str(pr.get("headRefOid") or "")
+        rollup = pr.get("statusCheckRollup")
+        checks, check_sentence = head_checks_state(rollup, head)
         if checks == "pending":
             say("%s: PR #%s %s; will look again next tick" % (dispatch_id, number, check_sentence))
             return None
         if checks != "green":
-            open_stop(args.stops, dispatch_id, "red_checks", dry, verdict=verdicts[0],
+            open_stop(args.stops, dispatch_id, "red_checks", dry,
+                      verdict=verdicts[0] if verdicts else None,
                       sentence="%s; %s" % (sentence, check_sentence), **common)
             mark = "stop:red_checks"
             continue
+
+        # 3. Every assigned critic seat said SAFE-TO-MERGE or APPROVE-MERGE,
+        #    each under its own heading; a stem the run did not assign covers
+        #    no seat.
+        missing = assign_threads(threads, headings, plan)
+        if missing:
+            open_stop(args.stops, dispatch_id, "critic_silent", dry,
+                      sentence="%d of %d critic seats posted a verdict since the run started; "
+                      "missing: %s" % (n_critics - len(missing), n_critics, ", ".join(missing)),
+                      **common)
+            mark = "stop:critic_silent"
+            continue
+
+        # 4. The PR must be mergeable as it stands.
         merge_state = str(pr.get("mergeStateStatus") or "").upper()
+        if merge_state == "UNKNOWN":
+            say("%s: PR #%s merge state still being computed; will look again next tick"
+                % (dispatch_id, number))
+            return None
+        if merge_state != "CLEAN":
+            open_stop(args.stops, dispatch_id, "not_clean", dry, verdict=verdicts[0],
+                      sentence="%s; merge state %s" % (sentence, merge_state or "unknown"), **common)
+            mark = "stop:not_clean"
+            continue
+
+        # 5. A landing needs a checkout of this repo on this machine: land.sh
+        #    fetches and sweeps in it, and must never stand in another repo's.
+        root = land_root(url)
+        if root is None:
+            open_stop(args.stops, dispatch_id, "merge_refused", dry, verdict=verdicts[0],
+                      sentence="%s; no local checkout of %s on this machine for land.sh"
+                      % (sentence, repo), **common)
+            mark = "stop:merge_refused"
+            continue
+
+        # 6. gh pr list's rollup names no commit per run: before the first
+        #    write, ask the head commit itself and judge that rollup the same way.
+        if not rollup_named(rollup):
+            fresh, why = gh.head_checks(slug, head)
+            if fresh is None:
+                say("%s: PR #%s: %s; will look again next tick" % (dispatch_id, number, why))
+                return None
+            checks, check_sentence = head_checks_state(fresh, head)
+            if checks == "pending":
+                say("%s: PR #%s %s; will look again next tick" % (dispatch_id, number, check_sentence))
+                return None
+            if checks != "green":
+                open_stop(args.stops, dispatch_id, "red_checks", dry, verdict=verdicts[0],
+                          sentence="%s; on head %s: %s" % (sentence, head[:8], check_sentence),
+                          **common)
+                mark = "stop:red_checks"
+                continue
+
+        # 7. The landing: a draft is marked ready first, then land.sh.
         if pr.get("isDraft"):
             if dry:
                 note("would mark PR #%s ready (draft) before landing" % number)
@@ -655,29 +957,26 @@ def settle_one(args, gh, pid_path, info, stream_path):
                     say("%s: %s; will look again next tick" % (dispatch_id, why))
                     return None
                 merge_state = str(fresh.get("mergeStateStatus") or "").upper()
-        if merge_state == "UNKNOWN":
-            say("%s: PR #%s merge state still being computed; will look again next tick"
-                % (dispatch_id, number))
-            return None
-        if merge_state != "CLEAN":
-            open_stop(args.stops, dispatch_id, "not_clean", dry, verdict=verdicts[0],
-                      sentence="%s; merge state %s" % (sentence, merge_state or "unknown"), **common)
-            mark = "stop:not_clean"
-            continue
+                if merge_state == "UNKNOWN":
+                    say("%s: PR #%s merge state still being computed; will look again next tick"
+                        % (dispatch_id, number))
+                    return None
+                if merge_state != "CLEAN":
+                    open_stop(args.stops, dispatch_id, "not_clean", dry, verdict=verdicts[0],
+                              sentence="%s; merge state %s" % (sentence, merge_state or "unknown"),
+                              **common)
+                    mark = "stop:not_clean"
+                    continue
         if dry:
             note("would land PR #%s of %s via land.sh (%s; %s; merge state clean)"
-                 % (number, slug, desk_live.scrub_text(sentence), check_sentence))
+                 % (number, slug, sentence, check_sentence))
             mark = "landed"
             continue
-        env = dict(os.environ, LAND_REPO=slug)
-        root = land_root(url)
-        if root:
-            env["LAND_ROOT"] = root
+        env = dict(os.environ, LAND_REPO=slug, LAND_ROOT=root)
         rc, out, err = run([args.land, str(number)], timeout=LAND_TIMEOUT_S, env=env)
-        tail = desk_live.scrub_text(" ".join((out or "").splitlines()[-3:]), 200)
+        tail = stop_text(" ".join((out or "").splitlines()[-3:]), 200)
         if rc == 0:
-            note("landed PR #%s of %s via land.sh (%s). %s" % (number, slug,
-                                                                 desk_live.scrub_text(sentence), tail))
+            note("landed PR #%s of %s via land.sh (%s). %s" % (number, slug, sentence, tail))
             mark = "landed"
         else:
             open_stop(args.stops, dispatch_id, "merge_refused", dry, verdict=verdicts[0],
@@ -811,6 +1110,9 @@ def read_memory():
             return None, "sysctl vm.swapusage unreadable"
         swap_gb = _size_gb(m.group(1), m.group(2))
         free_pct = 100.0 * available / total
+        if not 0.0 <= free_pct <= 100.0 or swap_gb < 0:
+            return None, "vm_stat gave an impossible reading (free %.0f%% of %.0f GB, swap %.1f GB)" % (
+                free_pct, total / (1024.0 ** 3), swap_gb)
         return {"free_pct": free_pct, "swap_used_gb": swap_gb,
                 "detail": "free %.0f%% of %.0f GB, swap used %.1f GB" % (
                     free_pct, total / (1024.0 ** 3), swap_gb)}, None
@@ -825,6 +1127,9 @@ def read_memory():
         avail = info.get("MemAvailable", info.get("MemFree", 0))
         swap_gb = (info.get("SwapTotal", 0) - info.get("SwapFree", 0)) / (1024.0 * 1024.0)
         free_pct = 100.0 * avail / total if total else 0.0
+        if not 0.0 <= free_pct <= 100.0 or swap_gb < 0:
+            return None, "/proc/meminfo gave an impossible reading (free %.0f%%, swap %.1f GB)" % (
+                free_pct, swap_gb)
         return {"free_pct": free_pct, "swap_used_gb": swap_gb,
                 "detail": "free %.0f%% of %.0f GB, swap used %.1f GB" % (
                     free_pct, total / (1024.0 * 1024.0), swap_gb)}, None
@@ -834,9 +1139,18 @@ def read_memory():
 
 def cmd_guard(args):
     cfg = read_config(args.config)
+    previous = ""
+    try:
+        with open(args.state_file, "r", encoding="utf-8") as fh:
+            previous = fh.read().split("\t", 1)[0].strip()
+    except OSError:
+        pass
     mem, why = read_memory()
     if mem is None:
-        state, reason = "clear", "memory guard off: %s" % why
+        # No reading is not a recovery: the last state stands, a hold included.
+        # Only a machine with no state yet and no sensor runs unguarded.
+        state = previous if previous in ("active", "clear") else "clear"
+        reason = "memory guard: sensor unreadable (%s); keeping the last state, %s" % (why, state)
     else:
         reasons = []
         if mem["free_pct"] < cfg["min_free_percent"]:
@@ -849,19 +1163,13 @@ def cmd_guard(args):
         else:
             state, reason = "clear", "memory guard clear (%s)" % mem["detail"]
 
-    previous = ""
-    try:
-        with open(args.state_file, "r", encoding="utf-8") as fh:
-            previous = fh.read().split("\t", 1)[0].strip()
-    except OSError:
-        pass
     changed = previous != state
     if changed:
         prefix = "dry run, would log: " if args.dry_run else ""
         if state == "active":
             note(prefix + reason + "; nothing starts until the numbers recover, nothing is killed")
             append_stop(args.stops, {"key": GUARD_KEY, "state": "open", "kind": "guard",
-                                     "sentence": reason, "action": STOP_ACTIONS["guard"]},
+                                     "sentence": stop_text(reason), "action": STOP_ACTIONS["guard"]},
                         args.dry_run)
             if not args.dry_run:
                 queue_call(args.queue_sh, ["hold", reason])
@@ -869,7 +1177,7 @@ def cmd_guard(args):
             if previous == "active":
                 note(prefix + "memory guard cleared, starts resume (%s)" % (mem["detail"] if mem else why))
                 append_stop(args.stops, {"key": GUARD_KEY, "state": "cleared",
-                                         "reason": mem["detail"] if mem else why}, args.dry_run)
+                                         "reason": stop_text(mem["detail"] if mem else why)}, args.dry_run)
             else:
                 say(reason)
             if not args.dry_run:

@@ -47,7 +47,7 @@ skipped as purpose:
 |------|---------|---------|
 | `# DISPATCH: ./scripts/dispatch.sh <repo-url> <plan> [flags]` | `scripts/queue-runner.sh` | The command a person would copy. The runner takes the repo URL and the flags from it (adds `--detach --auto`, drops `--review`). A queued plan without this line is marked blocked. |
 | `# AFTER: <plan path>` | `scripts/queue-runner.sh` | The plan waits until the named plan has a `dispatch_end` with outcome `landed` (close-out `completed`, every seat's last exit `success`). Until then the runner writes `waiting: after <plan>: ...` into the queue entry (shown by `make queue-list` and the Floor) and clears it itself once the named plan lands. A named plan whose last run failed keeps the waiter waiting and says so. |
-| `# FIX-ROUND: 1 of <plan path>` | `scripts/queue-runner.sh` | Written by the runner into the fix plan it generates (`<plan>-fix1.plan`) after a `BLOCK-FIX`. A `BLOCK-FIX` on a plan carrying this line queues nothing: the item becomes a stop. Do not write it by hand. |
+| `# FIX-ROUND: 1 of <plan path>` | `scripts/queue-runner.sh` | Written by the runner into the fix plan it generates (`<plan>-fix1.plan`) after a `BLOCK-FIX`. A `BLOCK-FIX` on a plan carrying this line queues nothing: the item becomes a stop. The line is a hint for readers; the runner's own marks (`logs/dispatch-runs/<id>.loop` reading `fix-round`) are what make a plan spent, so the original dispatched again after its fix round is a stop too. Do not write it by hand. |
 
 Example:
 
