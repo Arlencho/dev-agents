@@ -141,7 +141,7 @@ lint: ## Check sync + validate YAML
 	@echo "Validating workers.yaml structure..."
 	@grep -q "machines:" config/workers.yaml && echo "  workers.yaml: OK" || (echo "  workers.yaml: MISSING machines: key" && exit 1)
 
-test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch lock, seat worktrees, autoplan fail-closed, vendor-auth, detached dispatch, orchestrator loop)
+test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch lock, seat worktrees, autoplan fail-closed, vendor-auth, detached dispatch, orchestrator loop, critic verdict rule)
 	@echo "== launcher contract =="
 	@./tests/run-launcher-tests.sh
 	@echo ""
@@ -186,6 +186,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch
 	@echo ""
 	@echo "== orchestrator loop (memory guard, AFTER, one fix round, landing, stops) =="
 	@./tests/run-queue-loop-tests.sh
+	@echo ""
+	@echo "== critic verdict rule (one block in every critic charter) =="
+	@./tests/run-critic-verdict-tests.sh
 	@echo ""
 	@echo "All test suites passed."
 

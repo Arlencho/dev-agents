@@ -331,7 +331,9 @@ the Floor uses, never a second copy.
   round 2, with `# AFTER:` the original, and queues it first. A `BLOCK-FIX` on the fix plan
   itself queues nothing and becomes a stop. `BLOCK-ESCALATE`, `BLOCK-CLOSE`, a bare `BLOCK`, a
   `BLOCK-FIX` whose body also carries an escalation word, a verdict only quoted mid-sentence,
-  or a critic that posted nothing since the run started: nothing queued, a stop each.
+  or a critic that posted nothing since the run started: nothing queued, a stop each. The
+  vocabulary itself, and when a critic picks each word, is the rule block in
+  `docs/org-chart.md` § Verdict; the same block sits in every critic charter and in `CLAUDE.md`.
 - *Landing.* When every critic seat of the run posted `SAFE-TO-MERGE` or `APPROVE-MERGE` since
   the run started (one thread per critic seat; fewer is a silent critic and a stop), the PR's
   checks on its head are green (zero checks is not green) and its merge state is `CLEAN`, the
