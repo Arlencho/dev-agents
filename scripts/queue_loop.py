@@ -11,11 +11,13 @@ the bookkeeping around it, in four subcommands the runner calls in order:
               a stop for BLOCK-ESCALATE, BLOCK-CLOSE, a BLOCK-FIX naming an
               escalation reason, a bare word, or a silence that replaced a
               verdict); then the head must be green (a run on another commit
-              or a cancelled workflow is red); then every assigned critic
-              seat must have said SAFE-TO-MERGE or APPROVE-MERGE under its own
-              heading, on the current head (a verdict word on a body line is
-              no verdict, and a SAFE recorded on an earlier head does not
-              count); then the PR must be CLEAN and this machine must hold a
+              or a cancelled workflow is red, and a check suite still open is
+              not green whatever its completed jobs say); then every assigned
+              critic seat must have said SAFE-TO-MERGE or APPROVE-MERGE under
+              its own heading, bound to the current head (a verdict word on a
+              body line is no verdict, a SAFE recorded on an earlier head does
+              not count, and a SAFE that records no head does not count);
+              then the PR must be CLEAN and this machine must hold a
               checkout of the repo; then a landing through scripts/land.sh.
               Also clears stops whose PR has since merged or closed.
   guard       read free memory and swap; say once per change of state whether
@@ -387,8 +389,11 @@ class Gh(object):
         return None, "no PR for branch %s" % branch
 
     def pr_state(self, slug, number):
+        """State, draft flag, merge state and the check rollup, re-read after
+        a write: the answer to `gh pr ready` is never the pre-ready rollup."""
         data, why = self.json(
-            ["pr", "view", str(number), "-R", slug, "--json", "state,isDraft,mergeStateStatus"],
+            ["pr", "view", str(number), "-R", slug, "--json",
+             "state,isDraft,mergeStateStatus,headRefOid,statusCheckRollup"],
             "gh pr view %s#%s" % (slug, number))
         if data is None:
             return None, why
@@ -499,16 +504,33 @@ def rollup_named(rollup):
     return bool(runs) and all(item_commit(i) for i in runs)
 
 
+def checks_running(rollup):
+    """True when a check run or status context on the rollup is itself still
+    running, as opposed to every job done and only a suite not yet closed."""
+    for item in rollup or []:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("__typename") or ("StatusContext" if "context" in item else "CheckRun")
+        if kind == "StatusContext":
+            if str(item.get("state") or "").upper() in ("PENDING", "EXPECTED", ""):
+                return True
+        elif str(item.get("status") or "").upper() != "COMPLETED":
+            return True
+    return False
+
+
 def head_checks_state(rollup, head):
     """checks_state, bound to the head commit.
 
     A run that names another commit is stale and red (a green run on the
     previous push is not a green head). A run whose workflow run was cancelled,
     failed or timed out is red even when the run itself reads success or
-    skipped (a cancelled workflow is not a green head). Then the per-run
-    states, as checks_state reads them."""
+    skipped (a cancelled workflow is not a green head). A check suite still
+    open is pending even when every job under it completed with success: only
+    a completed suite on the head counts. Then the per-run states, as
+    checks_state reads them."""
     head = str(head or "")
-    red = []
+    red, open_suites = [], []
     for item in rollup or []:
         if not isinstance(item, dict):
             continue
@@ -517,12 +539,24 @@ def head_checks_state(rollup, head):
         if oid and head and oid != head:
             red.append("%s ran on %s, head is %s" % (name, oid[:8], head[:8]))
             continue
+        suite = item.get("checkSuite")
+        if isinstance(suite, dict):
+            suite_status = str(suite.get("status") or "").upper()
+            if suite_status and suite_status != "COMPLETED":
+                open_suites.append("%s: its check suite is %s" % (
+                    name, suite_status.lower().replace("_", " ")))
+                continue
         conclusion = item_run_conclusion(item)
         if conclusion in RUN_NOT_GREEN:
             red.append("%s: its workflow run %s" % (name, conclusion.lower().replace("_", " ")))
     if red:
         return "red", "red checks: " + ", ".join(red[:5])
-    return checks_state(rollup)
+    state, sentence = checks_state(rollup)
+    if state == "red":
+        return state, sentence
+    if open_suites:
+        return "pending", "checks still running: " + ", ".join(open_suites[:5])
+    return state, sentence
 
 
 # A commit a critic comment names: a token of 40 or more word characters, the
@@ -532,12 +566,15 @@ HEAD_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9]{40,}(?![A-Za-z0-9])")
 
 
 def safes_on_head(threads, head):
-    """The threads, minus landing verdicts recorded on an earlier head.
+    """The threads, minus landing verdicts not bound to the head.
 
-    A SAFE-TO-MERGE or APPROVE-MERGE comment records the head it reports on.
-    When that commit is not the head any more, the verdict does not count: a
-    push after SAFE returns the PR to waiting for critics. A comment that
-    names no commit is unbound and still counts."""
+    A SAFE-TO-MERGE or APPROVE-MERGE counts only for the head it records:
+    the body names the head commit (a token of 40 or more word characters,
+    the shape of "Head at report: <sha>"), or the thread is a review GitHub
+    recorded on the head (commit.oid). A SAFE that names an earlier head, a
+    short SHA, or no commit at all is not bound to the head and never counts:
+    a push after SAFE, or a critic that did not record the head, returns the
+    PR to waiting for critics."""
     head = str(head or "")
     if not head:
         return list(threads)
@@ -545,10 +582,31 @@ def safes_on_head(threads, head):
     for thread in threads:
         if thread.get("verdict") in LANDING_VERDICTS:
             named = HEAD_TOKEN_RE.findall(thread.get("_body") or "")
-            if named and head not in named:
+            if named:
+                if head not in named:
+                    continue
+            elif str(thread.get("_commit") or "") != head:
                 continue
         out.append(thread)
     return out
+
+
+def unbound_safes(before, after, head):
+    """The stems of landing verdicts safes_on_head dropped for recording no
+    head at all (no 40-char token in the body, no review commit on the head),
+    sorted. A stale verdict named an earlier head; an unbound one recorded
+    nothing, and the stop says so."""
+    head = str(head or "")
+    out = set()
+    for thread in before:
+        if thread in after or thread.get("verdict") not in LANDING_VERDICTS:
+            continue
+        if HEAD_TOKEN_RE.findall(thread.get("_body") or ""):
+            continue
+        if head and str(thread.get("_commit") or "") == head:
+            continue
+        out.add(thread.get("stem") or "critic")
+    return sorted(out)
 
 
 def escalation_reason(body):
@@ -567,11 +625,12 @@ def critic_threads(pr, since):
     silence under a heading that had a verdict supersedes it, so the thread
     comes back with verdict None and the runner stops for a person instead of
     landing on the earlier SAFE. Each thread carries ``_body`` (raw, for the
-    escalation sentence) and ``_line`` (the parsed verdict line, the only form
-    of it the stops file and the log ever carry)."""
-    records, bodies = [], {}
+    escalation sentence), ``_commit`` (the commit a review was recorded on,
+    else None) and ``_line`` (the parsed verdict line, the only form of it
+    the stops file and the log ever carry)."""
+    records, bodies, commits = [], {}, {}
 
-    def add(cid, url, at, body, kind):
+    def add(cid, url, at, body, kind, commit=None):
         text = str(body or "")
         if since and isinstance(at, str) and at < since:
             return
@@ -587,17 +646,22 @@ def critic_threads(pr, since):
                    "stem": desk_live.critic_stem(first)}
         records.append(rec)
         bodies[cid] = text
+        if commit:
+            commits[cid] = str(commit)
 
     for c in pr.get("comments") or []:
         if isinstance(c, dict):
             add(c.get("id"), c.get("url"), c.get("createdAt"), c.get("body"), "comment")
     for r in pr.get("reviews") or []:
         if isinstance(r, dict):
-            add(r.get("id"), r.get("url"), r.get("submittedAt"), r.get("body"), "review")
+            commit = r.get("commit")
+            add(r.get("id"), r.get("url"), r.get("submittedAt"), r.get("body"), "review",
+                commit.get("oid") if isinstance(commit, dict) else None)
     spoke = {r["stem"].upper() for r in records if r["verdict"] is not None}
     threads = [t for t in desk_live.latest_round(records) if t["stem"].upper() in spoke]
     for rec in threads:
         rec["_body"] = bodies.get(rec["id"], "")
+        rec["_commit"] = commits.get(rec["id"])
         rec["_line"] = verdict_line(rec)
     return threads
 
@@ -903,11 +967,14 @@ def settle_one(args, gh, pid_path, info, stream_path):
             continue
 
         # 2. The head must be green before any verdict is counted: a run that
-        #    names another commit, or a cancelled workflow, is red here.
+        #    names another commit, or a cancelled workflow, is red here, and a
+        #    check suite still open is not green whatever its jobs say. Jobs
+        #    still running are looked at again next tick; jobs done under a
+        #    suite that will not close is a stop for a person.
         head = str(pr.get("headRefOid") or "")
         rollup = pr.get("statusCheckRollup")
         checks, check_sentence = head_checks_state(rollup, head)
-        if checks == "pending":
+        if checks == "pending" and checks_running(rollup):
             say("%s: PR #%s %s; will look again next tick" % (dispatch_id, number, check_sentence))
             return None
         if checks != "green":
@@ -918,16 +985,21 @@ def settle_one(args, gh, pid_path, info, stream_path):
             continue
 
         # 3. Every assigned critic seat said SAFE-TO-MERGE or APPROVE-MERGE,
-        #    each under its own heading, on the head that is about to merge:
-        #    a SAFE recorded on an earlier head does not count after the head
-        #    moves, and a stem the run did not assign covers no seat.
-        threads = safes_on_head(threads, head)
+        #    each under its own heading, bound to the head that is about to
+        #    merge: a SAFE recorded on an earlier head does not count after
+        #    the head moves, a SAFE that records no head never counts, and a
+        #    stem the run did not assign covers no seat.
+        kept = safes_on_head(threads, head)
+        unbound = unbound_safes(threads, kept, head)
+        threads = kept
         missing = assign_threads(threads, headings, plan)
         if missing:
+            silence = "%d of %d critic seats posted a verdict since the run started; " \
+                      "missing: %s" % (n_critics - len(missing), n_critics, ", ".join(missing))
+            if unbound:
+                silence += "; %s did not record the head" % ", ".join(unbound)
             open_stop(args.stops, dispatch_id, "critic_silent", dry,
-                      sentence="%d of %d critic seats posted a verdict since the run started; "
-                      "missing: %s" % (n_critics - len(missing), n_critics, ", ".join(missing)),
-                      **common)
+                      sentence=silence, **common)
             mark = "stop:critic_silent"
             continue
 
@@ -961,7 +1033,7 @@ def settle_one(args, gh, pid_path, info, stream_path):
                 say("%s: PR #%s: %s; will look again next tick" % (dispatch_id, number, why))
                 return None
             checks, check_sentence = head_checks_state(fresh, head)
-            if checks == "pending":
+            if checks == "pending" and checks_running(fresh):
                 say("%s: PR #%s %s; will look again next tick" % (dispatch_id, number, check_sentence))
                 return None
             if checks != "green":
@@ -971,7 +1043,10 @@ def settle_one(args, gh, pid_path, info, stream_path):
                 mark = "stop:red_checks"
                 continue
 
-        # 7. The landing: a draft is marked ready first, then land.sh.
+        # 7. The landing: a draft is marked ready first, then the checks and
+        #    the merge state are re-read on the head (marking ready starts new
+        #    runs; the pre-ready rollup is stale the moment ready returns),
+        #    then land.sh.
         if pr.get("isDraft"):
             if dry:
                 note("would mark PR #%s ready (draft) before landing" % number)
@@ -986,6 +1061,18 @@ def settle_one(args, gh, pid_path, info, stream_path):
                 if fresh is None:
                     say("%s: %s; will look again next tick" % (dispatch_id, why))
                     return None
+                post_head = str(fresh.get("headRefOid") or head)
+                post_rollup = fresh.get("statusCheckRollup")
+                post_checks, post_sentence = head_checks_state(post_rollup, post_head)
+                if post_checks == "pending" and checks_running(post_rollup):
+                    say("%s: PR #%s after ready: %s; will look again next tick"
+                        % (dispatch_id, number, post_sentence))
+                    return None
+                if post_checks != "green":
+                    open_stop(args.stops, dispatch_id, "red_checks", dry, verdict=verdicts[0],
+                              sentence="%s; after ready: %s" % (sentence, post_sentence), **common)
+                    mark = "stop:red_checks"
+                    continue
                 merge_state = str(fresh.get("mergeStateStatus") or "").upper()
                 if merge_state == "UNKNOWN":
                     say("%s: PR #%s merge state still being computed; will look again next tick"

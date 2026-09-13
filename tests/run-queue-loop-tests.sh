@@ -33,6 +33,11 @@
 #      verdict, whatever it says; a stem that shares a word with the plan
 #      filename alone covers no unnamed seat; a SAFE recorded on an earlier
 #      head does not count after the head moves
+#   9. round 5 gates, one test each: a SAFE that records no head (no commit
+#      token, a short SHA, or a review recorded on an earlier head) is not
+#      bound to the head and never counts; a check suite still open is not
+#      green whatever its completed jobs say; a draft marked ready has the
+#      checks and the merge state re-read on the head before any landing
 #
 # Also: --dry-run writes nothing, and the verdict parser is imported from
 # scripts/desk_live.py, never re-implemented.
@@ -287,8 +292,11 @@ echo "== 4. landing =="
 plan epsilon "one branch." feat/alpha
 ended_run run-eps-1 epsilon stream-alpha-landed.jsonl
 echo pr-all-safe-green-draft > "$GH_SCENARIO"
+# What GitHub answers right after `pr ready`: the head re-read, checks green.
+echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefOid":"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2","statusCheckRollup":[{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}]}' > "$GH_DIR/view-42.json"
 out=$(tick); check "tick exit" "0" "$?"
 check "draft marked ready first" "1" "$(count 'pr ready 42 -R acme/product' "$GH_LOG")"
+check "checks and merge state re-read on the head after ready" "1" "$(count 'pr view 42 .*statusCheckRollup' "$GH_LOG")"
 check "land.sh called for the PR with the repo slug" "1" "$(count '^42 LAND_REPO=acme/product' "$LAND_LOG")"
 check "run marked landed" "landed" "$(cut -f1 "$RUNS/run-eps-1.loop")"
 check "a landing is not a stop" "(none)" "$(stop_field run-eps-1 kind)"
@@ -430,6 +438,10 @@ assert q.head_checks_state([run("lint", "o" * 40)], head)[0] == "red"
 assert q.head_checks_state([run("lint", head, suite={"workflowRun": {"conclusion": "CANCELLED"}}), run("test", head, "SKIPPED")], head)[0] == "red"
 assert q.head_checks_state([run("lint", head, suite={"conclusion": "TIMED_OUT"})], head)[0] == "red"
 assert q.head_checks_state([run("lint", head, suite={"conclusion": "SUCCESS"})], head) == ("green", "checks green (1)")
+assert q.head_checks_state([run("lint", head, suite={"status": "IN_PROGRESS", "conclusion": None})], head)[0] == "pending"
+assert q.head_checks_state([run("lint", head, suite={"status": "COMPLETED", "conclusion": "SUCCESS"})], head) == ("green", "checks green (1)")
+assert q.checks_running([run("lint", head, suite={"status": "IN_PROGRESS", "conclusion": None})]) is False
+assert q.checks_running([{"__typename": "CheckRun", "name": "lint", "status": "IN_PROGRESS", "conclusion": None, "commit": {"oid": head}}]) is True
 assert q.head_checks_state([], head)[0] == "none"
 gh_shape = [{"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS", "workflowName": "ci"}]
 assert q.rollup_named(gh_shape) is False and q.rollup_named([run("lint", head)]) is True and q.rollup_named([]) is False
@@ -659,16 +671,87 @@ tick >/dev/null
 check "8d tick 2, green on the new head, the SAFE names the old one: the seat is silent" "critic_silent" "$(stop_field run-shafresh kind)"
 check "8d the sentence says no seat spoke" "0 of 1 critic seats posted a verdict since the run started; missing: CRITIC SHAFRESH" "$(stop_field run-shafresh sentence)"
 check "8d no land.sh line for PR 310" "0" "$(count '^310 ' "$LAND_LOG")"
-check "8d safes_on_head drops a stale SAFE, keeps an unbound one and one on the head" "ok" "$(python3 -c '
+check "8d safes_on_head keeps only a SAFE bound to the head (a 40-char token, or a review recorded on it)" "ok" "$(python3 -c '
 import sys; sys.path.insert(0, sys.argv[1]); import queue_loop as q
 head = "b" * 40
-stale = {"verdict": "SAFE-TO-MERGE", "_body": "CRITIC X: SAFE-TO-MERGE\nReviewed " + "a" * 40 + "."}
-fresh = {"verdict": "SAFE-TO-MERGE", "_body": "CRITIC X: SAFE-TO-MERGE\nHead at report: " + head}
-plain = {"verdict": "SAFE-TO-MERGE", "_body": "CRITIC X: SAFE-TO-MERGE\nAll clear."}
-block = {"verdict": "BLOCK-FIX", "_body": "CRITIC X: BLOCK-FIX\nReviewed " + "a" * 40 + "."}
-assert q.safes_on_head([stale, fresh, plain, block], head) == [fresh, plain, block]
+def t(body, commit=None):
+    d = {"stem": "CRITIC X", "verdict": "SAFE-TO-MERGE", "_body": body}
+    if commit: d["_commit"] = commit
+    return d
+stale = t("CRITIC X: SAFE-TO-MERGE\nReviewed " + "a" * 40 + ".")
+fresh = t("CRITIC X: SAFE-TO-MERGE\nHead at report: " + head)
+plain = t("CRITIC X: SAFE-TO-MERGE\nAll clear.")
+short = t("CRITIC X: SAFE-TO-MERGE\nHead at report: " + head[:7] + ".")
+review_old = t("CRITIC X: SAFE-TO-MERGE\nAll clear.", "a" * 40)
+review_new = t("CRITIC X: SAFE-TO-MERGE\nAll clear.", head)
+block = {"stem": "CRITIC X", "verdict": "BLOCK-FIX", "_body": "CRITIC X: BLOCK-FIX\nReviewed " + "a" * 40 + "."}
+assert q.safes_on_head([stale, fresh, plain, block], head) == [fresh, block]
+assert q.safes_on_head([short], head) == []
+assert q.safes_on_head([review_old, review_new], head) == [review_new]
 assert q.safes_on_head([stale], "") == [stale]
+assert q.unbound_safes([stale, fresh], [fresh], head) == []
+assert q.unbound_safes([plain], [], head) == ["CRITIC X"]
+assert q.unbound_safes([review_old], [], head) == ["CRITIC X"]
+assert q.unbound_safes([review_new], [review_new], head) == []
 print("ok")' "$PYLIB")"
+
+echo ""
+echo "== 9. round 5: a SAFE must record the head, an open suite is not green, ready re-reads =="
+
+# 9a. a SAFE that names no 40-char commit is bound to no head and never counts
+plan unbound "one branch." feat/alpha
+ended_run run-unbound unbound stream-alpha-landed.jsonl
+echo pr-safe-unbound-pending > "$GH_SCENARIO"
+before_land=$(count . "$LAND_LOG")
+tick >/dev/null
+check "9a tick 1, checks pending on the old head: not decided" "unmarked" "$(cut -f1 "$RUNS/run-unbound.loop" 2>/dev/null || echo unmarked)"
+check "9a tick 1: land.sh not called" "$before_land" "$(count . "$LAND_LOG")"
+echo pr-safe-unbound-green > "$GH_SCENARIO"
+tick >/dev/null
+check "9a tick 2, green on the new head, the SAFE names no commit: the seat is silent" "critic_silent" "$(stop_field run-unbound kind)"
+check "9a the stop says the critic did not record the head" "0 of 1 critic seats posted a verdict since the run started; missing: CRITIC UNBOUND; CRITIC UNBOUND did not record the head" "$(stop_field run-unbound sentence)"
+check "9a no land.sh line for PR 132" "0" "$(count '^132 ' "$LAND_LOG")"
+plan shortsha "one branch." feat/alpha
+ended_run run-shortsha shortsha stream-alpha-landed.jsonl
+echo pr-safe-short-sha > "$GH_SCENARIO"
+tick >/dev/null
+check "9a a 7-char short SHA of the old head is no binding: the seat is silent" "stop:critic_silent" "$(cut -f1 "$RUNS/run-shortsha.loop")"
+check "9a no land.sh line for PR 133" "0" "$(count '^133 ' "$LAND_LOG")"
+plan revsha "one branch." feat/alpha
+ended_run run-revsha revsha stream-alpha-landed.jsonl
+echo pr-safe-review-old-head > "$GH_SCENARIO"
+tick >/dev/null
+check "9a a review recorded on the old head, body naming no SHA: the seat is silent" "stop:critic_silent" "$(cut -f1 "$RUNS/run-revsha.loop")"
+check "9a review stop says the critic did not record the head" "0 of 1 critic seats posted a verdict since the run started; missing: CRITIC REVSHA; CRITIC REVSHA did not record the head" "$(stop_field run-revsha sentence)"
+check "9a no land.sh line for PR 134" "0" "$(count '^134 ' "$LAND_LOG")"
+
+# 9b. a check suite still IN_PROGRESS is not green, whatever its jobs say
+plan inprog "one branch." feat/alpha
+ended_run run-inprog inprog stream-alpha-landed.jsonl
+echo pr-suite-in-progress > "$GH_SCENARIO"
+before_land=$(count . "$LAND_LOG")
+tick >/dev/null
+check "9b completed SUCCESS jobs under an open suite: red_checks, not a landing" "stop:red_checks" "$(cut -f1 "$RUNS/run-inprog.loop")"
+check "9b the sentence names the open suite" "CRITIC INPROG: SAFE-TO-MERGE; checks still running: lint: its check suite is in progress, test: its check suite is in progress" "$(stop_field run-inprog sentence)"
+check "9b land.sh not called" "$before_land" "$(count . "$LAND_LOG")"
+
+# 9c. a draft marked ready has the checks and the merge state re-read on the
+# head before any landing: new runs started by ready are waited out
+plan draftrecheck "one branch." feat/alpha
+ended_run run-draftrecheck draftrecheck stream-alpha-landed.jsonl
+echo pr-draft-recheck > "$GH_SCENARIO"
+before_ready=$(count 'pr ready 136' "$GH_LOG")
+before_land=$(count . "$LAND_LOG")
+echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefOid":"c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1","statusCheckRollup":[{"__typename":"CheckRun","name":"lint","status":"IN_PROGRESS","conclusion":null},{"__typename":"CheckRun","name":"test","status":"QUEUED","conclusion":null}]}' > "$GH_DIR/view-136.json"
+tick >/dev/null
+check "9c the draft was marked ready" "$((before_ready + 1))" "$(count 'pr ready 136' "$GH_LOG")"
+check "9c the head was re-read after ready" "1" "$(count 'pr view 136 .*statusCheckRollup' "$GH_LOG")"
+check "9c post-ready checks pending: not decided, looked at again next tick" "unmarked" "$(cut -f1 "$RUNS/run-draftrecheck.loop" 2>/dev/null || echo unmarked)"
+check "9c land.sh not called on the pre-ready rollup" "$before_land" "$(count . "$LAND_LOG")"
+echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefOid":"c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1","statusCheckRollup":[{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}]}' > "$GH_DIR/view-136.json"
+tick >/dev/null
+check "9c the post-ready re-read green: landed" "landed" "$(cut -f1 "$RUNS/run-draftrecheck.loop")"
+check "9c land.sh called for 136" "1" "$(count '^136 LAND_REPO=acme/product' "$LAND_LOG")"
 
 echo ""
 echo "== $pass passed, $fail failed =="
