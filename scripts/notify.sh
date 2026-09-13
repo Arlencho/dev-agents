@@ -23,16 +23,21 @@ set -euo pipefail
 # NEEDS YOU push (Floor v3-C, docs/proposals/floor-v3-purpose.md section 5):
 #   `notify.sh needs-you [live.json]` reads the Ops Floor projection (default
 #   site/experience/data/live.json) and sends ONE macOS notification per
-#   NEEDS YOU item that has had no action for N minutes, with the item's own
-#   one-line text. Once per item, never twice: the items already sent are
-#   recorded in a state file keyed on the item's stable identity (its type,
-#   the source kind and the comment id, the repo and PR number, the dispatch
-#   and seat, or the checkout, file and line). Never on the whole source: a
-#   later SAFE comment on the same PR changes source.comments, not the item.
-#   An item whose text carries an operator path (absolute, home, variable or
-#   parent escape) is refused with one stderr line and never sent: the
-#   projector marks those tokens itself, so only a hand-written live.json
-#   can get here, and it does not get through.
+#   NEEDS YOU item that has had no action for N minutes. Once per item,
+#   never twice: the items already sent are recorded in a state file keyed
+#   on the item's stable identity (its type, the source kind and the comment
+#   id, the repo and PR number, the dispatch and seat, or the checkout, file
+#   and line). Never on the whole source: a later SAFE comment on the same
+#   PR changes source.comments, not the item.
+#   The toast text is built from fixed phrases and identifiers only, never
+#   from a PR title, a comment body, a task line or the item's own text:
+#   "<repo> <item type phrase> PR <number>", and for a critic block
+#   "<repo> blocked by <critic stem word> round <n> PR <number>". An item
+#   whose identifiers are missing or malformed (no repo name, a stem that
+#   is not plain words) is refused with one stderr line and never sent: no
+#   free text reaches a lock-screen toast, whatever live.json says. The
+#   item's scrubbed text is for the page rows, which is where desk_live.py
+#   still marks operator paths.
 #   Off by default. scripts/desk_live.py calls this after every write.
 #
 #   FLEET_NOTIFY_NEEDS_YOU_MIN   — N, in minutes. Unset or empty: nothing is
@@ -55,7 +60,6 @@ needs_you_due() {
     python3 - "$1" "$2" "$3" <<'PY'
 import hashlib, json, re, sys
 from datetime import datetime, timezone
-from urllib.parse import unquote
 
 live_path, state_path, after_min = sys.argv[1], sys.argv[2], int(sys.argv[3])
 try:
@@ -92,50 +96,48 @@ def identity(item):
     return "%s|%s|%s" % (item.get("type"), kind, json.dumps(named, sort_keys=True))
 
 
-# The same path start as PATH_START in scripts/desk_live.py: a slash, home,
-# variable or parent escape after an optional file:, at the start of the
-# token or right after a character that cannot be part of a relative path.
-PATH_START = re.compile(r"(?i)(?<![\w.~$/+@%-])(?:file:)?(?:[/~$]|\.\.(?=/|$))")
-URL_SCHEME = re.compile(r"(?i)^(?!file:)[a-z][a-z0-9+.-]*://")
+# The toast line is fixed phrases and identifiers only, never the item's
+# text: no PR title, comment body or task line reaches the Mac. The shapes:
+#   <repo> <item type phrase> PR <number>      olympus-platform ready to merge PR 102
+#   <repo> blocked by <stem> round <n> PR <n>  dev-agents blocked by frontend critic round 2 PR 80
+REPO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+STEM_WORDS = re.compile(r"^[A-Za-z0-9 ]+$")
+# The item type as its phrase (the underscore form with spaces); a critic
+# block names the critic and the round instead.
+TOAST_PHRASES = {"ready_to_merge": "ready to merge", "quiet_seat": "quiet seat",
+                 "failed_dispatch": "failed dispatch", "prd_proposed": "prd proposed",
+                 "missing_variable": "missing variable"}
 
 
-def percent_decode(token):
-    """The token with its percent escapes unfolded (%2F is a slash), decoded
-    again while it changes, bounded. The same step as in desk_live.py."""
-    for _ in range(4):
-        if "%" not in token:
-            break
-        decoded = unquote(token)
-        if decoded == token:
-            break
-        token = decoded
-    return token
-
-
-def has_operator_path(text):
-    """True when a slash token of the line reads as a path outside the
-    worktree: absolute, home, a variable, or a parent escape, whether the
-    token is the path or the path sits inside it (fix:/Users/x, `~/.ssh`)
-    or hides behind percent escapes (%2FUsers%2Fx, file:%2F%2F%2Fetc).
-    The law of task_path in scripts/desk_live.py; the projector already
-    marks these, so a token that still reads so came from a hand-written
-    file."""
-    for tok in text.split(" "):
-        tok = percent_decode(tok)
-        if "/" not in tok:
-            continue
-        core = tok.rstrip(".,;:!?)'\"`")
-        while core and core[0] in "(\"'`":
-            core = core[1:]
-        if not URL_SCHEME.match(core):
-            start = PATH_START.search(core)
-            if start:
-                core = core[start.start():]
-        if core.lower().startswith("file:"):
-            core = core[5:]
-        if core.startswith(("/", "~", "$")) or ".." in core.split("/"):
-            return True
-    return False
+def toast_text(item):
+    """The one toast line for an item, or None when its identifiers cannot
+    carry the fixed shape (no repo name, a stem that is not plain words, an
+    unknown type). The item's `text` is never read: it is free text for the
+    page rows, and free text does not go on a lock screen."""
+    src = item.get("source") if isinstance(item.get("source"), dict) else {}
+    repo = item.get("repo") or src.get("repo") or src.get("checkout")
+    if not isinstance(repo, str) or not REPO_NAME.match(repo):
+        return None
+    kind = item.get("type")
+    if kind == "critic_block":
+        stem = src.get("stem")
+        if isinstance(stem, str) and STEM_WORDS.match(stem):
+            stem = " ".join(stem.lower().split()) or "critic"
+        else:
+            stem = "critic"
+        rnd = src.get("round")
+        if not isinstance(rnd, int) or isinstance(rnd, bool) or rnd < 1:
+            rnd = 1
+        phrase = "blocked by %s round %d" % (stem, rnd)
+    elif kind in TOAST_PHRASES:
+        phrase = TOAST_PHRASES[kind]
+    else:
+        return None
+    pr = item.get("pr")
+    if not isinstance(pr, int) or isinstance(pr, bool):
+        pr = src.get("pr")
+    suffix = " PR %d" % pr if isinstance(pr, int) and not isinstance(pr, bool) and pr > 0 else ""
+    return "%s %s%s" % (repo, phrase, suffix)
 
 
 for item in d.get("needs_you") or []:
@@ -150,11 +152,10 @@ for item in d.get("needs_you") or []:
     key = hashlib.sha1(identity(item).encode("utf-8")).hexdigest()[:16]
     if key in seen:
         continue
-    text = " ".join(str(item.get("text") or "").split())
-    if has_operator_path(text):
-        # Refused, not seen: nothing was sent, and the line says why without
-        # repeating the path.
-        print("WARNING: needs-you item %s refused: its text carries a path outside the worktree"
+    text = toast_text(item)
+    if text is None:
+        # Refused, not seen: nothing was sent, and the line says why.
+        print("WARNING: needs-you item %s refused: no fixed phrase (missing or malformed identifiers)"
               % item.get("type"), file=sys.stderr)
         continue
     seen.add(key)

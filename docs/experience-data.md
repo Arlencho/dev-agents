@@ -1043,22 +1043,34 @@ Rules:
 
 **The push.** `scripts/notify.sh needs-you [live.json]` reads the projection
 and sends **one macOS notification per NEEDS YOU item** that has had no
-action for N minutes, with the item's own `text` as the one line. Once per
-item, never twice: sent items are recorded in a seen file by their stable
-identity, the `type`, the `source.kind` and what names the item for that
-kind (the comment id; the repo and PR number; the dispatch and seat; the
-checkout, file and line). Never the whole `source`: a later SAFE comment on
-the same PR changes `source.comments`, not the item, and makes no second
-toast. `desk_live.py` calls it after every write (`--once`, `--watch` and
-the server's watcher), never fatally, and only when the variable is set.
+action for N minutes. Once per item, never twice: sent items are recorded in
+a seen file by their stable identity, the `type`, the `source.kind` and what
+names the item for that kind (the comment id; the repo and PR number; the
+dispatch and seat; the checkout, file and line). Never the whole `source`: a
+later SAFE comment on the same PR changes `source.comments`, not the item,
+and makes no second toast. `desk_live.py` calls it after every write
+(`--once`, `--watch` and the server's watcher), never fatally, and only when
+the variable is set.
 
-The one line never carries an operator path. The projector checks every
-slash token of a NEEDS YOU line, and of a PR title before it, against the
-worktree exactly as it does a task line (`outside-repo` for an absolute,
-home, variable or parent-escape path; repo-relative paths, branches and
-URLs pass). `notify.sh` refuses an item whose text still carries such a
-token (one stderr line, nothing sent, not recorded as seen), so a
-hand-written `live.json` cannot put a path on a lock-screen toast.
+The toast text is built from **fixed phrases and identifiers only**, never
+from a PR title, a comment body, a task line or the item's own `text`. The
+shape is `<repo> <item type phrase> PR <number>` (`olympus-platform ready to
+merge PR 102`); a critic block reads `<repo> blocked by <critic stem word>
+round <n> PR <number>` (`dev-agents blocked by frontend critic round 2 PR
+80`). The item type phrase is the type name with spaces (`ready_to_merge`
+reads "ready to merge"); the PR suffix appears only when the item carries a
+PR number; the stem word is the critic heading lowercased when it is plain
+words, else the fixed word `critic`. An item whose identifiers are missing
+or malformed (no repo name, an unknown type) is refused with one stderr
+line, never sent and not recorded as seen: no free text reaches a
+lock-screen toast, whatever a hand-written `live.json` says.
+
+The page rows are separate from this. Their `text` is scrubbed as before:
+the projector checks every slash token of a NEEDS YOU line, and of a PR
+title before it, against the worktree exactly as it does a task line
+(`outside-repo` for an absolute, home, variable or parent-escape path,
+encoded or not; repo-relative paths, branches and URLs pass). That scrub now
+serves the page alone.
 
 | Variable | Meaning |
 |----------|---------|

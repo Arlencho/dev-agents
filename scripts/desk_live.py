@@ -21,7 +21,8 @@ that ended on the previous local day, same shape, marked ``day: yesterday``.
 History deeper than that stays in the Almanac. After each write the watcher
 calls ``scripts/notify.sh needs-you`` when ``FLEET_NOTIFY_NEEDS_YOU_MIN`` is
 set, so a NEEDS YOU item nobody acted on for that many minutes reaches the
-owner once as a macOS notification. Off by default, never fatal.
+owner once as a macOS notification, in a fixed phrase built from the item's
+identifiers, never from its text. Off by default, never fatal.
 
 Law: docs/proposals/fleet-desk-v2-SYNTHESIS.md §3 Phases B+C
 Schema: docs/experience-data.md § Live event stream
@@ -1913,9 +1914,11 @@ def needs_you_view(proj, queue_entries, plan_cache, gh, now):
         checks[check]["reason"] = reason
 
     def add(kind, text, source, verified=True, at=None, **extra):
-        # The one line goes to the page and to a macOS toast (notify.sh):
-        # every slash token is checked against the worktree here, whatever
-        # the check that made it, so an operator path never reaches either.
+        # The one line goes to the page: every slash token is checked
+        # against the worktree here, whatever the check that made it, so an
+        # operator path never reaches it. The macOS toast (notify.sh) never
+        # reads this line: it is built from fixed phrases and the item's
+        # identifiers (repo, PR number, critic stem, round) only.
         entry = {"type": kind, "text": scrub_text(mark_paths(text), 160), "action": NEEDS_YOU_ACTIONS[kind],
                  "source": source, "verified": bool(verified), "at": at,
                  "repo": extra.get("repo"), "branch": extra.get("branch"),
