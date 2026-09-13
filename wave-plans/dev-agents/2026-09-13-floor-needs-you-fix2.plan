@@ -1,0 +1,8 @@
+# Floor needs-you cleanup round 3: the repo and live-seat guards apply to every rule, and a branch matches as a whole token. 2026-09-13
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-13-floor-needs-you-fix2.plan --detach --retries 1
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | web-frontend | On branch feat/floor-needs-you-superseded (PR 89), Python in scripts/desk_live.py: fix items 5, 6 and 7 of the comment on PR 89 whose first line reads CRITIC FLOOR NEEDS YOU ROUND 2 BLOCK-FIX, following its fix line: filter the later set once with same_repo and live_without_seat before any of the four rules, not only in the same-plan loop; match a row branch as a whole token in the later header, never as a substring. Add fixtures H2, B2F and P as tests and keep every existing test green. VERIFY: the desk test suite with real exit codes in the PR body under a Round 3 heading. HOUSE STYLE: no long dash anywhere, no AI tool or vendor name, no Co-Authored-By trailer. Commit and push. | feat/floor-needs-you-superseded
+
+2 | plan-critic | READ-ONLY REVIEW ROUND 3 of PR 89. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Re-run every fixture from rounds 1 and 2; try one more prefix-branch case. Post ONE comment on PR 89 whose first line reads CRITIC FLOOR NEEDS YOU ROUND 3 with SAFE-TO-MERGE, BLOCK-FIX or BLOCK-ESCALATE and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/floor-needs-you-superseded
