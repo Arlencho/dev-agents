@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch dispatch-detach dispatch-status dispatch-wait queue-runner queue-runner-dry queue-runner-install queue-runner-uninstall queue-runner-status queue-block queue-unblock bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once desk-follow experience-live queue-add queue-list queue-rm
+.PHONY: help sync status dispatch dispatch-detach dispatch-status dispatch-wait queue-runner queue-runner-dry queue-runner-install queue-runner-uninstall queue-runner-status queue-block queue-unblock bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once desk-follow floor experience-live queue-add queue-list queue-rm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -50,6 +50,9 @@ experience-live: desk-live ## Alias for make desk-live (live Ops Floor during a 
 
 desk-live-once: ## Write site/experience/data/live.json once from the newest event stream (no server)
 	@python3 ./scripts/desk_live.py --once $(LIVE_FLAGS)
+
+floor: ## Floor in the terminal: render live.json as plain text every 5 s, q quits (FLOOR_FLAGS=--once or --color)
+	@python3 ./scripts/floor_tty.py $(FLOOR_FLAGS)
 
 queue-add: ## Arm a plan on the Ops Floor queue (usage: make queue-add PLAN=path REPO=name PURPOSE="one line")
 	@./scripts/queue.sh add "$(PLAN)" "$(REPO)" "$(PURPOSE)"
@@ -161,6 +164,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch
 	@echo ""
 	@echo "== fleet desk live (events + Ops Floor projection) =="
 	@./tests/run-desk-live-tests.sh
+	@echo ""
+	@echo "== floor in the terminal (live.json as plain text) =="
+	@./tests/run-floor-tty-tests.sh
 	@echo ""
 	@echo "== fleet desk Phase B honesty (critic repro) =="
 	@bash tests/critic/phase-b-honesty-repro.sh

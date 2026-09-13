@@ -1,0 +1,16 @@
+Stale: no new event for over 2 min, so the counts are the last known state.
+1 running at last event, 0 up next, 0 landed, 0 failed, needs you: not in this projection, last
+event 3 min ago
+
+NEEDS YOU (stale, as of the last event)
+  Not in this projection.
+
+NOW (stale, as of the last event)
+  repo not reported: 1 seat live at last event, 1 dispatch live at last event
+    repo not reported  critic  no issue  task line not on...  was at work, wa...  under a minute in
+
+UP NEXT (stale, as of the last event)
+  Not in this projection.
+
+LANDED today (stale, as of the last event)
+  Not in this projection.
