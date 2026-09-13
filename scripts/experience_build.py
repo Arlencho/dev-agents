@@ -1267,8 +1267,24 @@ class Renderer:
       {note_html}
       <span class="{led_cls}" id="floor-led" aria-hidden="true"></span>
       {' '.join(figs)}
+      {self._strip_day_toggle()}
     </div>
 """
+
+    def _strip_day_toggle(self) -> str:
+        """Today / yesterday on the strip (Floor v3-C, mirrored in floor.js).
+
+        Hidden until the page holds a projection that carries yesterday_meta
+        and is not a replay; floor.js then shows it and switches the landed
+        and failed figures and lists between the two days. Running, up next
+        and needs you stay present tense: the toggle only chooses which
+        day's landings are read. Deeper history is the Almanac's.
+        """
+        return (
+            '<span class="daytog" id="strip-day" role="group" aria-label="Which day" hidden>'
+            '<button type="button" class="daybtn on" id="strip-day-today" aria-pressed="true">today</button>'
+            '<button type="button" class="daybtn" id="strip-day-yesterday" aria-pressed="false">yesterday</button>'
+            '</span>')
 
     def _live_needs_card(self, live: Dict[str, Any]) -> str:
         """NEEDS YOU (proposal section 4.2, mirrored in floor.js).
@@ -1789,6 +1805,7 @@ class Renderer:
       <a class="sfig" id="strip-failed" href="#floor-failed-card" hidden></a>
       <a class="sfig" id="strip-needs" href="#floor-needs-card" hidden></a>
       <a class="sfig dim" id="strip-event" href="#floor-legacy" hidden></a>
+      {self._strip_day_toggle()}
     </div>
 
     <div class="card mt" id="floor-needs-card">

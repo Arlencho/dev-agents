@@ -10,7 +10,8 @@
      3. NOW grouped by repo
      4. UP NEXT (a blocked plan shows its reason in place)
      5. INITIATIVES
-     6. FAILED and LANDED today (failed first when non-empty)
+     6. FAILED and LANDED today (failed first when non-empty); the strip's
+        today / yesterday toggle (v3-C) reads the day before the same way
      7. one details control, closed by default: replay scrubber, stream facts,
         schema line, pipeline tiles, lanes or spine, event tail, trail links
 
@@ -49,6 +50,9 @@
     asOfSeq: params.get("as_of_seq") ? parseInt(params.get("as_of_seq"), 10) : null,
     pollTimer: null,
     last: null,
+    // Floor v3-C: which day the landed and failed figures and lists read.
+    // "today" or "yesterday"; deeper history is the Almanac's.
+    day: "today",
   };
 
   /* Does the elapsed ticker run? Only while the stream itself is live. It
@@ -218,14 +222,31 @@
     var s = d.summary;
     var hasSummary = s && typeof s === "object" && st.state !== "replay";
 
-    var today = d.today || [];
+    /* Floor v3-C: the landed and failed figures read today or yesterday.
+       Running, up next and needs you are the present and never switch.
+       The toggle shows only when the projection carries yesterday and the
+       view is not a replay; a projection without it always reads today. */
+    var yesterday = mode.day === "yesterday" && !!d.yesterday_meta;
+    var rows = yesterday ? (d.yesterday || []) : (d.today || []);
+    var when = yesterday ? " yesterday" : "";
     var landed = 0, failed = 0, aborted = 0;
-    today.forEach(function (t) {
+    rows.forEach(function (t) {
       var w = outcomeWord(t);
       if (w === "landed") landed++;
       else if (w === "failed") failed++;
       else if (w === "aborted") aborted++;
     });
+    if (show("strip-day", !!(hasSummary && d.yesterday_meta))) {
+      var bt = $("strip-day-today"), by = $("strip-day-yesterday");
+      if (bt) {
+        bt.className = "daybtn" + (yesterday ? "" : " on");
+        bt.setAttribute("aria-pressed", yesterday ? "false" : "true");
+      }
+      if (by) {
+        by.className = "daybtn" + (yesterday ? " on" : "");
+        by.setAttribute("aria-pressed", yesterday ? "true" : "false");
+      }
+    }
 
     var el;
     el = show("strip-running", !!(hasSummary && typeof s.running === "number"));
@@ -235,14 +256,14 @@
     el = show("strip-queued", !!(hasSummary && typeof s.queued === "number"));
     if (el && !el.hidden) el.textContent = s.queued + " up next";
     el = show("strip-landed", !!hasSummary);
-    if (el && !el.hidden) el.textContent = landed + " landed";
+    if (el && !el.hidden) el.textContent = landed + " landed" + when;
     el = show("strip-failed", !!hasSummary);
     if (el && !el.hidden) {
       /* The figure must equal what it links to: the FAILED list holds
          failed and aborted rows alike, so both counts ride the figure. */
-      el.textContent = aborted
+      el.textContent = (aborted
         ? failed + " failed · " + aborted + " aborted"
-        : failed + " failed";
+        : failed + " failed") + when;
       el.className = "sfig" + (failed > 0 ? " bad" : "");
     }
     var needs = hasSummary && typeof s.needs_you === "number"
@@ -793,7 +814,12 @@
      a liveness claim like any other on this page, so off a live stream it
      is qualified with "at last event" instead of the present tense. */
   function renderToday(d, st) {
-    var items = d.today || [];
+    /* Floor v3-C: the two lists follow the strip's day toggle. Yesterday
+       is read from the same streams the same way; the heading says which
+       day is shown. */
+    var yesterday = mode.day === "yesterday" && !!d.yesterday_meta;
+    var dayWord = yesterday ? "yesterday" : "today";
+    var items = yesterday ? (d.yesterday || []) : (d.today || []);
     var failedRows = [];
     var landedRows = [];
     items.forEach(function (t) {
@@ -805,9 +831,18 @@
     var fbox = $("floor-failed-list");
     if (fbox) fbox.innerHTML = failedRows.map(todayRow).join("");
     var fcard = $("floor-failed-card");
-    if (fcard) fcard.hidden = !failedRows.length;
+    if (fcard) {
+      fcard.hidden = !failedRows.length;
+      var fh = fcard.querySelector("h2");
+      if (fh) fh.textContent = "Failed " + dayWord;
+    }
+    var lcard = $("floor-landed-card");
+    if (lcard) {
+      var lh = lcard.querySelector("h2");
+      if (lh) lh.textContent = "Landed " + dayWord;
+    }
 
-    var meta = d.today_meta || {};
+    var meta = (yesterday ? d.yesterday_meta : d.today_meta) || {};
     var note = $("floor-today-note");
     if (note) {
       var state = (st && st.state) || liveState(d).state;
@@ -815,14 +850,14 @@
       var liveTxt = !liveN ? ""
         : state === "live" ? " · " + liveN + " still live"
         : " · " + liveN + " still live at last event";
-      note.textContent = "dispatch_end on " + (meta.date || "today") +
+      note.textContent = "dispatch_end on " + (meta.date || dayWord) +
         " · " + (meta.streams_read || 0) + " stream(s) read" + liveTxt;
     }
     var lbox = $("floor-today-list");
     if (!lbox) return;
     lbox.innerHTML = landedRows.length
       ? landedRows.map(todayRow).join("")
-      : '<li class="muted">Nothing has landed today yet.</li>';
+      : '<li class="muted">' + (yesterday ? "Nothing landed yesterday." : "Nothing has landed today yet.") + "</li>";
   }
 
   /* ── 4.7 details: legacy chrome behind one fold ───────────────────── */
@@ -1273,6 +1308,17 @@
   window.addEventListener("resize", measureHeader);
   window.addEventListener("load", measureHeader);
   measureHeader();
+
+  // Floor v3-C: today / yesterday on the strip. A click re-renders from the
+  // last projection; nothing is fetched, the day before is already in it.
+  function setDay(day) {
+    mode.day = day;
+    if (mode.last) renderAll(mode.last);
+  }
+  var dayToday = $("strip-day-today");
+  var dayYesterday = $("strip-day-yesterday");
+  if (dayToday) dayToday.addEventListener("click", function () { setDay("today"); });
+  if (dayYesterday) dayYesterday.addEventListener("click", function () { setDay("yesterday"); });
 
   // Boot
   setInterval(tickElapsed, 1000);

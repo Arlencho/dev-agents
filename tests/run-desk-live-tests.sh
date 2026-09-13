@@ -14,6 +14,10 @@
 #   Part J: repo, issue, task line and PR on every seat (issue 72): the
 #           parses, two repos live at once, the gh skip, verified, failing
 #           and hanging paths (fake gh on PATH, no network)
+#   Part L: yesterday and the push (Floor v3, wave C): the day before is
+#           read the same way as today and marked so; notify.sh needs-you
+#           sends one toast per NEEDS YOU item that waited N minutes, never
+#           twice, and nothing at all with the env var unset
 #   Part K: NEEDS YOU and INITIATIVES (Floor v3, wave A): one fixture with a
 #           BLOCK comment, a SAFE plus CLEAN PR, a quiet seat, a failed
 #           dispatch, a PROPOSED row and a missing variable; the six entries
@@ -741,7 +745,7 @@ write("day-landed.jsonl", [
     {"ts": ts(3000), "event": "dispatch_start", "mode": "wave",
      "repo": "olympus-platform", "plan": "alpha.plan"},
     {"ts": ts(2990), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
-     "branch": "feat/alpha", "wave": 1, "provider": "claude"},
+     "branch": "feat/alpha", "wave": 1, "provider": "provider-a"},
     {"ts": ts(2400), "event": "seat_exit", "task_id": "0", "agent": "devops",
      "branch": "feat/alpha", "wave": 1, "status": "success", "exit": 0, "duration_s": 590},
     {"ts": ts(2395), "event": "dispatch_end", "status": "completed",
@@ -752,14 +756,14 @@ write("day-live-a.jsonl", [
     {"ts": ts(120), "event": "dispatch_start", "mode": "wave",
      "repo": "dev-agents", "plan": "beta.plan"},
     {"ts": ts(110), "event": "seat_dispatch", "task_id": "0", "agent": "go-backend",
-     "branch": "feat/beta", "wave": 1, "provider": "claude"},
+     "branch": "feat/beta", "wave": 1, "provider": "provider-a"},
 ])
 # live now (second, concurrent)
 write("day-live-b.jsonl", [
     {"ts": ts(90), "event": "dispatch_start", "mode": "wave",
      "repo": "olympus-platform", "plan": "gamma.plan"},
     {"ts": ts(80), "event": "seat_dispatch", "task_id": "0", "agent": "web-frontend",
-     "branch": "feat/gamma", "wave": 1, "provider": "kimi"},
+     "branch": "feat/gamma", "wave": 1, "provider": "provider-b"},
 ])
 # an older run in the same directory: must not land in today[]
 old = (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2090,6 +2094,589 @@ for key in 'needs_you\[\]' 'initiatives\[\]' 'queue\[\].blocked' 'never invents'
   grep -q "$key" "$REPO_DIR/docs/experience-data.md" \
     && ok "$key is documented in the live schema" || bad "$key is documented in the live schema"
 done
+
+
+# ── Part L: yesterday and the push (Floor v3-C) ──────────────────────────
+echo "== Part L: yesterday and the push (Floor v3, wave C) =="
+
+# The day before, read the same way as today. Two runs ended yesterday
+# (one landed, one failed), one ended today, one three days ago.
+Y_DIR="$TMP/events-yday"
+mkdir -p "$Y_DIR"
+Y_DATE=$(python3 - "$Y_DIR" <<'YFIX'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+
+out = sys.argv[1]
+now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+# Local midnight today, then naive UTC. Two and three hours before it are
+# 22:00 and 21:00 local yesterday, inside the day whatever the zone does.
+midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+midnight_utc = midnight.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write(name, rows):
+    with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+        for i, row in enumerate(rows, 1):
+            row.update({"schema": "fleet-events/1", "seq": i, "dispatch_id": name[:-6]})
+            fh.write(json.dumps(row) + "\n")
+
+
+t0 = max(now - timedelta(seconds=600), midnight_utc)
+write("y-today.jsonl", [
+    {"ts": iso(t0), "event": "dispatch_start", "mode": "wave", "repo": "dev-agents", "plan": "alpha.plan"},
+    {"ts": iso(t0), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/alpha", "wave": 1, "provider": "provider-a"},
+    {"ts": iso(t0 + timedelta(seconds=60)), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/alpha", "wave": 1, "status": "success", "exit": 0, "duration_s": 60},
+    {"ts": iso(t0 + timedelta(seconds=61)), "event": "dispatch_end", "status": "completed",
+     "total": 1, "succeeded": 1, "failed": 0, "duration_s": 61},
+])
+y1 = midnight_utc - timedelta(hours=2)
+write("y-landed.jsonl", [
+    {"ts": iso(y1 - timedelta(seconds=600)), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "beta.plan"},
+    {"ts": iso(y1 - timedelta(seconds=590)), "event": "seat_dispatch", "task_id": "0", "agent": "go-backend",
+     "branch": "feat/beta", "wave": 1, "provider": "provider-a"},
+    {"ts": iso(y1 - timedelta(seconds=5)), "event": "seat_exit", "task_id": "0", "agent": "go-backend",
+     "branch": "feat/beta", "wave": 1, "status": "success", "exit": 0, "duration_s": 585},
+    {"ts": iso(y1), "event": "dispatch_end", "status": "completed",
+     "total": 1, "succeeded": 1, "failed": 0, "duration_s": 600},
+])
+y2 = midnight_utc - timedelta(hours=3)
+write("y-failed.jsonl", [
+    {"ts": iso(y2 - timedelta(seconds=300)), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "gamma.plan"},
+    {"ts": iso(y2 - timedelta(seconds=290)), "event": "seat_dispatch", "task_id": "0", "agent": "web-frontend",
+     "branch": "feat/gamma", "wave": 1, "provider": "provider-b"},
+    {"ts": iso(y2 - timedelta(seconds=5)), "event": "seat_exit", "task_id": "0", "agent": "web-frontend",
+     "branch": "feat/gamma", "wave": 1, "status": "failed", "exit": 1, "duration_s": 285},
+    {"ts": iso(y2), "event": "dispatch_end", "status": "completed",
+     "total": 1, "succeeded": 0, "failed": 1, "duration_s": 300},
+])
+old = now - timedelta(days=3)
+write("y-old.jsonl", [
+    {"ts": iso(old), "event": "dispatch_start", "mode": "wave", "repo": "dev-agents", "plan": "old.plan"},
+    {"ts": iso(old), "event": "dispatch_end", "status": "completed", "total": 0, "succeeded": 0, "failed": 0},
+])
+print((midnight - timedelta(days=1)).date().isoformat())
+YFIX
+)
+printf 'y-today.jsonl\n' > "$Y_DIR/latest"
+
+Y_OUT="$TMP/out/live-yday.json"
+python3 "$DESK_LIVE" --once --no-gh --events-dir "$Y_DIR" --queue-file "$TMP/no-queue.json" --out "$Y_OUT" >/dev/null 2>&1 \
+  && ok "--once with a yesterday in the streams exits 0" || bad "--once with a yesterday in the streams exits 0"
+assert_py "yesterday[] holds the runs that ended on the previous local day, newest first" "$Y_OUT" \
+  '[t["dispatch_id"] for t in d["yesterday"]]==["y-landed","y-failed"]'
+assert_py "today[] keeps only today; yesterday never leaks into it" "$Y_OUT" \
+  '[t["dispatch_id"] for t in d["today"]]==["y-today"]'
+assert_py "a run three days old is in neither day (the Almanac owns it)" "$Y_OUT" \
+  '"y-old" not in [t["dispatch_id"] for t in d["today"]+d["yesterday"]]'
+assert_py "a yesterday row has exactly the shape of a today row" "$Y_OUT" \
+  'set(d["yesterday"][0])==set(d["today"][0]) and set(d["yesterday"][1])==set(d["today"][0])'
+assert_py "the payload marks the day: today_meta.day and yesterday_meta.day" "$Y_OUT" \
+  'd["today_meta"]["day"]=="today" and d["yesterday_meta"]["day"]=="yesterday"'
+assert_py "yesterday_meta carries the previous local date and the same keys as today_meta" "$Y_OUT" \
+  'd["yesterday_meta"]["date"]=="'"$Y_DATE"'" and set(d["yesterday_meta"])==set(d["today_meta"]) and d["yesterday_meta"]["ended"]==2'
+assert_py "yesterday claims nothing live (a run with no close-out belongs to today)" "$Y_OUT" \
+  'd["yesterday_meta"]["live"]==[]'
+assert_py "yesterday outcomes read the seat exits like today" "$Y_OUT" \
+  'd["yesterday"][0]["outcome"]=="landed" and d["yesterday"][1]["outcome"]=="failed"'
+assert_py "summary counts both days" "$Y_OUT" \
+  'd["summary"]["landed_today"]==1 and d["summary"]["landed_yesterday"]==2'
+assert_py "a failure yesterday is history, not a NEEDS YOU item" "$Y_OUT" \
+  'all(e["type"]!="failed_dispatch" for e in d["needs_you"])'
+
+Y_REPLAY="$TMP/out/live-yday-replay.json"
+python3 "$DESK_LIVE" --once --no-gh --events-dir "$Y_DIR" --dispatch-id y-landed --replay --out "$Y_REPLAY" >/dev/null 2>&1
+assert_py "a replay carries no yesterday, like no today" "$Y_REPLAY" \
+  'd["view"]=="replay" and d["yesterday"]==[] and d["today"]==[] and d["yesterday_meta"]["day"]=="yesterday"'
+
+Y_EMPTY="$TMP/out/live-yday-empty.json"
+mkdir -p "$TMP/events-none"
+python3 "$DESK_LIVE" --once --no-gh --events-dir "$TMP/events-none" --queue-file "$TMP/no-queue.json" --out "$Y_EMPTY" >/dev/null 2>&1
+assert_py "an idle desk still carries yesterday keys (empty, marked)" "$Y_EMPTY" \
+  'd["yesterday"]==[] and d["yesterday_meta"]["day"]=="yesterday" and d["yesterday_meta"]["date"]'
+
+grep -q 'strip-day-yesterday' "$REPO_DIR/templates/experience/floor.js" \
+  && ok "the strip offers yesterday (floor.js)" || bad "the strip offers yesterday (floor.js)"
+grep -q 'strip-day-yesterday' "$REPO_DIR/scripts/experience_build.py" \
+  && ok "the strip markup carries the toggle (builder)" || bad "the strip markup carries the toggle (builder)"
+
+# ── the push: notify.sh needs-you ──────────────────────────────────────────
+NOTIFY="$REPO_DIR/scripts/notify.sh"
+bash -n "$NOTIFY" && ok "notify.sh parses" || bad "notify.sh parses"
+N_DIR="$TMP/notify"
+mkdir -p "$N_DIR"
+N_LIVE="$N_DIR/live.json"
+N_STATE="$N_DIR/seen"
+python3 - "$N_LIVE" <<'NFIX'
+import json, sys
+from datetime import datetime, timedelta, timezone
+
+now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+d = {"schema": "live/1", "view": "live", "needs_you": [
+    # waited 15 min, verified: due at N=10. The text carries quotes and a
+    # backslash on purpose: the toast never reads it, so none of it can leak.
+    {"type": "critic_block", "text": 'Iris round 2 blocked by backend critic "quoted" \\ 3 findings',
+     "action": "open the comment", "verified": True, "at": iso(now - timedelta(minutes=15)),
+     "repo": "olympus-platform", "pr": 2829,
+     "source": {"kind": "comment", "repo": "olympus-platform", "comment_id": 101, "pr": 2829,
+                "stem": "BACKEND CRITIC", "round": 2, "verdict": "BLOCK-FIX"}},
+    # waited 2 min: not due at N=10, due at N=1
+    {"type": "failed_dispatch", "text": "W2-A security seat failed after 437 s",
+     "action": "see the output", "verified": True, "at": iso(now - timedelta(minutes=2)),
+     "repo": "olympus-platform",
+     "source": {"kind": "stream", "dispatch_id": "d1", "event": "dispatch_end"}},
+    # old but unverified: never
+    {"type": "ready_to_merge", "text": "PR #2830 ready to merge", "action": "merge",
+     "verified": False, "at": iso(now - timedelta(minutes=30)),
+     "repo": "olympus-platform", "pr": 2830,
+     "source": {"kind": "pr", "repo": "olympus-platform", "pr": 2830}},
+    # no time: no proof of how long it waited, never
+    {"type": "prd_proposed", "text": "S11 awaits sign-off", "action": "approve or edit",
+     "verified": True, "at": None, "repo": "olympus-platform",
+     "source": {"kind": "file", "checkout": "olympus-platform", "file": "docs/prd/x.md", "line": 3}},
+]}
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    json.dump(d, fh)
+NFIX
+
+N_SHIM="$TMP/shim-osascript"
+mkdir -p "$N_SHIM"
+cat > "$N_SHIM/osascript" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$OSASCRIPT_CALLS"
+EOF
+chmod +x "$N_SHIM/osascript"
+export OSASCRIPT_CALLS="$N_DIR/calls"
+: > "$OSASCRIPT_CALLS"
+on_mac=0; [ "$(uname)" = "Darwin" ] && on_mac=1
+toasts() { wc -l < "$OSASCRIPT_CALLS" | tr -d ' '; }
+# run_push [VAR=value ...]: the shim first on PATH, the silent switches unset,
+# the seen file in TMP, the minutes var unset unless given.
+run_push() {
+  PATH="$N_SHIM:$PATH" env -u FLEET_NOTIFY_SILENT -u NOTIFY_SILENT -u FLEET_NOTIFY_NEEDS_YOU_MIN \
+    FLEET_NOTIFY_NEEDS_YOU_STATE="$N_STATE" "$@" "$NOTIFY" needs-you "$N_LIVE"
+}
+
+# env var unset: nothing sent, nothing written
+out=$(run_push 2>/dev/null) && ok "needs-you with the env var unset exits 0" || bad "needs-you with the env var unset exits 0"
+[ -z "$out" ] && ok "env var unset: no stdout line" || bad "env var unset: no stdout line ($out)"
+[ "$(toasts)" = "0" ] && ok "env var unset: osascript never invoked" || bad "env var unset: osascript never invoked"
+[ ! -e "$N_STATE" ] && ok "env var unset: no seen file written" || bad "env var unset: no seen file written"
+
+# N=10: the 15 min item notifies once, as the fixed phrase
+out=$(run_push FLEET_NOTIFY_NEEDS_YOU_MIN=10 2>/dev/null)
+[ "$(printf '%s\n' "$out" | grep -c '^\[notify\] Needs you: ')" = "1" ] \
+  && ok "N=10: exactly one item pushed" || bad "N=10: exactly one item pushed ($out)"
+[ "$out" = '[notify] Needs you: olympus-platform blocked by backend critic round 2 PR 2829' ] \
+  && ok "the push carries the fixed phrase, never the item text" \
+  || bad "the push carries the fixed phrase, never the item text ($out)"
+case "$out" in
+  *"W2-A"*|*"PR #2830"*|*"S11"*) bad "younger, unverified and undated items are not pushed" ;;
+  *) ok "younger, unverified and undated items are not pushed" ;;
+esac
+[ "$(wc -l < "$N_STATE" | tr -d ' ')" = "1" ] && ok "the seen file records one item" || bad "the seen file records one item"
+if [ "$on_mac" = "1" ]; then
+  [ "$(toasts)" = "1" ] && ok "macOS: one osascript toast" || bad "macOS: one osascript toast ($(toasts))"
+  grep -q 'with title "Needs you"' "$OSASCRIPT_CALLS" \
+    && ok "macOS: the toast is titled Needs you" || bad "macOS: the toast is titled Needs you"
+  grep -qF 'display notification "olympus-platform blocked by backend critic round 2 PR 2829"' "$OSASCRIPT_CALLS" \
+    && ok "macOS: the toast argv is the fixed phrase exactly" \
+    || bad "macOS: the toast argv is the fixed phrase exactly ($(cat "$OSASCRIPT_CALLS"))"
+  grep -q 'quoted\|\\\\' "$OSASCRIPT_CALLS" \
+    && bad "macOS: no quote or backslash from the item text reaches osascript" \
+    || ok "macOS: no quote or backslash from the item text reaches osascript"
+fi
+
+# the same item again: never twice
+out=$(run_push FLEET_NOTIFY_NEEDS_YOU_MIN=10 2>/dev/null)
+[ -z "$out" ] && ok "second run: the same item is never pushed twice" || bad "second run: the same item is never pushed twice ($out)"
+[ "$(wc -l < "$N_STATE" | tr -d ' ')" = "1" ] && ok "second run: seen file unchanged" || bad "second run: seen file unchanged"
+if [ "$on_mac" = "1" ]; then
+  [ "$(toasts)" = "1" ] && ok "macOS: still one toast" || bad "macOS: still one toast ($(toasts))"
+fi
+
+# N respected: at N=1 the 2 min item becomes due; the first stays seen
+out=$(run_push FLEET_NOTIFY_NEEDS_YOU_MIN=1 2>/dev/null)
+[ "$out" = '[notify] Needs you: olympus-platform failed dispatch' ] \
+  && ok "N=1: the item that waited 2 min is now due, as the fixed phrase" \
+  || bad "N=1: the item that waited 2 min is now due ($out)"
+[ "$(printf '%s\n' "$out" | grep -c '^\[notify\] Needs you: ')" = "1" ] \
+  && ok "N=1: only the newly due item, the seen one stays quiet" || bad "N=1: only the newly due item ($out)"
+[ "$(wc -l < "$N_STATE" | tr -d ' ')" = "2" ] && ok "seen file now records two items" || bad "seen file now records two items"
+
+# a bad value is a warning and nothing else
+out=$(run_push FLEET_NOTIFY_NEEDS_YOU_MIN=soon 2>&1) && ok "a non-numeric value exits 0" || bad "a non-numeric value exits 0"
+case "$out" in
+  *"WARNING"*) ok "a non-numeric value warns" ;;
+  *) bad "a non-numeric value warns ($out)" ;;
+esac
+[ "$(wc -l < "$N_STATE" | tr -d ' ')" = "2" ] && ok "a non-numeric value pushes nothing" || bad "a non-numeric value pushes nothing"
+
+# a replay is history: nothing is pushed
+rm -f "$N_STATE"
+python3 - "$N_LIVE" "$N_DIR/replay.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["view"] = "replay"
+json.dump(d, open(sys.argv[2], "w"))
+PY
+out=$(PATH="$N_SHIM:$PATH" env -u FLEET_NOTIFY_SILENT FLEET_NOTIFY_NEEDS_YOU_STATE="$N_STATE" FLEET_NOTIFY_NEEDS_YOU_MIN=1 \
+  "$NOTIFY" needs-you "$N_DIR/replay.json" 2>/dev/null)
+[ -z "$out" ] && ok "a replay view pushes nothing" || bad "a replay view pushes nothing ($out)"
+
+# silenced: the stdout line and the seen record, no toast
+rm -f "$N_STATE"
+before=$(toasts)
+out=$(PATH="$N_SHIM:$PATH" FLEET_NOTIFY_SILENT=1 FLEET_NOTIFY_NEEDS_YOU_STATE="$N_STATE" FLEET_NOTIFY_NEEDS_YOU_MIN=10 \
+  "$NOTIFY" needs-you "$N_LIVE" 2>/dev/null)
+[ "$(printf '%s\n' "$out" | grep -c '^\[notify\] Needs you: ')" = "1" ] \
+  && ok "silenced: the stdout line still prints" || bad "silenced: the stdout line still prints ($out)"
+[ "$(toasts)" = "$before" ] && ok "silenced: osascript not invoked" || bad "silenced: osascript not invoked"
+
+# ── round 2 (the v3-C critic, two findings, the critic's own fixtures) ──────
+echo "== Part L, round 2: a path in a PR title; one PR notified twice =="
+
+# ONE: an operator path reached the toast through a PR title. The projector
+# marks every slash token of a PR title (pr_view) and of every NEEDS YOU
+# line (add) as it marks a task line; that scrubbed text is the page row.
+# The toast no longer reads it at all (round 5): fixed phrases only.
+assert_fn "mark_paths marks the critic's PR title like a task line and redacts the token" \
+  'mod.scrub_text(mod.mark_paths("fix /Users/arlenrios/.ssh/id_rsa rotate $HOME ghp_abcdefghijklmnopqrstuvwxyz0123456789"), 120)=="fix outside-repo rotate $HOME [redacted]"'
+assert_fn "mark_paths marks a home path, a variable path, a file: path and a parent escape" \
+  'mod.mark_paths("see ~/.ssh/id_rsa and $HOME/x and file:/etc/passwd, (a/../b)")=="see outside-repo and outside-repo and outside-repo, (outside-repo)"'
+assert_fn "mark_paths keeps a branch, a repo-relative path and a URL" \
+  'mod.mark_paths("PR 7 ready: feat/x merges scripts/notify.sh https://example.invalid/pr/7")=="PR 7 ready: feat/x merges scripts/notify.sh https://example.invalid/pr/7"'
+assert_fn "mark_paths flattens a tab or a newline before a path" \
+  'mod.mark_paths("fix\t/Users/x/y\nnow")=="fix outside-repo now"'
+# Round 3: a path glued to other characters is still a path. The critic's
+# title (a colon before the slash), a markdown backtick wrapper, an equals
+# sign, a variable and a parent escape inside the token.
+assert_fn "round 3: mark_paths marks the critic's colon-glued title" \
+  'mod.mark_paths("fix:/Users/arlenrios/.ssh/id_rsa rotate keys")=="fix:outside-repo rotate keys"'
+assert_fn "round 3: mark_paths strips backticks like quotes and marks what they wrap" \
+  'mod.mark_paths("fix `/Users/arlenrios/.ssh/id_rsa` and `~/.ssh` now")=="fix `outside-repo` and `outside-repo` now"'
+assert_fn "round 3: mark_paths marks a path after an equals sign, a glued variable, a glued parent escape and a glued file:" \
+  'mod.mark_paths("path=/Users/arlenrios/.ssh/id_rsa home=$HOME/x up=../y see:file:/etc/passwd")=="path=outside-repo home=outside-repo up=outside-repo see:outside-repo"'
+assert_fn "round 3: mark_paths keeps a glued repo-relative path, a branch and a URL" \
+  'mod.mark_paths("fix:scripts/notify.sh on feat/x key:value/w https://example.invalid/pr/7")=="fix:scripts/notify.sh on feat/x key:value/w https://example.invalid/pr/7"'
+# Round 4: a percent-encoded slash is still a slash. The critic's title
+# (%2FUsers%2F...), the lower-case form, the encoded file: URL, a doubly
+# encoded slash, an encoded home, variable and parent escape.
+assert_fn "round 4: mark_paths marks the critic's percent-encoded title" \
+  'mod.mark_paths("fix %2FUsers%2Farlenrios%2F.ssh%2Fid_rsa rotate keys")=="fix outside-repo rotate keys"'
+assert_fn "round 4: mark_paths marks the lower-case %2f form and the encoded file: URL" \
+  'mod.mark_paths("fix %2fUsers%2farlenrios%2f.ssh%2fid_rsa see file:%2F%2F%2FUsers%2Farlenrios%2F.ssh%2Fid_rsa now")=="fix outside-repo see outside-repo now"'
+assert_fn "round 4: mark_paths marks a doubly encoded slash, an encoded home, variable, parent escape and a glued encoded path" \
+  'mod.mark_paths("a %252FUsers%252Fx b %7E%2F.ssh c %24HOME%2Fx d %2E%2E%2Fetc fix:%2FUsers%2Fx")=="a outside-repo b outside-repo c outside-repo d outside-repo fix:outside-repo"'
+assert_fn "round 4: mark_paths keeps an encoded repo-relative path, branch and URL (decoded) and a percent that is no escape" \
+  'mod.mark_paths("fix scripts%2Fnotify.sh on feat%2Fx https:%2F%2Fexample.invalid%2Fpr%2F7 at 50%25 or 100% or %zz")=="fix scripts/notify.sh on feat/x https://example.invalid/pr/7 at 50%25 or 100% or %zz"'
+assert_fn "round 4: first_sentence is the same rule on an encoded path" \
+  'mod.first_sentence("Fix %2FUsers%2Farlenrios%2F.ssh%2Fid_rsa now. Then the body.", 80)=="Fix outside-repo now."'
+assert_fn "first_sentence is the same rule (the failed dispatch line)" \
+  'mod.first_sentence("Fix /Users/arlenrios/.ssh/id_rsa and $HOME now. Then sk-abcdefghijklmnopqrstuvwxyz", 80)=="Fix outside-repo and $HOME now."'
+
+# The product path: the Part K fixture, PR 102 titled as the critic wrote it,
+# its SAFE comment body carrying a token and a path. gh answers through a
+# wrapper that serves that one view and hands everything else to the K shim.
+L2_BIN="$TMP/bin-l2"; mkdir -p "$L2_BIN"; L2_LOG="$TMP/gh-l2.log"
+cat > "$L2_BIN/gh" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$1 $2 $3" = "pr view 102" ]; then
+  echo "$*" >> "${GH_SHIM_LOG:?}"
+  NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"number":102,"title":"fix /Users/arlenrios/.ssh/id_rsa rotate $HOME ghp_abcdefghijklmnopqrstuvwxyz0123456789","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","url":"https://example.invalid/pr/102","headRefName":"feat/k-ready","comments":[{"id":"IC_102_1","url":"https://example.invalid/pr/102#c1","createdAt":"%s","body":"CRITIC K READY: SAFE-TO-MERGE\\nsk-abcdefghijklmnopqrstuvwxyz0123456789 in /tmp/secret"}],"reviews":[]}\n' "$NOW"
+  exit 0
+fi
+exec "${L2_INNER_GH:?}" "$@"
+SHIM
+chmod +x "$L2_BIN/gh"
+L2_ON="$TMP/out/live-l2.json"; : > "$L2_LOG"
+PATH="$L2_BIN:$PATH" GH_SHIM_LOG="$L2_LOG" L2_INNER_GH="$K_BIN/gh" FLEET_GH_OWNER=testowner FLEET_CHECKOUTS="$K_CO" \
+  python3 "$DESK_LIVE" --once --events-dir "$K_DIR" --queue-file "$K_Q" --out "$L2_ON" >/dev/null 2>&1 \
+  && ok "round 2: --once exits 0 with the critic's PR title" || bad "round 2: --once exits 0 with the critic's PR title"
+grep -q '^pr view 102' "$L2_LOG" && ok "round 2: the wrapper served pr view 102" || bad "round 2: the wrapper served pr view 102"
+assert_py "the ready_to_merge line marks the path and redacts the token" "$L2_ON" \
+  '[e["text"] for e in d["needs_you"] if e["type"]=="ready_to_merge"]==["PR 102 ready to merge: fix outside-repo rotate $HOME [redacted]"]'
+grep -q 'id_rsa\|/Users/\|ghp_abc\|sk-abc\|/tmp/secret' "$L2_ON" \
+  && bad "no operator path, token or comment body anywhere in the projection" \
+  || ok "no operator path, token or comment body anywhere in the projection"
+# The push on that projection, the item aged past N as the critic did. The
+# toast never reads the marked line: it is the fixed phrase with the item's
+# identifiers, the page row keeps the scrubbed text.
+L2_DIR="$N_DIR/round2"; mkdir -p "$L2_DIR"
+python3 - "$L2_ON" "$L2_DIR/aged.json" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+d = json.load(open(sys.argv[1]))
+at = (datetime.now(timezone.utc) - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+for e in d["needs_you"]:
+    e["at"] = at
+json.dump(d, open(sys.argv[2], "w"))
+PY
+before=$(toasts)
+out=$(PATH="$N_SHIM:$PATH" env -u FLEET_NOTIFY_SILENT -u NOTIFY_SILENT FLEET_NOTIFY_NEEDS_YOU_STATE="$L2_DIR/seen-product" \
+  FLEET_NOTIFY_NEEDS_YOU_MIN=1 "$NOTIFY" needs-you "$L2_DIR/aged.json" 2>"$L2_DIR/aged.err")
+case "$out" in
+  *'[notify] Needs you: olympus-platform ready to merge PR 102'*) ok "the push carries the fixed phrase" ;;
+  *) bad "the push carries the fixed phrase ($out)" ;;
+esac
+case "$out" in
+  *"id_rsa"*|*"/Users/"*|*"ghp_abc"*|*"sk-abc"*|*"/tmp/secret"*|*"outside-repo"*) bad "the push carries no path, token, comment body or page text" ;;
+  *) ok "the push carries no path, token, comment body or page text" ;;
+esac
+[ ! -s "$L2_DIR/aged.err" ] && ok "the fixed phrase needs no refusal" || bad "the fixed phrase needs no refusal ($(cat "$L2_DIR/aged.err"))"
+if [ "$on_mac" = "1" ]; then
+  [ "$(toasts)" -gt "$before" ] && ok "macOS: the product path toasts" || bad "macOS: the product path toasts"
+  grep -q 'id_rsa\|/Users/\|ghp_abc\|sk-abc' "$OSASCRIPT_CALLS" \
+    && bad "macOS: no osascript argv carries a path or a token" || ok "macOS: no osascript argv carries a path or a token"
+fi
+
+# Round 3, the product path: PR 102 served under the critic's colon-glued
+# title through the same wrapper; the projection and the push carry the
+# marker, not the path.
+cat > "$L2_BIN/gh" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$1 $2 $3" = "pr view 102" ]; then
+  echo "$*" >> "${GH_SHIM_LOG:?}"
+  NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"number":102,"title":"fix:/Users/arlenrios/.ssh/id_rsa rotate keys","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","url":"https://example.invalid/pr/102","headRefName":"feat/k-ready","comments":[{"id":"IC_102_1","url":"https://example.invalid/pr/102#c1","createdAt":"%s","body":"CRITIC K READY: SAFE-TO-MERGE"}],"reviews":[]}\n' "$NOW"
+  exit 0
+fi
+exec "${L2_INNER_GH:?}" "$@"
+SHIM
+chmod +x "$L2_BIN/gh"
+L3_ON="$TMP/out/live-l3.json"
+PATH="$L2_BIN:$PATH" GH_SHIM_LOG="$L2_LOG" L2_INNER_GH="$K_BIN/gh" FLEET_GH_OWNER=testowner FLEET_CHECKOUTS="$K_CO" \
+  python3 "$DESK_LIVE" --once --events-dir "$K_DIR" --queue-file "$K_Q" --out "$L3_ON" >/dev/null 2>&1 \
+  && ok "round 3: --once exits 0 with the colon-glued title" || bad "round 3: --once exits 0 with the colon-glued title"
+assert_py "round 3: the ready_to_merge line marks the colon-glued path" "$L3_ON" \
+  '[e["text"] for e in d["needs_you"] if e["type"]=="ready_to_merge"]==["PR 102 ready to merge: fix:outside-repo rotate keys"]'
+grep -q 'id_rsa\|/Users/' "$L3_ON" \
+  && bad "round 3: no operator path anywhere in the projection" \
+  || ok "round 3: no operator path anywhere in the projection"
+
+# Round 4, the product path: PR 102 served under the critic's percent-encoded
+# title through the same wrapper; the projection carries the marker, not the
+# path, encoded or not. (The push side of rounds 2 to 4 is one test below:
+# the toast builder never reads the line.)
+cat > "$L2_BIN/gh" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$1 $2 $3" = "pr view 102" ]; then
+  echo "$*" >> "${GH_SHIM_LOG:?}"
+  NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"number":102,"title":"fix %%2FUsers%%2Farlenrios%%2F.ssh%%2Fid_rsa rotate keys","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","url":"https://example.invalid/pr/102","headRefName":"feat/k-ready","comments":[{"id":"IC_102_1","url":"https://example.invalid/pr/102#c1","createdAt":"%s","body":"CRITIC K READY: SAFE-TO-MERGE"}],"reviews":[]}\n' "$NOW"
+  exit 0
+fi
+exec "${L2_INNER_GH:?}" "$@"
+SHIM
+chmod +x "$L2_BIN/gh"
+L4_ON="$TMP/out/live-l4.json"
+PATH="$L2_BIN:$PATH" GH_SHIM_LOG="$L2_LOG" L2_INNER_GH="$K_BIN/gh" FLEET_GH_OWNER=testowner FLEET_CHECKOUTS="$K_CO" \
+  python3 "$DESK_LIVE" --once --events-dir "$K_DIR" --queue-file "$K_Q" --out "$L4_ON" >/dev/null 2>&1 \
+  && ok "round 4: --once exits 0 with the percent-encoded title" || bad "round 4: --once exits 0 with the percent-encoded title"
+assert_py "round 4: the ready_to_merge line marks the percent-encoded path" "$L4_ON" \
+  '[e["text"] for e in d["needs_you"] if e["type"]=="ready_to_merge"]==["PR 102 ready to merge: fix outside-repo rotate keys"]'
+grep -qi 'id_rsa\|/Users/\|%2FUsers' "$L4_ON" \
+  && bad "round 4: no operator path, encoded or not, anywhere in the projection" \
+  || ok "round 4: no operator path, encoded or not, anywhere in the projection"
+
+# ── round 5: the toast is fixed phrases and identifiers only ────────────────
+echo "== Part L, round 5: the toast is fixed phrases and identifiers only =="
+# Rounds 1 to 4 each found one more encoding of an operator path inside free
+# text (a PR title, a comment body, a task line). Scrubbing free text for the
+# toast was the losing game; the toast no longer reads any of it. One test
+# stands in for the round 1 to 4 path fixtures: every earlier shape (plain,
+# colon-glued, parentheses, percent-encoded, double and triple encoded,
+# glued to a word) goes through the toast builder as the item's text, and
+# the only acceptable output is the fixed phrase, exactly.
+python3 - "$L2_DIR" <<'PY'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+out = sys.argv[1]
+at = (datetime.now(timezone.utc) - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+def ready(pr, text):
+    return {"type": "ready_to_merge", "text": text, "action": "merge",
+            "verified": True, "at": at, "repo": "olympus-platform", "pr": pr,
+            "source": {"kind": "pr", "repo": "olympus-platform", "pr": pr}}
+shapes = [
+    (102, "PR 102 ready to merge: fix /Users/arlenrios/.ssh/id_rsa rotate keys"),         # round 2: plain
+    (103, "PR 103 ready to merge: fix:/Users/arlenrios/.ssh/id_rsa rotate keys"),         # round 3: colon-glued
+    (104, "PR 104 ready to merge: fix (`~/.ssh/id_rsa`) and (a/../b) now"),               # parentheses and backticks
+    (105, "PR 105 ready to merge: fix %2FUsers%2Farlenrios%2F.ssh%2Fid_rsa rotate"),      # round 4: percent-encoded
+    (106, "PR 106 ready to merge: fix %252FUsers%252Farlenrios%252F.ssh%252Fid_rsa now"), # double encoded
+    (107, "PR 107 ready to merge: fix %25252FUsers%25252Farlenrios%25252F.ssh now"),      # triple encoded
+    (108, "PR 108 ready to merge: path=/Users/arlenrios/.ssh/id_rsa rotate keys"),        # round 3: glued to a word
+]
+items = [ready(pr, text) for pr, text in shapes]
+# the critic-block shape: fixed phrase, stem word, round, PR number
+items.append({"type": "critic_block", "text": "PR 80 round 2 blocked by FRONTEND CRITIC (BLOCK-FIX), see /Users/x",
+              "action": "open the comment", "verified": True, "at": at,
+              "repo": "dev-agents", "pr": 80,
+              "source": {"kind": "comment", "repo": "dev-agents", "comment_id": 42, "pr": 80,
+                         "stem": "FRONTEND CRITIC", "round": 2, "verdict": "BLOCK-FIX"}})
+# a stem that is not plain words falls back to "critic", it never leaks
+items.append({"type": "critic_block", "text": "blocked", "action": "open the comment",
+              "verified": True, "at": at, "repo": "dev-agents", "pr": 81,
+              "source": {"kind": "comment", "repo": "dev-agents", "comment_id": 43, "pr": 81,
+                         "stem": "CRITIC /Users/arlenrios/.ssh", "round": 3, "verdict": "BLOCK-FIX"}})
+# an item whose identifiers cannot carry the fixed shape is refused
+items.append({"type": "quiet_seat", "text": "devops on feat/x quiet for 12 min",
+              "action": "check the log", "verified": True, "at": at,
+              "source": {"kind": "stream", "dispatch_id": "h9", "task_id": "3"}})
+json.dump({"schema": "live/1", "view": "live", "needs_you": items}, open(os.path.join(out, "r5.json"), "w"))
+PY
+before=$(toasts)
+out=$(PATH="$N_SHIM:$PATH" env -u FLEET_NOTIFY_SILENT -u NOTIFY_SILENT FLEET_NOTIFY_NEEDS_YOU_STATE="$L2_DIR/seen-r5" \
+  FLEET_NOTIFY_NEEDS_YOU_MIN=1 "$NOTIFY" needs-you "$L2_DIR/r5.json" 2>"$L2_DIR/r5.err") \
+  && ok "notify.sh exits 0 on a hand-written file full of path shapes" || bad "notify.sh exits 0 on a hand-written file full of path shapes"
+expected='[notify] Needs you: olympus-platform ready to merge PR 102
+[notify] Needs you: olympus-platform ready to merge PR 103
+[notify] Needs you: olympus-platform ready to merge PR 104
+[notify] Needs you: olympus-platform ready to merge PR 105
+[notify] Needs you: olympus-platform ready to merge PR 106
+[notify] Needs you: olympus-platform ready to merge PR 107
+[notify] Needs you: olympus-platform ready to merge PR 108
+[notify] Needs you: dev-agents blocked by frontend critic round 2 PR 80
+[notify] Needs you: dev-agents blocked by critic round 3 PR 81'
+[ "$out" = "$expected" ] \
+  && ok "every round 1 to 4 shape through the toast builder is exactly the fixed phrase" \
+  || bad "every round 1 to 4 shape through the toast builder is exactly the fixed phrase ($out)"
+case "$out" in
+  *"/Users/"*|*"id_rsa"*|*"~/"*|*"%2F"*|*"%25"*|*"outside-repo"*) bad "no path shape, encoded or not, reaches the push" ;;
+  *) ok "no path shape, encoded or not, reaches the push" ;;
+esac
+[ "$(grep -c 'WARNING: needs-you item .* refused' "$L2_DIR/r5.err")" = "1" ] \
+  && ok "the item with no repo identifier is refused, one stderr line" \
+  || bad "the item with no repo identifier is refused, one stderr line ($(cat "$L2_DIR/r5.err"))"
+[ "$(wc -l < "$L2_DIR/seen-r5" | tr -d ' ')" = "9" ] \
+  && ok "nine items seen, the refused one is not recorded" \
+  || bad "nine items seen, the refused one is not recorded ($(wc -l < "$L2_DIR/seen-r5"))"
+if [ "$on_mac" = "1" ]; then
+  [ "$(toasts)" = "$((before + 9))" ] && ok "macOS: nine toasts, one per item, nothing for the refused one" \
+    || bad "macOS: nine toasts, one per item ($(( $(toasts) - before )))"
+  grep -qi 'id_rsa\|/Users/\|\.ssh\|%2F\|%25' "$OSASCRIPT_CALLS" \
+    && bad "macOS: no osascript argv carries a path shape, encoded or not" \
+    || ok "macOS: no osascript argv carries a path shape, encoded or not"
+fi
+
+# TWO: ready_to_merge notified twice for one PR because the seen key hashed
+# the whole source, comments[] included. The key is now the stable identity:
+# type, source kind, and the comment id / repo and PR / dispatch and seat /
+# checkout, file and line. A later SAFE comment on the same PR, a changed url
+# or a fresh heartbeat timestamp is the same item; a new block comment is not.
+python3 - "$L2_DIR" <<'PY'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+out = sys.argv[1]
+now = datetime.now(timezone.utc)
+def iso(m): return (now - timedelta(minutes=m)).strftime("%Y-%m-%dT%H:%M:%SZ")
+c1 = {"kind": "comment", "id": "IC_1", "verdict": "SAFE-TO-MERGE", "round": 1, "stem": "CRITIC K", "at": iso(30)}
+c2 = {"kind": "review", "id": "PRR_2", "verdict": "SAFE-TO-MERGE", "round": 1, "stem": "SECURITY CRITIC K", "at": iso(20)}
+def write(name, *items):
+    json.dump({"schema": "live/1", "view": "live", "needs_you": list(items)}, open(os.path.join(out, name), "w"))
+def ready(comments, at):
+    return {"type": "ready_to_merge", "text": "PR 102 ready to merge: the ready PR", "action": "merge",
+            "verified": True, "at": at, "source": {"kind": "pr", "repo": "olympus-platform", "pr": 102,
+            "url": "https://example.invalid/pr/102", "merge_state": "CLEAN", "comments": comments}}
+def block(cid, rnd, url):
+    return {"type": "critic_block", "text": "PR 102 round %d blocked by critic k (BLOCK-FIX)" % rnd, "action": "open the comment",
+            "verified": True, "at": iso(25), "source": {"kind": "comment", "repo": "olympus-platform", "comment_id": cid,
+            "url": url, "pr": 102, "issue": 900, "verdict": "BLOCK-FIX", "round": rnd, "stem": "CRITIC K"}}
+def quiet(event, ts):
+    return {"type": "quiet_seat", "text": "devops on feat/k-quiet quiet for 12 min", "action": "check the log",
+            "verified": True, "at": ts, "repo": "olympus-platform",
+            "source": {"kind": "stream", "dispatch_id": "k-live", "event": event, "task_id": "7", "ts": ts}}
+write("pr-one.json", ready([c1], iso(30)))
+write("pr-two.json", ready([c1, c2], iso(20)))          # a second SAFE verdict landed
+write("block-a.json", block("IC_9001", 1, "https://example.invalid/pr/102#c1"))
+write("block-a-url.json", block("IC_9001", 1, "https://example.invalid/pr/102#issuecomment-9001"))
+write("block-b.json", block("IC_9002", 2, "https://example.invalid/pr/102#c2"))   # a new round, a new item
+write("quiet-1.json", quiet("seat_dispatch", iso(40)))
+write("quiet-2.json", quiet("seat_heartbeat", iso(15)))  # one heartbeat, quiet again
+PY
+L2_SEEN="$L2_DIR/seen-identity"; rm -f "$L2_SEEN"
+push_l2() {   # push_l2 <file>: N=1, the shim on PATH, the identity seen file
+  PATH="$N_SHIM:$PATH" env -u FLEET_NOTIFY_SILENT -u NOTIFY_SILENT FLEET_NOTIFY_NEEDS_YOU_STATE="$L2_SEEN" \
+    FLEET_NOTIFY_NEEDS_YOU_MIN=1 "$NOTIFY" needs-you "$L2_DIR/$1" 2>/dev/null
+}
+lines() { printf '%s\n' "$1" | grep -c '^\[notify\] Needs you: '; }
+before=$(toasts)
+out=$(push_l2 pr-one.json)
+[ "$(lines "$out")" = "1" ] && ok "PR 102 ready: pushed once" || bad "PR 102 ready: pushed once ($out)"
+out=$(push_l2 pr-two.json)
+[ -z "$out" ] && ok "a second SAFE comment on the same PR is not a second toast" \
+  || bad "a second SAFE comment on the same PR is not a second toast ($out)"
+[ "$(wc -l < "$L2_SEEN" | tr -d ' ')" = "1" ] && ok "the seen file still holds one line for PR 102" \
+  || bad "the seen file still holds one line for PR 102 ($(wc -l < "$L2_SEEN"))"
+out=$(push_l2 block-a.json)
+[ "$(lines "$out")" = "1" ] && ok "a block on the same PR is its own item (comment id)" || bad "a block on the same PR is its own item ($out)"
+out=$(push_l2 block-a-url.json)
+[ -z "$out" ] && ok "the same block comment with a changed url is not pushed again" \
+  || bad "the same block comment with a changed url is not pushed again ($out)"
+out=$(push_l2 block-b.json)
+[ "$(lines "$out")" = "1" ] && ok "a new block comment (new id, new round) is a new item" || bad "a new block comment is a new item ($out)"
+out=$(push_l2 quiet-1.json)
+[ "$(lines "$out")" = "1" ] && ok "a quiet seat is pushed once" || bad "a quiet seat is pushed once ($out)"
+out=$(push_l2 quiet-2.json)
+[ -z "$out" ] && ok "the same seat quiet again after one heartbeat (new event, new ts) is not pushed again" \
+  || bad "the same seat quiet again after one heartbeat is not pushed again ($out)"
+[ "$(wc -l < "$L2_SEEN" | tr -d ' ')" = "4" ] && ok "four identities seen: the PR, two blocks, the seat" \
+  || bad "four identities seen ($(wc -l < "$L2_SEEN"))"
+if [ "$on_mac" = "1" ]; then
+  [ "$(toasts)" = "$((before + 4))" ] && ok "macOS: four toasts, never a fifth" || bad "macOS: four toasts, never a fifth ($(( $(toasts) - before )))"
+fi
+grep -q 'comments\[\]\|comments array\|whole source' "$NOTIFY" \
+  && ok "notify.sh states the key rule" || bad "notify.sh states the key rule"
+
+# a missing projection is nothing to push
+FLEET_NOTIFY_NEEDS_YOU_MIN=10 FLEET_NOTIFY_NEEDS_YOU_STATE="$N_STATE" "$NOTIFY" needs-you "$N_DIR/absent.json" >/dev/null 2>&1 \
+  && ok "a missing live.json exits 0" || bad "a missing live.json exits 0"
+
+# the seat-outcome path is unchanged
+out=$(FLEET_NOTIFY_SILENT=1 "$NOTIFY" devops mac-mini-1 feat/x success 2>/dev/null)
+case "$out" in
+  *"[notify] Agent Succeeded: devops on mac-mini-1 completed (feat/x)"*) ok "seat outcome path unchanged" ;;
+  *) bad "seat outcome path unchanged ($out)" ;;
+esac
+
+# the wiring: desk_live.py hands every written projection to notify.sh,
+# only when the env var is set (the seen file is the trace)
+W_STATE="$N_DIR/wired-seen"
+env -u FLEET_NOTIFY_NEEDS_YOU_MIN FLEET_NOTIFY_NEEDS_YOU_STATE="$W_STATE" \
+  python3 "$DESK_LIVE" --once --no-gh --events-dir "$Y_DIR" --queue-file "$TMP/no-queue.json" --out "$TMP/out/wired.json" >/dev/null 2>&1
+[ ! -e "$W_STATE" ] && ok "desk_live.py --once with the env var unset never calls the push" \
+  || bad "desk_live.py --once with the env var unset never calls the push"
+FLEET_NOTIFY_SILENT=1 FLEET_NOTIFY_NEEDS_YOU_MIN=10 FLEET_NOTIFY_NEEDS_YOU_STATE="$W_STATE" \
+  python3 "$DESK_LIVE" --once --no-gh --events-dir "$Y_DIR" --queue-file "$TMP/no-queue.json" --out "$TMP/out/wired.json" >/dev/null 2>&1 \
+  && ok "desk_live.py --once with the env var set exits 0" || bad "desk_live.py --once with the env var set exits 0"
+[ -e "$W_STATE" ] && ok "desk_live.py --once with the env var set calls the push (seen file created)" \
+  || bad "desk_live.py --once with the env var set calls the push (seen file created)"
+[ "$(grep -c 'push_needs_you(out_path)' "$REPO_DIR/scripts/desk_live.py")" -ge 3 ] \
+  && ok "the push follows every write path (once, watch, serve)" || bad "the push follows every write path (once, watch, serve)"
+
+for key in 'yesterday\[\]' 'yesterday_meta' 'FLEET_NOTIFY_NEEDS_YOU_MIN'; do
+  grep -q "$key" "$REPO_DIR/docs/experience-data.md" \
+    && ok "$key is documented in the live schema" || bad "$key is documented in the live schema"
+done
+grep -q 'fixed phrases and identifiers only' "$REPO_DIR/docs/experience-data.md" \
+  && ok "the fixed-phrase toast rule is documented in the live schema" \
+  || bad "the fixed-phrase toast rule is documented in the live schema"
+grep -q 'FLEET_NOTIFY_NEEDS_YOU_MIN' "$REPO_DIR/README.md" \
+  && ok "FLEET_NOTIFY_NEEDS_YOU_MIN is in the README" || bad "FLEET_NOTIFY_NEEDS_YOU_MIN is in the README"
 
 echo ""
 echo "----------------------------------------"
