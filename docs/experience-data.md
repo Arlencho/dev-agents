@@ -1028,17 +1028,22 @@ failed and aborted figures still count these rows (they happened); only
 (`ended_at` for settled dispatches, `started_at` for one still running), a
 row is superseded when:
 
-1. another dispatch of the same plan file ran today (any outcome: the newest
-   failure of a chain is itself the open row, the ones before it are replaced);
+1. another dispatch of the same plan file ran today, same repo (any outcome:
+   the newest failure of a chain is itself the open row, the ones before it
+   are replaced). A live re-dispatch folds the failure only once a seat
+   exists for it: a dispatch that has only seen `dispatch_start` leaves the
+   row open while NOW has nothing to take its place;
 2. a dispatch ran a fix round for it: the plan file is the same stem with a
    fix suffix (`x.plan` → `x-fix.plan`, `x-fix2.plan`), or the plan header
    carries fix-round wording (`fix round`, `fix wave`, any case) and names the
-   row, by one of its branches or by every significant word of its plan title
-   (the header before the colon);
+   row by its stem or its branch (a row branch in the header or among the
+   candidate's own branches, or the candidate stem growing out of the row's
+   stem), never by a subset of the row's title words;
 3. a dispatch on one of its branches ended `landed`;
-4. gh says the branch has merged (`gh pr list --state merged`): optional, so
-   when gh cannot answer the rule does not fire and the `merged_branch` check
-   reads `skipped` with the reason.
+4. gh says the branch has merged (`gh pr list --state merged`), same repo and
+   `merged_at` later than the row (`ended_at`, else `started_at`): optional,
+   so when gh cannot answer the rule does not fire and the `merged_branch`
+   check reads `skipped` with the reason.
 
 `superseded_by` is `{kind, plan, dispatch_id, branch, pr}`: `kind` is `plan`
 (later dispatch of the same or a fix-round plan), `landed` (same branch landed

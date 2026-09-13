@@ -2049,30 +2049,25 @@ def _minutes(seconds):
 # lands in needs_you_meta.superseded, so nothing is hidden) when, same repo
 # and later than the row:
 #
-#   1. another dispatch of the same plan file exists today (any outcome: a
-#      later failure is itself the open row, the older one is replaced), or
+#   1. another dispatch of the same plan file exists today, same repo (any
+#      outcome: a later failure is itself the open row, the older one is
+#      replaced). A live re-dispatch that only got as far as dispatch_start
+#      does not fold the failure: no seat exists yet to take its place, or
 #   2. a dispatch ran a fix round for it: the plan file is the same stem with
 #      a fix suffix (x.plan -> x-fix.plan, x-fix2.plan), or the plan header
 #      carries fix-round wording ("fix round", "fix wave") and names the row
-#      (its branch, or every significant word of the row's plan title), or
+#      by its stem or its branch, never by a subset of the row's title words
+#      (one-letter track tokens keep "Floor v3-B" and "Floor v3-C" apart), or
 #   3. a dispatch on one of its branches ended landed, or
-#   4. gh says the branch has merged (optional: when gh cannot answer the
-#      rule does not fire and the merged_branch check reads skipped).
+#   4. gh says the branch has merged, same repo and merged later than the row
+#      (optional: when gh cannot answer the rule does not fire and the
+#      merged_branch check reads skipped).
 #
 # "Later" is ended_at for settled dispatches, started_at for live ones (a
 # re-dispatch already running replaces the failure it answers).
 
 FIX_ROUND_RE = re.compile(r"\bfix[\s-]*(?:round|wave)\b", re.IGNORECASE)
 FIX_SUFFIX_RE = re.compile(r"^(?:fix|critic|rebase|resume)\d*$")
-_TITLE_STOP = frozenset(("the", "an", "in", "of", "for", "on", "and", "to",
-                         "after", "with", "is", "it"))
-
-
-def _title_tokens(purpose):
-    """Significant words of a plan title (the header before its colon)."""
-    title = str(purpose or "").split(":", 1)[0]
-    return {t for t in re.findall(r"[a-z0-9]+", title.lower())
-            if len(t) >= 2 and t not in _TITLE_STOP}
 
 
 def superseded_dispatch(row, today, live, plan_cache, queue_entries, gh, skip):
@@ -2090,6 +2085,15 @@ def superseded_dispatch(row, today, live, plan_cache, queue_entries, gh, skip):
     def base_of(d):
         return os.path.basename(str(d.get("plan_basename") or d.get("plan") or ""))
 
+    def same_repo(d):
+        return not (r_repo and d.get("repo") and d.get("repo") != r_repo)
+
+    def live_without_seat(d):
+        """A re-dispatch that only got as far as dispatch_start: no seat
+        exists yet, so NOW has nothing to take the failure's place and the
+        row stays open while the re-dispatch is starting."""
+        return not d.get("ended_at") and not d.get("seats")
+
     # Settled dispatches that ended after this one, live ones started after
     # this one started. The row itself never supersedes itself. Nearest first:
     # the fold names the immediate next round, not the last one of the day.
@@ -2104,16 +2108,21 @@ def superseded_dispatch(row, today, live, plan_cache, queue_entries, gh, skip):
     def plan_of(d):
         return cached_plan(plan_cache, base_of(d), queue_entries)
 
-    def names_row(d, purpose):
-        """The candidate's fix-round header names this row: its branch, or
-        every significant word of its plan title."""
+    def names_row(d, purpose, d_stem):
+        """The candidate names this row by its stem or its branch, never by a
+        subset of the row's title words: a row branch appears in its fix-round
+        header or among its own branches, or its stem grows out of the row's
+        stem. Track letters stay whole in stems and branches ("v3b" vs "v3c"),
+        so one track's fix round cannot fold another track's failure."""
         if any(b and b in purpose for b in r_branches):
             return True
-        plan = plan_of(row)
-        tokens = _title_tokens((plan or {}).get("purpose") or row.get("purpose"))
-        return bool(tokens) and tokens <= _title_tokens(purpose)
+        if any(b and b in (d.get("branches") or []) for b in r_branches):
+            return True
+        return bool(r_stem) and d_stem.startswith(r_stem + "-")
 
     for d in later:
+        if not same_repo(d) or live_without_seat(d):
+            continue
         if r_plan and base_of(d) == r_plan:
             return {"kind": "plan", "plan": r_plan, "dispatch_id": d.get("dispatch_id"),
                     "branch": None, "pr": None}
@@ -2127,7 +2136,7 @@ def superseded_dispatch(row, today, live, plan_cache, queue_entries, gh, skip):
                 and FIX_SUFFIX_RE.match(d_stem[len(r_stem) + 1:]):
             return {"kind": "plan", "plan": d_base, "dispatch_id": d.get("dispatch_id"),
                     "branch": None, "pr": None}
-        if FIX_ROUND_RE.search(purpose) and names_row(d, purpose):
+        if FIX_ROUND_RE.search(purpose) and names_row(d, purpose, d_stem):
             return {"kind": "plan", "plan": d_base, "dispatch_id": d.get("dispatch_id"),
                     "branch": None, "pr": None}
     for d in later:
@@ -2144,11 +2153,14 @@ def superseded_dispatch(row, today, live, plan_cache, queue_entries, gh, skip):
         if merged.get("lookup") != "verified":
             skip("merged_branch", merged.get("reason"))
         else:
+            row_at = r_end or r_start
             heads = {p.get("branch"): p for p in merged.get("prs") or [] if p.get("branch")}
             for branch in r_branches:
-                if branch in heads:
+                pr = heads.get(branch)
+                merged_at = str((pr or {}).get("merged_at") or "")
+                if pr and row_at and merged_at > row_at:
                     return {"kind": "merge", "plan": None, "dispatch_id": None,
-                            "branch": branch, "pr": heads[branch].get("number")}
+                            "branch": branch, "pr": pr.get("number")}
     return None
 
 

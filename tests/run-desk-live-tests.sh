@@ -2847,15 +2847,15 @@ assert_py "the critic seat's sentence says wave 2 of its own plan" "$L_ON" \
   '[s for s in d["seats"] if s.get("dispatch_id")=="l-seats" and s["task_id"]=="1"][0]["now"]["wave"]==2'
 
 # The merge rule with gh answering: a failed dispatch whose branch merged is
-# superseded by the merge, the PR named.
+# superseded by the merge, the PR named. The merge lands after the row ended
+# (the rule compares merged_at to the row), stamped from the stream itself.
 L2_BIN="$TMP/bin-l"; mkdir -p "$L2_BIN"; L2_LOG="$TMP/gh-l.log"
 cat > "$L2_BIN/gh" <<'SHIM'
 #!/usr/bin/env bash
 echo "$*" >> "${GH_SHIM_LOG:?}"
 case "$1 $2" in
   "auth status") exit 0 ;;
-  "pr list")
-    printf '[{"number":77,"title":"feat: the orphan fix","headRefName":"feat/l-orphan","mergedAt":"2026-09-13T20:00:00Z","milestone":null}]\n' ;;
+  "pr list") cat "${GH_SHIM_PRS:?}" ;;
   *) exit 1 ;;
 esac
 SHIM
@@ -2863,9 +2863,23 @@ chmod +x "$L2_BIN/gh"
 L2_DIR="$TMP/events-l2"; mkdir -p "$L2_DIR"
 cp "$L_DIR/l-orphan.jsonl" "$L2_DIR/l-orphan.jsonl"
 printf 'l-orphan.jsonl\n' > "$L2_DIR/latest"
+L2_PRS="$TMP/gh-l-prs.json"
+python3 - "$L2_DIR/l-orphan.jsonl" "$L2_PRS" <<'L2PRS'
+import json, sys
+from datetime import datetime, timedelta
+end = None
+for line in open(sys.argv[1], encoding="utf-8"):
+    ev = json.loads(line)
+    if ev.get("event") == "dispatch_end":
+        end = ev["ts"]
+merged = (datetime.strptime(end, "%Y-%m-%dT%H:%M:%SZ") + timedelta(seconds=60))
+json.dump([{"number": 77, "title": "feat: the orphan fix", "headRefName": "feat/l-orphan",
+            "mergedAt": merged.strftime("%Y-%m-%dT%H:%M:%SZ"), "milestone": None}],
+          open(sys.argv[2], "w"))
+L2PRS
 L2_ON="$TMP/out/live-l2-on.json"
 : > "$L2_LOG"
-PATH="$L2_BIN:$PATH" GH_SHIM_LOG="$L2_LOG" FLEET_GH_OWNER=testowner \
+PATH="$L2_BIN:$PATH" GH_SHIM_LOG="$L2_LOG" GH_SHIM_PRS="$L2_PRS" FLEET_GH_OWNER=testowner \
   python3 "$DESK_LIVE" --once --events-dir "$L2_DIR" --queue-file "$L_Q" --out "$L2_ON" >/dev/null 2>&1 \
   && ok "--once exits 0 with the merge-rule fixture and gh answering" || bad "--once exits 0 with the merge-rule fixture and gh answering"
 assert_py "a merged branch supersedes the failed dispatch, the merge named" "$L2_ON" \
@@ -2880,6 +2894,146 @@ for key in 'superseded\[\]' 'merged_branch' 'superseded_by'; do
   grep -q "$key" "$REPO_DIR/docs/experience-data.md" \
     && ok "$key is documented in the live schema" || bad "$key is documented in the live schema"
 done
+
+# ── Part M: superseded rule, the four critic block-fix fixtures (PR 89) ────
+echo "== Part M: superseded rule, critic round 2 fixtures (issue 86) =="
+
+# The four findings of CRITIC FLOOR NEEDS YOU BLOCK-FIX on PR 89, each as its
+# own fixture: G/G2 (a fix round on another track must not fold this track's
+# failure), F (a merge older than the row must not fold it), H (the same plan
+# landing in another repo must not fold it), B2 (a live re-dispatch with only
+# dispatch_start and no seat must not fold it). Stamps use the Part L scheme:
+# relative to now, clamped past local midnight, so ordering never depends on
+# the wall clock.
+M_Q="$TMP/queue-m.json"
+python3 - "$M_Q" <<'MQ'
+import json, sys
+json.dump({"schema": "fleet-queue/1", "updated_at": "2026-09-13T00:00:00Z", "entries": []},
+          open(sys.argv[1], "w"), indent=2)
+MQ
+
+M_F_PRS="$TMP/gh-m-f-prs.json"
+python3 - "$TMP" "$M_F_PRS" <<'MFIX'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+out, f_prs = sys.argv[1], sys.argv[2]
+now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+midnight = midnight.astimezone(timezone.utc).replace(tzinfo=None)
+def ts(d):
+    return max(now - timedelta(seconds=d),
+               midnight + timedelta(seconds=7200 - d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+def write(dirname, name, rows):
+    path = os.path.join(out, dirname)
+    os.makedirs(path, exist_ok=True)
+    with open(os.path.join(path, name), "w", encoding="utf-8") as fh:
+        for i, row in enumerate(rows, 1):
+            row.update({"schema": "fleet-events/1", "seq": i, "dispatch_id": name[:-6]})
+            fh.write(json.dumps(row) + "\n")
+def failed(dirname, name, plan, branch, start, end, repo="dev-agents"):
+    write(dirname, name, [
+        {"ts": ts(start), "event": "dispatch_start", "mode": "wave", "repo": repo, "plan": plan},
+        {"ts": ts(start - 5), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+         "branch": branch, "wave": 1, "provider": "local"},
+        {"ts": ts(end + 5), "event": "seat_exit", "task_id": "0", "agent": "devops",
+         "branch": branch, "wave": 1, "status": "failed", "exit": 1, "duration_s": start - end},
+        {"ts": ts(end), "event": "dispatch_end", "status": "completed",
+         "total": 1, "succeeded": 0, "failed": 1, "duration_s": start - end},
+    ])
+# Fixture G + G2: the v3-B track fails twice, then the v3-C track's own fix
+# round fails. The v3-C round must fold nothing on the v3-B track; the v3-B
+# fix round still folds the v3-B page failure it answers. Real plan files, so
+# the fix-round header rule reads the real headers.
+failed("events-m-g", "m-g-v3b.jsonl", "2026-09-13-floor-v3b-page.plan",
+       "feat/floor-v3b", 1200, 900)
+failed("events-m-g", "m-g-v3bfix.jsonl", "2026-09-13-floor-v3b-fix1.plan",
+       "feat/floor-v3b", 850, 700)
+failed("events-m-g", "m-g-v3c.jsonl", "2026-09-13-floor-v3c-fix1.plan",
+       "feat/floor-v3c", 650, 500)
+# Fixture F: feat/foxtrot failed at ts(300); gh reports the branch merged an
+# hour BEFORE the failure (branch reuse after a prior merge). No fold.
+failed("events-m-f", "m-f.jsonl", "m-foxtrot.plan", "feat/foxtrot", 600, 300)
+json.dump([{"number": 42, "title": "feat: foxtrot, first landing",
+            "headRefName": "feat/foxtrot", "mergedAt": ts(3300), "milestone": None}],
+          open(f_prs, "w"))
+# Fixture H: shared.plan failed in dev-agents, then shared.plan landed in
+# olympus-platform on another branch. Only a same-repo round may fold it.
+failed("events-m-h", "m-h-fail.jsonl", "shared.plan", "feat/shared", 900, 600)
+write("events-m-h", "m-h-land.jsonl", [
+    {"ts": ts(550), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "shared.plan"},
+    {"ts": ts(545), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/shared-oly", "wave": 1, "provider": "local"},
+    {"ts": ts(405), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/shared-oly", "wave": 1, "status": "success", "exit": 0, "duration_s": 140},
+    {"ts": ts(400), "event": "dispatch_end", "status": "completed",
+     "total": 1, "succeeded": 1, "failed": 0, "duration_s": 150},
+])
+# Fixture B2: b2.plan failed, then a re-dispatch of b2.plan started but only
+# ever saw dispatch_start: no seat, so NOW has nothing and the failure stays.
+failed("events-m-b2", "m-b2-fail.jsonl", "b2.plan", "feat/b2", 900, 600)
+write("events-m-b2", "m-b2-live.jsonl", [
+    {"ts": ts(120), "event": "dispatch_start", "mode": "wave",
+     "repo": "dev-agents", "plan": "b2.plan"},
+])
+for dirname, latest in (("events-m-g", "m-g-v3c.jsonl"), ("events-m-f", "m-f.jsonl"),
+                        ("events-m-h", "m-h-land.jsonl"), ("events-m-b2", "m-b2-live.jsonl")):
+    with open(os.path.join(out, dirname, "latest"), "w", encoding="utf-8") as fh:
+        fh.write(latest + "\n")
+MFIX
+
+M_G="$TMP/out/live-m-g.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --events-dir "$TMP/events-m-g" --queue-file "$M_Q" --out "$M_G" >/dev/null 2>&1 \
+  && ok "--once exits 0 on critic fixture G" || bad "--once exits 0 on critic fixture G"
+assert_py "G/G2: a fix round on the v3-C track folds neither v3-B failure" "$M_G" \
+  'sorted(e["plan"] for e in d["needs_you"] if e["type"]=="failed_dispatch")'\
+'==["2026-09-13-floor-v3b-fix1.plan","2026-09-13-floor-v3c-fix1.plan"] and d["needs_you_meta"]["count"]==2'
+assert_py "G: the v3-B fix round still supersedes the v3-B failure it answers" "$M_G" \
+  '(lambda s: len(s)==1 and s[0]["plan"]=="2026-09-13-floor-v3b-page.plan" '\
+'and s[0]["superseded_by"]["kind"]=="plan" and s[0]["superseded_by"]["plan"]=="2026-09-13-floor-v3b-fix1.plan")'\
+'(d["needs_you_meta"]["superseded"])'
+assert_py "G: the strip still counts all three failures" "$M_G" \
+  'len(d["today"])==3 and sum(1 for t in d["today"] if t["outcome"]=="failed")==3 and d["summary"]["needs_you"]==2'
+
+M_BIN="$TMP/bin-m"; mkdir -p "$M_BIN"; M_F_LOG="$TMP/gh-m-f.log"
+cat > "$M_BIN/gh" <<'SHIM'
+#!/usr/bin/env bash
+echo "$*" >> "${GH_SHIM_LOG:?}"
+case "$1 $2" in
+  "auth status") exit 0 ;;
+  "pr list") cat "${GH_SHIM_PRS:?}" ;;
+  *) exit 1 ;;
+esac
+SHIM
+chmod +x "$M_BIN/gh"
+M_F="$TMP/out/live-m-f.json"
+: > "$M_F_LOG"
+PATH="$M_BIN:$PATH" GH_SHIM_LOG="$M_F_LOG" GH_SHIM_PRS="$M_F_PRS" FLEET_GH_OWNER=testowner \
+  python3 "$DESK_LIVE" --once --events-dir "$TMP/events-m-f" --queue-file "$M_Q" --out "$M_F" >/dev/null 2>&1 \
+  && ok "--once exits 0 on critic fixture F" || bad "--once exits 0 on critic fixture F"
+assert_py "F: a merge older than the row does not supersede it" "$M_F" \
+  '(lambda e: e["plan"]=="m-foxtrot.plan" and e["branch"]=="feat/foxtrot" and "superseded_by" not in e)'\
+'(d["needs_you"][0]) and d["needs_you_meta"]["count"]==1 and d["needs_you_meta"]["superseded"]==[]'
+assert_py "F: the merge check ran and was verified, not skipped" "$M_F" \
+  '(lambda c: c["status"]=="ok" and c["looked_at"]==1)({c["check"]: c for c in d["needs_you_meta"]["checks"]}["merged_branch"])'
+
+M_H="$TMP/out/live-m-h.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --events-dir "$TMP/events-m-h" --queue-file "$M_Q" --out "$M_H" >/dev/null 2>&1 \
+  && ok "--once exits 0 on critic fixture H" || bad "--once exits 0 on critic fixture H"
+assert_py "H: the same plan landing in another repo does not supersede the failure" "$M_H" \
+  '(lambda e: e["plan"]=="shared.plan" and e["repo"]=="dev-agents" and "superseded_by" not in e)'\
+'(d["needs_you"][0]) and d["needs_you_meta"]["count"]==1 and d["needs_you_meta"]["superseded"]==[]'
+assert_py "H: the strip still counts the cross-repo landing" "$M_H" \
+  'len(d["today"])==2 and sum(1 for t in d["today"] if t["outcome"]=="landed")==1'
+
+M_B2="$TMP/out/live-m-b2.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --events-dir "$TMP/events-m-b2" --queue-file "$M_Q" --out "$M_B2" >/dev/null 2>&1 \
+  && ok "--once exits 0 on critic fixture B2" || bad "--once exits 0 on critic fixture B2"
+assert_py "B2: a re-dispatch with only dispatch_start and no seat does not fold the failure" "$M_B2" \
+  '(lambda e: e["plan"]=="b2.plan" and "superseded_by" not in e)(d["needs_you"][0]) '\
+'and d["needs_you_meta"]["count"]==1 and d["needs_you_meta"]["superseded"]==[]'
+assert_py "B2: NOW has no running seat for the re-dispatch yet" "$M_B2" \
+  'd["summary"]["running"]==0'
 
 echo ""
 echo "----------------------------------------"
