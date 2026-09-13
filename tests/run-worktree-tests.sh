@@ -309,6 +309,15 @@ SHIM_WORK_SLEEP=1 SHIM_WORK_TAG=m3 seat 22 main > "$SANDBOX/main3.log" 2>&1
 check "a clean fetch point on main is detached and the seat starts" "0" "$?"
 check "detach reported" "1" "$(grep -c 'Fetch point was left on main; detaching it' "$SANDBOX/main3.log")"
 check "main on origin" "chore: seat work m3 chore: seat work m chore: seed" "$(origin_log main)"
+# A commit a seat left on local main without pushing (a rejected push, a kill
+# between commit and push) is not thrown away by the fetch-point refresh: the
+# ref only fast-forwards, and the next seat on main runs on the local tip.
+git -C "$FETCH" checkout -q main && echo local > "$FETCH/local.txt" \
+    && git -C "$FETCH" add local.txt && git -C "$FETCH" commit -q -m "chore: unpushed local main" \
+    && git -C "$FETCH" checkout -q --detach
+SHIM_WORK_SLEEP=1 SHIM_WORK_TAG=m4 seat 25 main > "$SANDBOX/main4.log" 2>&1
+check "a seat on a local main that is ahead of origin starts" "0" "$?"
+check "the unpushed local commit reached origin under the seat's" "chore: seat work m4 chore: unpushed local main chore: seat work m3 chore: seat work m chore: seed" "$(origin_log main)"
 
 echo ""
 echo "== $pass passed, $fail failed =="

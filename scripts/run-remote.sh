@@ -399,8 +399,13 @@ if fetch_point_clean; then
     [ -n "$head_branch" ] && echo "Fetch point was left on $head_branch; detaching it at origin/main"
     git checkout -q --detach origin/main
     # The local main ref feeds the preamble's git state; refresh it without a
-    # checkout (refused, harmlessly, while a seat worktree has main out).
-    git branch -q -f main origin/main 2>/dev/null || true
+    # checkout, fast-forward only: a commit a seat made on main but could not
+    # push stays on the ref, and the next seat on main runs on that tip with
+    # the "diverged" warning below, like any other branch. Refused, harmlessly,
+    # while a seat worktree has main checked out.
+    if git merge-base --is-ancestor main origin/main 2>/dev/null; then
+        git branch -q -f main origin/main 2>/dev/null || true
+    fi
 elif [ -n "$head_branch" ]; then
     echo "WARNING: fetch point $FETCH_DIR is on $head_branch with uncommitted changes, so it cannot be detached; a seat on $head_branch cannot start until the tree is cleaned by hand" >&2
 else
