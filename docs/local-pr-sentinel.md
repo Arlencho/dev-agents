@@ -193,6 +193,15 @@ touched. The launchd command finds dev-agents through `DEV_AGENTS_ROOT`.
 Manual: `make worktree-sweep` (dry run) or `make worktree-sweep-apply` in olympus-platform;
 `make seat-worktree-sweep` / `make seat-worktree-sweep-apply` in dev-agents.
 
+## Queue Runner (same launchd pattern)
+
+`com.arlen.queue-runner` ticks once a minute and starts the next queued, unblocked plan of an
+idle repo with `dispatch.sh --detach`, so the run is a session of its own and outlives the
+tick, the shell and the chat session that armed it. `make queue-runner-install` /
+`-uninstall`, log `~/Library/Logs/queue-runner.log`, pause with
+`launchctl setenv QUEUE_RUNNER_PAUSE 1`. Full description in the README under
+"Detached dispatch".
+
 ---
 
 ## Philosophy

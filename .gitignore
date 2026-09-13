@@ -43,3 +43,6 @@ __pycache__/
 
 # Agent working notes: written at the repo root every run, never history
 handoff.md
+
+# Detached dispatch runs: per-run log, pid and exit files, runner log (per-machine runtime)
+logs/dispatch-runs/

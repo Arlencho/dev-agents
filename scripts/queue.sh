@@ -20,6 +20,10 @@
 #   mv <plan> <position>               move an entry to a 1-based position
 #   start <plan> [dispatch_id] [repo]  mark running (adds it when missing)
 #   settle <plan> [status]             mark settled (default status: completed)
+#   block <plan> <reason>              set the blocked reason: the queue runner
+#                                      (scripts/queue-runner.sh) skips the plan
+#                                      until it is cleared
+#   unblock <plan>                     clear the blocked reason
 #   list                               print the order and exit
 #
 # A plan is matched by repo-relative path first, then by basename, so both
@@ -52,6 +56,9 @@ Usage: queue.sh <command> [args]   (every command prints the resulting order)
   mv <plan> <position>               move an entry to a 1-based position
   start <plan> [dispatch_id] [repo]  mark running (adds it when missing)
   settle <plan> [status]             mark settled (default status: completed)
+  block <plan> <reason>              set the blocked reason (the queue runner
+                                     skips the plan while one is set)
+  unblock <plan>                     clear the blocked reason
   list                               print the order and exit
 
 Queue file: $QUEUE_FILE
@@ -62,7 +69,7 @@ cmd="${1:-}"
 [ $# -gt 0 ] && shift || true
 
 case "$cmd" in
-    add|rm|mv|start|settle|list) ;;
+    add|rm|mv|start|settle|block|unblock|list) ;;
     ""|-h|--help|help) usage; exit 0 ;;
     *) echo "queue.sh: unknown subcommand '$cmd'" >&2; usage >&2; exit 2 ;;
 esac
@@ -325,6 +332,9 @@ def render(data):
         purpose = entry.get("purpose") or ""
         if purpose:
             out.append("      %s" % purpose)
+        blocked = entry.get("blocked") or ""
+        if blocked:
+            out.append("      blocked: %s" % blocked)
     return "\n".join(out)
 
 
@@ -420,6 +430,28 @@ elif cmd == "start":
     entry["settled_at"] = None
     entry["settled_status"] = None
     save(data)
+
+elif cmd == "block":
+    if len(args) < 2:
+        die("usage: queue.sh block <plan> <reason>", 2)
+    idx = find(entries, args[0])
+    if idx < 0:
+        sys.stderr.write("queue.sh: %s is not in the queue\n" % args[0])
+        rc = 4
+    else:
+        entries[idx]["blocked"] = scrub(" ".join(args[1:])) or "blocked"
+        save(data)
+
+elif cmd == "unblock":
+    if len(args) < 1:
+        die("usage: queue.sh unblock <plan>", 2)
+    idx = find(entries, args[0])
+    if idx < 0:
+        sys.stderr.write("queue.sh: %s is not in the queue\n" % args[0])
+        rc = 4
+    else:
+        entries[idx]["blocked"] = ""
+        save(data)
 
 elif cmd == "settle":
     if len(args) < 1:

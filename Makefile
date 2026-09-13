@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once desk-follow experience-live queue-add queue-list queue-rm
+.PHONY: help sync status dispatch dispatch-detach dispatch-status dispatch-wait queue-runner queue-runner-dry queue-runner-install queue-runner-uninstall queue-runner-status queue-block queue-unblock bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once desk-follow experience-live queue-add queue-list queue-rm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -63,6 +63,36 @@ queue-rm: ## Drop a plan from the Ops Floor queue (usage: make queue-rm PLAN=pat
 dispatch: ## Dispatch wave plan (usage: make dispatch REPO=x PLAN=y)
 	@./scripts/dispatch.sh $(REPO) $(PLAN)
 
+dispatch-detach: ## Dispatch as a session leader in the background, print the id (usage: make dispatch-detach REPO=x PLAN=y)
+	@./scripts/dispatch.sh $(REPO) $(PLAN) --detach --auto
+
+dispatch-status: ## Running or final status, seat table, last log lines of one run (usage: make dispatch-status ID=<dispatch id>; exit 3 while running)
+	@./scripts/dispatch-status.sh $(ID)
+
+dispatch-wait: ## Block until a run ends or TIMEOUT seconds pass, then print its status (usage: make dispatch-wait ID=<dispatch id> [TIMEOUT=3600])
+	@./scripts/dispatch-wait.sh $(ID) $(or $(TIMEOUT),0)
+
+queue-block: ## Set a plan's blocked reason so the queue runner skips it (usage: make queue-block PLAN=path REASON="why")
+	@./scripts/queue.sh block "$(PLAN)" "$(REASON)"
+
+queue-unblock: ## Clear a plan's blocked reason (usage: make queue-unblock PLAN=path)
+	@./scripts/queue.sh unblock "$(PLAN)"
+
+queue-runner: ## One queue runner tick by hand: start the first queued, unblocked plan whose repo is idle (detached)
+	@./scripts/queue-runner.sh --verbose
+
+queue-runner-dry: ## Show what the next queue runner tick would start, start nothing
+	@./scripts/queue-runner.sh --dry-run
+
+queue-runner-install: ## Install the queue runner as a background macOS service (launchd, every minute; pause with launchctl setenv QUEUE_RUNNER_PAUSE 1)
+	@./scripts/queue-runner-install.sh
+
+queue-runner-uninstall: ## Remove the queue runner background service
+	@./scripts/queue-runner-uninstall.sh
+
+queue-runner-status: ## Check if the queue runner launchd service is loaded
+	@launchctl list | grep -E 'queue-runner|PID' || echo "Service not loaded"
+
 bootstrap: ## Install agents locally (usage: make bootstrap PROVIDER=claude)
 	@./scripts/bootstrap.sh $(or $(PROVIDER),claude)
 
@@ -98,7 +128,7 @@ lint: ## Check sync + validate YAML
 	@echo "Validating workers.yaml structure..."
 	@grep -q "machines:" config/workers.yaml && echo "  workers.yaml: OK" || (echo "  workers.yaml: MISSING machines: key" && exit 1)
 
-test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch lock, seat worktrees, autoplan fail-closed, vendor-auth)
+test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch lock, seat worktrees, autoplan fail-closed, vendor-auth, detached dispatch)
 	@echo "== launcher contract =="
 	@./tests/run-launcher-tests.sh
 	@echo ""
@@ -134,6 +164,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch
 	@echo ""
 	@echo "== fleet desk Phase B honesty (critic repro) =="
 	@bash tests/critic/phase-b-honesty-repro.sh
+	@echo ""
+	@echo "== detached dispatch (session leader, status, wait, queue runner) =="
+	@./tests/run-detached-dispatch-tests.sh
 	@echo ""
 	@echo "All test suites passed."
 

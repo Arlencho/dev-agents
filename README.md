@@ -226,6 +226,89 @@ that seat instead of failing; see `wait_for_branch` in `scripts/run-remote.sh`.
 /opt/homebrew/bin/bash scripts/dispatch.sh git@github.com:yourcompany/myproject.git wave-plans/feature-2026-07.txt --auto --retries 3
 ```
 
+### Detached dispatch: --detach, dispatch-status, dispatch-wait, the queue runner
+
+**Why.** A dispatch started from a chat session is a background task of that session, and the
+harness kills the whole process group of its background tasks when the turn ends or the session
+is killed. The same happens to a dispatch started from an ssh shell that hangs up. Every seat in
+flight dies with it, the branch locks are left to the stale-lock sweep, and the Floor shows a run
+that never closed. The fix is not a longer session: it is a dispatch that no parent owns.
+
+**Run detached.** `--detach` forks a child that becomes the leader of a session of its own
+(`setsid`), with `/dev/null` for stdin, the run log for stdout and stderr, and `SIGHUP`
+ignored (what `nohup` does). macOS ships `nohup` but no `setsid` binary, so the two steps are
+one perl call (`fork` + `POSIX::setsid` + `exec`); perl is on every mac and every worker. The
+child re-runs `dispatch.sh` on the attached code path unchanged: same branch locks, same queue
+marks, same events, same notify hooks. The parent prints the id and returns:
+
+```bash
+./scripts/dispatch.sh git@github.com:you/repo.git wave-plans/x.plan --detach --retries 1
+# dispatch id: 20260913-084708-repo-52236
+# pid:         52236 (session leader)
+# log:         logs/dispatch-runs/20260913-084708-repo-52236.log
+# check:       scripts/dispatch-status.sh 20260913-084708-repo-52236
+# wait:        scripts/dispatch-wait.sh 20260913-084708-repo-52236 [timeout seconds]
+```
+
+`--detach` implies `--auto` (there is no one at stdin to press Enter) and refuses
+`--interactive`. `--review` still runs in the foreground, before the fork, so you see the
+verdict. Nothing aimed at the shell you started from, its process group, or its session
+reaches the run: close the chat, kill the terminal, it keeps going. Files, all under
+`logs/dispatch-runs/` (gitignored): `<id>.log` everything the run printed, `<id>.pid` the
+pid, repo slug, plan and start time (one per line), `<id>.exit` the run's exit code, written on
+its way out. The event stream opens under the same id at `logs/fleet-events/<id>.jsonl`.
+
+**Check.** `scripts/dispatch-status.sh <id>` prints running or the final status, the seat
+table folded from the event stream, and the last ten lines of the log. Exit **3** while the run
+is going, **0** once it has ended (completed, aborted, or died without a close-out: pid gone
+and no `dispatch_end` event), **2** for an id nothing knows. A run started without `--detach`
+has no pid file and is read from its event stream alone.
+
+**Wait.** `scripts/dispatch-wait.sh <id> [timeout seconds]` polls that status every 30 seconds
+and prints the same summary when the run ends (exit 0) or the timeout passes (exit 3, snapshot).
+This is the command a chat session runs instead of holding the dispatch as its own background
+task: the waiter can be killed or time out and the run does not notice.
+
+```bash
+./scripts/dispatch-wait.sh 20260913-084708-repo-52236 1800   # give it half an hour, then look
+make dispatch-status ID=20260913-084708-repo-52236
+```
+
+**The queue runner.** `scripts/queue-runner.sh` is one tick of the Ops Floor queue
+(`logs/fleet-queue.json`, see `make queue-list`): if no dispatch is running for a repo and
+the queue holds a queued plan for that repo whose blocked reason is empty, it starts that plan
+with `--detach --auto`, reading the repo URL and the flags from the plan's own
+`# DISPATCH: ./scripts/dispatch.sh <repo-url> <plan> ...` header line. At most one start per
+tick, one running dispatch per repo (a live pid in `logs/dispatch-runs/*.pid`, or a live pid
+in a branch lock under `~/dev/dispatch-locks/<repo>/`, counts as running; the per-branch
+locks stay the safety net beneath). What it started goes to
+`logs/dispatch-runs/queue-runner.log`. A plan it cannot start (no file, no `DISPATCH` line,
+`dispatch.sh` refused) is marked blocked with the reason so it is not retried every minute;
+`make queue-list` shows the reason, `./scripts/queue.sh unblock <plan>` clears it, and
+`./scripts/queue.sh block <plan> "reason"` holds a plan back on purpose.
+
+Installed the same way as the PR Sentinel and the worktree sweep (a plist in `docs/`, an
+install and an uninstall script, make targets), and off until installed:
+
+```bash
+make queue-runner-dry          # what the next tick would start, starts nothing
+make queue-runner              # one tick by hand
+make queue-runner-install      # launchd, every minute (docs/queue-runner-launchd.plist)
+make queue-runner-status
+make queue-runner-uninstall
+launchctl setenv QUEUE_RUNNER_PAUSE 1     # pause: the tick does nothing while this is set
+launchctl unsetenv QUEUE_RUNNER_PAUSE
+```
+
+The tick's own output goes to `~/Library/Logs/queue-runner.log`; the runs it starts log under
+`logs/dispatch-runs/`. The plist sets `AbandonProcessGroup` as a second guard, but the run
+does not need it: it is a session of its own before the tick ends.
+
+Ground Truth: `tests/run-detached-dispatch-tests.sh` starts a detached run from a shell in
+its own process group, kills that group, and shows the run finishing with its events, queue
+marks and lock release intact; then the status and wait exit codes, and the runner starting
+one plan and not a second while the first runs.
+
 ### workers.yaml provider_preferences + routing.yaml provider_failover
 
 **Edit `config/workers.yaml`** to assign which CLI each agent prefers:
