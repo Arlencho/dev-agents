@@ -2366,6 +2366,19 @@ assert_fn "round 3: mark_paths marks a path after an equals sign, a glued variab
   'mod.mark_paths("path=/Users/arlenrios/.ssh/id_rsa home=$HOME/x up=../y see:file:/etc/passwd")=="path=outside-repo home=outside-repo up=outside-repo see:outside-repo"'
 assert_fn "round 3: mark_paths keeps a glued repo-relative path, a branch and a URL" \
   'mod.mark_paths("fix:scripts/notify.sh on feat/x key:value/w https://example.invalid/pr/7")=="fix:scripts/notify.sh on feat/x key:value/w https://example.invalid/pr/7"'
+# Round 4: a percent-encoded slash is still a slash. The critic's title
+# (%2FUsers%2F...), the lower-case form, the encoded file: URL, a doubly
+# encoded slash, an encoded home, variable and parent escape.
+assert_fn "round 4: mark_paths marks the critic's percent-encoded title" \
+  'mod.mark_paths("fix %2FUsers%2Farlenrios%2F.ssh%2Fid_rsa rotate keys")=="fix outside-repo rotate keys"'
+assert_fn "round 4: mark_paths marks the lower-case %2f form and the encoded file: URL" \
+  'mod.mark_paths("fix %2fUsers%2farlenrios%2f.ssh%2fid_rsa see file:%2F%2F%2FUsers%2Farlenrios%2F.ssh%2Fid_rsa now")=="fix outside-repo see outside-repo now"'
+assert_fn "round 4: mark_paths marks a doubly encoded slash, an encoded home, variable, parent escape and a glued encoded path" \
+  'mod.mark_paths("a %252FUsers%252Fx b %7E%2F.ssh c %24HOME%2Fx d %2E%2E%2Fetc fix:%2FUsers%2Fx")=="a outside-repo b outside-repo c outside-repo d outside-repo fix:outside-repo"'
+assert_fn "round 4: mark_paths keeps an encoded repo-relative path, branch and URL (decoded) and a percent that is no escape" \
+  'mod.mark_paths("fix scripts%2Fnotify.sh on feat%2Fx https:%2F%2Fexample.invalid%2Fpr%2F7 at 50%25 or 100% or %zz")=="fix scripts/notify.sh on feat/x https://example.invalid/pr/7 at 50%25 or 100% or %zz"'
+assert_fn "round 4: first_sentence is the same rule on an encoded path" \
+  'mod.first_sentence("Fix %2FUsers%2Farlenrios%2F.ssh%2Fid_rsa now. Then the body.", 80)=="Fix outside-repo now."'
 assert_fn "first_sentence is the same rule (the failed dispatch line)" \
   'mod.first_sentence("Fix /Users/arlenrios/.ssh/id_rsa and $HOME now. Then sk-abcdefghijklmnopqrstuvwxyz", 80)=="Fix outside-repo and $HOME now."'
 
@@ -2470,10 +2483,59 @@ if [ "$on_mac" = "1" ]; then
     && bad "round 3: no osascript argv carries a path" || ok "round 3: no osascript argv carries a path"
 fi
 
+# Round 4, the product path: PR 102 served under the critic's percent-encoded
+# title through the same wrapper; the projection and the push carry the
+# marker, not the path, encoded or not.
+cat > "$L2_BIN/gh" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$1 $2 $3" = "pr view 102" ]; then
+  echo "$*" >> "${GH_SHIM_LOG:?}"
+  NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"number":102,"title":"fix %%2FUsers%%2Farlenrios%%2F.ssh%%2Fid_rsa rotate keys","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","url":"https://example.invalid/pr/102","headRefName":"feat/k-ready","comments":[{"id":"IC_102_1","url":"https://example.invalid/pr/102#c1","createdAt":"%s","body":"CRITIC K READY: SAFE-TO-MERGE"}],"reviews":[]}\n' "$NOW"
+  exit 0
+fi
+exec "${L2_INNER_GH:?}" "$@"
+SHIM
+chmod +x "$L2_BIN/gh"
+L4_ON="$TMP/out/live-l4.json"
+PATH="$L2_BIN:$PATH" GH_SHIM_LOG="$L2_LOG" L2_INNER_GH="$K_BIN/gh" FLEET_GH_OWNER=testowner FLEET_CHECKOUTS="$K_CO" \
+  python3 "$DESK_LIVE" --once --events-dir "$K_DIR" --queue-file "$K_Q" --out "$L4_ON" >/dev/null 2>&1 \
+  && ok "round 4: --once exits 0 with the percent-encoded title" || bad "round 4: --once exits 0 with the percent-encoded title"
+assert_py "round 4: the ready_to_merge line marks the percent-encoded path" "$L4_ON" \
+  '[e["text"] for e in d["needs_you"] if e["type"]=="ready_to_merge"]==["PR 102 ready to merge: fix outside-repo rotate keys"]'
+grep -qi 'id_rsa\|/Users/\|%2FUsers' "$L4_ON" \
+  && bad "round 4: no operator path, encoded or not, anywhere in the projection" \
+  || ok "round 4: no operator path, encoded or not, anywhere in the projection"
+python3 - "$L4_ON" "$L2_DIR/aged-r4.json" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+d = json.load(open(sys.argv[1]))
+at = (datetime.now(timezone.utc) - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+for e in d["needs_you"]:
+    e["at"] = at
+json.dump(d, open(sys.argv[2], "w"))
+PY
+out=$(PATH="$N_SHIM:$PATH" env -u FLEET_NOTIFY_SILENT -u NOTIFY_SILENT FLEET_NOTIFY_NEEDS_YOU_STATE="$L2_DIR/seen-product-r4" \
+  FLEET_NOTIFY_NEEDS_YOU_MIN=1 "$NOTIFY" needs-you "$L2_DIR/aged-r4.json" 2>"$L2_DIR/aged-r4.err")
+case "$out" in
+  *'Needs you: PR 102 ready to merge: fix outside-repo rotate keys'*) ok "round 4: the push carries the marked line" ;;
+  *) bad "round 4: the push carries the marked line ($out)" ;;
+esac
+case "$out" in
+  *"id_rsa"*|*"/Users/"*|*"%2F"*|*"%2f"*) bad "round 4: the push carries no path, encoded or not" ;;
+  *) ok "round 4: the push carries no path, encoded or not" ;;
+esac
+[ ! -s "$L2_DIR/aged-r4.err" ] && ok "round 4: the marked line is not refused" || bad "round 4: the marked line is not refused ($(cat "$L2_DIR/aged-r4.err"))"
+if [ "$on_mac" = "1" ]; then
+  grep -qi 'id_rsa\|/Users/\|%2FUsers' "$OSASCRIPT_CALLS" \
+    && bad "round 4: no osascript argv carries a path, encoded or not" || ok "round 4: no osascript argv carries a path, encoded or not"
+fi
+
 # A hand-written live.json cannot bypass the projector: notify.sh refuses an
 # item whose text still carries an operator path, sends nothing for it and
 # does not record it as seen; the clean item next to it goes through. Round 3:
 # the colon-glued and the backticked path (PR 105, 106) are refused too.
+# Round 4: the percent-encoded path and the encoded file: URL (PR 108, 109).
 python3 - "$L2_DIR" <<'PY'
 import json, os, sys
 from datetime import datetime, timedelta, timezone
@@ -2490,6 +2552,8 @@ paths = [
     item("ready_to_merge", "PR 104 ready to merge: fix outside-repo in scripts/notify.sh on feat/x", {"kind": "pr", "repo": "r", "pr": 104}),
     item("ready_to_merge", "PR 105 ready to merge: fix:/Users/arlenrios/.ssh/id_rsa rotate keys", {"kind": "pr", "repo": "r", "pr": 105}),
     item("ready_to_merge", "PR 106 ready to merge: fix `/Users/arlenrios/.ssh/id_rsa` rotate keys", {"kind": "pr", "repo": "r", "pr": 106}),
+    item("ready_to_merge", "PR 108 ready to merge: fix %2FUsers%2Farlenrios%2F.ssh%2Fid_rsa rotate keys", {"kind": "pr", "repo": "r", "pr": 108}),
+    item("ready_to_merge", "PR 109 ready to merge: see file:%2F%2F%2FUsers%2Farlenrios%2F.ssh%2Fid_rsa", {"kind": "pr", "repo": "r", "pr": 109}),
 ]
 json.dump({"schema": "live/1", "view": "live", "needs_you": paths}, open(os.path.join(out, "paths.json"), "w"))
 # the same file after the projector marked the first item
@@ -2507,12 +2571,12 @@ case "$out" in
   *) bad "the marker, a repo-relative path and a branch pass ($out)" ;;
 esac
 case "$out" in
-  *"/Users/"*|*"~/"*|*'$HOME'*|*"/etc/passwd"*|*"/../"*) bad "no absolute, home, variable, file: or parent path is pushed" ;;
-  *) ok "no absolute, home, variable, file: or parent path is pushed" ;;
+  *"/Users/"*|*"~/"*|*'$HOME'*|*"/etc/passwd"*|*"/../"*|*"%2F"*) bad "no absolute, home, variable, file:, parent or encoded path is pushed" ;;
+  *) ok "no absolute, home, variable, file:, parent or encoded path is pushed" ;;
 esac
-[ "$(grep -c 'WARNING: needs-you item .* refused' "$L2_DIR/paths.err")" = "7" ] \
+[ "$(grep -c 'WARNING: needs-you item .* refused' "$L2_DIR/paths.err")" = "9" ] \
   && ok "each refused item is one stderr line" || bad "each refused item is one stderr line ($(cat "$L2_DIR/paths.err"))"
-grep -q 'id_rsa\|/Users/\|passwd' "$L2_DIR/paths.err" \
+grep -qi 'id_rsa\|/Users/\|passwd\|%2FUsers' "$L2_DIR/paths.err" \
   && bad "the stderr line does not repeat the path" || ok "the stderr line does not repeat the path"
 [ "$(wc -l < "$L2_DIR/seen-paths" | tr -d ' ')" = "1" ] \
   && ok "a refused item is not recorded as seen" || bad "a refused item is not recorded as seen"

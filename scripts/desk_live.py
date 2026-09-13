@@ -51,6 +51,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.parse import unquote
 
 SCHEMA = "live/1"
 EVENT_SCHEMA_PREFIX = "fleet-events/"
@@ -756,6 +757,24 @@ URL_SCHEME = re.compile(r"(?i)^(?!file:)[a-z][a-z0-9+.-]*://")
 WRAPPERS = "(\"'`"
 
 
+def percent_decode(token):
+    """The token with its percent escapes unfolded, so %2F reads as a slash.
+
+    A percent-encoded slash is still a slash (and %7E a home, %24 a variable,
+    %2E%2E a parent escape); the path rule must see it before it decides the
+    token has no slash. Decoded again while it changes, bounded, so a doubly
+    encoded %252F does not survive one pass. A stray percent is left alone.
+    """
+    for _ in range(4):
+        if "%" not in token:
+            break
+        decoded = unquote(token)
+        if decoded == token:
+            break
+        token = decoded
+    return token
+
+
 def task_path(token):
     """One slash token of a task line, as the Floor may print it.
 
@@ -763,11 +782,13 @@ def task_path(token):
     path inside this worktree is kept, repo-relative; anything else that
     reads as a path (absolute, home, variable, parent escape) becomes the
     marker, whether the token is the path or the path sits inside it after
-    a colon, an equals sign or a backtick. Punctuation and wrappers around
-    the token stay where they were.
+    a colon, an equals sign or a backtick, or hides behind percent escapes
+    (%2FUsers%2Fx). Punctuation and wrappers around the token stay where
+    they were; a token that reads as no path is returned as it came.
     """
-    core = token.rstrip(".,;:!?)'\"`")
-    tail = token[len(core):]
+    decoded = percent_decode(token)
+    core = decoded.rstrip(".,;:!?)'\"`")
+    tail = decoded[len(core):]
     lead = ""
     while core and core[0] in WRAPPERS:
         lead, core = lead + core[0], core[1:]
@@ -798,7 +819,8 @@ def mark_paths(value):
     """
     text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
     text = re.sub(r"\s+", " ", text).strip()
-    return " ".join(task_path(tok) if "/" in tok else tok for tok in text.split(" "))
+    return " ".join(task_path(tok) if "/" in tok or "%" in tok else tok
+                    for tok in text.split(" "))
 
 
 def first_sentence(value, limit=TASK_MAX):

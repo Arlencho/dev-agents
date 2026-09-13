@@ -55,6 +55,7 @@ needs_you_due() {
     python3 - "$1" "$2" "$3" <<'PY'
 import hashlib, json, re, sys
 from datetime import datetime, timezone
+from urllib.parse import unquote
 
 live_path, state_path, after_min = sys.argv[1], sys.argv[2], int(sys.argv[3])
 try:
@@ -98,14 +99,29 @@ PATH_START = re.compile(r"(?i)(?<![\w.~$/+@%-])(?:file:)?(?:[/~$]|\.\.(?=/|$))")
 URL_SCHEME = re.compile(r"(?i)^(?!file:)[a-z][a-z0-9+.-]*://")
 
 
+def percent_decode(token):
+    """The token with its percent escapes unfolded (%2F is a slash), decoded
+    again while it changes, bounded. The same step as in desk_live.py."""
+    for _ in range(4):
+        if "%" not in token:
+            break
+        decoded = unquote(token)
+        if decoded == token:
+            break
+        token = decoded
+    return token
+
+
 def has_operator_path(text):
     """True when a slash token of the line reads as a path outside the
     worktree: absolute, home, a variable, or a parent escape, whether the
-    token is the path or the path sits inside it (fix:/Users/x, `~/.ssh`).
+    token is the path or the path sits inside it (fix:/Users/x, `~/.ssh`)
+    or hides behind percent escapes (%2FUsers%2Fx, file:%2F%2F%2Fetc).
     The law of task_path in scripts/desk_live.py; the projector already
     marks these, so a token that still reads so came from a hand-written
     file."""
     for tok in text.split(" "):
+        tok = percent_decode(tok)
         if "/" not in tok:
             continue
         core = tok.rstrip(".,;:!?)'\"`")
