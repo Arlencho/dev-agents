@@ -184,8 +184,11 @@ brew install bash
 - `--no-wait`: do not queue behind another dispatch on one of this plan's branches; exit 9 immediately instead.
 
 **One worktree per seat.** `scripts/run-remote.sh` keeps `~/dev/<repo>` on the worker as a
-fetch point only (cloned once, then only ever fetched; no seat checks a branch out there) and
-gives every seat its own git worktree at `~/dev/worktrees/<repo>/<dispatch id>/<task id>-<branch>`,
+fetch point only (cloned once, then only ever fetched; HEAD stays detached at `origin/main`, so no
+branch, `main` included, is ever checked out there and a seat on any branch can start) and
+gives every seat its own git worktree at `~/dev/worktrees/<repo>/<dispatch id>/<task id>-<branch>`
+(the dispatch id is `<UTC second>-<repo>-<dispatcher pid>`, so two dispatches started in the same
+second never share a directory),
 added from `origin/<branch>` when the branch exists on origin, else as a new branch from
 `origin/main`. The seat runs, commits and pushes in that worktree; `handoff.md` is copied next to
 the seat log before the worktree is removed at seat exit, on every path (normal end, launcher

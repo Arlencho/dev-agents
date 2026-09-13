@@ -39,6 +39,7 @@ STREAM_ARGS=(-p --output-format stream-json --verbose)
 # ${arr[@]+…} guard: empty-array expansion errors under `set -u` on bash 3.2 (macOS).
 # A shell variable, not an export: the classifier drops output lines that
 # appear verbatim in the prompt, and the CLI must not carry a second copy.
+# shellcheck disable=SC2034  # read by run_and_classify in the sourced lib.sh
 AGENT_PROMPT_TEXT="$TASK"
 run_and_classify claude \
     claude "${STREAM_ARGS[@]}" --agent "$ROLE" ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} --dangerously-skip-permissions "$TASK"

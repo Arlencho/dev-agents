@@ -51,7 +51,13 @@ remote_put() {
     local src="$1" dest_rel="$2"
     if [ "$IS_LOCAL" -eq 1 ]; then
         mkdir -p "$HOME/$(dirname "$dest_rel")"
-        cp -f "$src" "$HOME/$dest_rel"
+        # Private copy, then rename: the seats of a wave start in the same
+        # second and all put the same file, and GNU cp creates a missing
+        # destination with O_EXCL, so the second writer used to die with
+        # "File exists" (never on macOS, whose cp does not). A rename is
+        # atomic, so a seat reading the file sees a whole one either way.
+        cp -f "$src" "$HOME/$dest_rel.$$.tmp"
+        mv -f "$HOME/$dest_rel.$$.tmp" "$HOME/$dest_rel"
     else
         ssh "$HOST" "mkdir -p ~/$(dirname "$dest_rel")"
         scp -q "$src" "$HOST:~/$dest_rel"

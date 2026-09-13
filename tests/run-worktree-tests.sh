@@ -107,8 +107,9 @@ echo ""
 echo "== two dispatches started in the same second get two ids, two runtimes, two event files =="
 # fleet-events mints <utc second>-<slug>-<pid>; two inits in one process each
 # are the two dispatchers. Retry until a pair lands in the same second.
-FE_DIR="$SANDBOX/fe"; mkdir -p "$FE_DIR"
+FE_DIR="$SANDBOX/fe"
 for _try in 1 2 3 4 5 6 7 8; do
+    rm -rf "$FE_DIR"; mkdir -p "$FE_DIR"   # a pair that straddled a second leaves no files behind
     ID1=$(FLEET_EVENTS_DIR="$FE_DIR" bash "$FLEET/scripts/fleet-events.sh" init product wave | xargs basename | sed 's/\.jsonl$//')
     ID2=$(FLEET_EVENTS_DIR="$FE_DIR" bash "$FLEET/scripts/fleet-events.sh" init product wave | xargs basename | sed 's/\.jsonl$//')
     [ "${ID1:0:15}" = "${ID2:0:15}" ] && break
