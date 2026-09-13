@@ -2047,27 +2047,37 @@ def _minutes(seconds):
 # A failed or aborted dispatch that a later round replaced is history, not an
 # ask: NEEDS YOU holds only what is still open. A row leaves the list (and
 # lands in needs_you_meta.superseded, so nothing is hidden) when, same repo
-# and later than the row:
+# and later than the row, one of the four rules below fires. The two guards
+# are applied to the later set once, before any rule: a candidate in another
+# repo never folds the row, and a live re-dispatch that only got as far as
+# dispatch_start never folds it either (no seat exists yet to take its place,
+# so NOW has nothing for the row while the re-dispatch is starting).
 #
-#   1. another dispatch of the same plan file exists today, same repo (any
-#      outcome: a later failure is itself the open row, the older one is
-#      replaced). A live re-dispatch that only got as far as dispatch_start
-#      does not fold the failure: no seat exists yet to take its place, or
+#   1. another dispatch of the same plan file exists today (any outcome: a
+#      later failure is itself the open row, the older one is replaced), or
 #   2. a dispatch ran a fix round for it: the plan file is the same stem with
 #      a fix suffix (x.plan -> x-fix.plan, x-fix2.plan), or the plan header
 #      carries fix-round wording ("fix round", "fix wave") and names the row
-#      by its stem or its branch, never by a subset of the row's title words
-#      (one-letter track tokens keep "Floor v3-B" and "Floor v3-C" apart), or
+#      by its stem or its branch as a whole token (never a substring:
+#      "feat/track" does not match inside "feat/track-c"), never by a subset
+#      of the row's title words (one-letter track tokens keep "Floor v3-B"
+#      and "Floor v3-C" apart), or
 #   3. a dispatch on one of its branches ended landed, or
-#   4. gh says the branch has merged, same repo and merged later than the row
-#      (optional: when gh cannot answer the rule does not fire and the
-#      merged_branch check reads skipped).
+#   4. gh says the branch has merged, merged later than the row (optional:
+#      when gh cannot answer the rule does not fire and the merged_branch
+#      check reads skipped).
 #
 # "Later" is ended_at for settled dispatches, started_at for live ones (a
 # re-dispatch already running replaces the failure it answers).
 
 FIX_ROUND_RE = re.compile(r"\bfix[\s-]*(?:round|wave)\b", re.IGNORECASE)
 FIX_SUFFIX_RE = re.compile(r"^(?:fix|critic|rebase|resume)\d*$")
+
+
+def whole_token(token, text):
+    """The token appears in the text whole, bounded by characters that cannot
+    be part of it: "feat/track" never matches inside "feat/track-c"."""
+    return bool(re.search(r"(?<![\w./-])" + re.escape(token) + r"(?![\w./-])", text))
 
 
 def superseded_dispatch(row, today, live, plan_cache, queue_entries, gh, skip):
@@ -2104,25 +2114,28 @@ def superseded_dispatch(row, today, live, plan_cache, queue_entries, gh, skip):
               if s.get("dispatch_id") != row.get("dispatch_id")
               and (s.get("started_at") or "") > r_start]
     later.sort(key=lambda d: d.get("ended_at") or d.get("started_at") or "")
+    # The two guards apply to every rule, so they filter the later set once,
+    # here, before any of the four loops below ask a question of it.
+    later = [d for d in later if same_repo(d) and not live_without_seat(d)]
 
     def plan_of(d):
         return cached_plan(plan_cache, base_of(d), queue_entries)
 
     def names_row(d, purpose, d_stem):
         """The candidate names this row by its stem or its branch, never by a
-        subset of the row's title words: a row branch appears in its fix-round
-        header or among its own branches, or its stem grows out of the row's
-        stem. Track letters stay whole in stems and branches ("v3b" vs "v3c"),
-        so one track's fix round cannot fold another track's failure."""
-        if any(b and b in purpose for b in r_branches):
+        subset of the row's title words: a row branch appears as a whole token
+        in its fix-round header ("feat/track" does not match inside
+        "feat/track-c") or among its own branches, or its stem grows out of
+        the row's stem. Track letters stay whole in stems and branches ("v3b"
+        vs "v3c"), so one track's fix round cannot fold another track's
+        failure."""
+        if any(b and whole_token(b, purpose) for b in r_branches):
             return True
         if any(b and b in (d.get("branches") or []) for b in r_branches):
             return True
         return bool(r_stem) and d_stem.startswith(r_stem + "-")
 
     for d in later:
-        if not same_repo(d) or live_without_seat(d):
-            continue
         if r_plan and base_of(d) == r_plan:
             return {"kind": "plan", "plan": r_plan, "dispatch_id": d.get("dispatch_id"),
                     "branch": None, "pr": None}
@@ -2141,8 +2154,6 @@ def superseded_dispatch(row, today, live, plan_cache, queue_entries, gh, skip):
                     "branch": None, "pr": None}
     for d in later:
         if d.get("outcome") != "landed":
-            continue
-        if r_repo and d.get("repo") and d.get("repo") != r_repo:
             continue
         shared = [b for b in r_branches if b in (d.get("branches") or [])]
         if shared:

@@ -2902,9 +2902,12 @@ echo "== Part M: superseded rule, critic round 2 fixtures (issue 86) =="
 # own fixture: G/G2 (a fix round on another track must not fold this track's
 # failure), F (a merge older than the row must not fold it), H (the same plan
 # landing in another repo must not fold it), B2 (a live re-dispatch with only
-# dispatch_start and no seat must not fold it). Stamps use the Part L scheme:
-# relative to now, clamped past local midnight, so ordering never depends on
-# the wall clock.
+# dispatch_start and no seat must not fold it). Round 2 of the review adds
+# H2 (a fix-suffix round landed in another repo must not fold it), B2F (a fix
+# round with only dispatch_start and no seat must not fold it), and P/P2 (a
+# row branch that is only a prefix of a header token must not fold it; the
+# whole token must). Stamps use the Part L scheme: relative to now, clamped
+# past local midnight, so ordering never depends on the wall clock.
 M_Q="$TMP/queue-m.json"
 python3 - "$M_Q" <<'MQ'
 import json, sys
@@ -2976,8 +2979,63 @@ write("events-m-b2", "m-b2-live.jsonl", [
     {"ts": ts(120), "event": "dispatch_start", "mode": "wave",
      "repo": "dev-agents", "plan": "b2.plan"},
 ])
+# Fixture H2 (round 3, finding 5): shared.plan failed in dev-agents, then
+# shared-fix.plan landed in olympus-platform. A fix-suffix round in another
+# repo must not fold the failure.
+failed("events-m-h2", "m-h2-fail.jsonl", "shared.plan", "feat/shared", 900, 600)
+write("events-m-h2", "m-h2-land.jsonl", [
+    {"ts": ts(550), "event": "dispatch_start", "mode": "wave",
+     "repo": "olympus-platform", "plan": "shared-fix.plan"},
+    {"ts": ts(545), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/shared-oly", "wave": 1, "provider": "local"},
+    {"ts": ts(405), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/shared-oly", "wave": 1, "status": "success", "exit": 0, "duration_s": 140},
+    {"ts": ts(400), "event": "dispatch_end", "status": "completed",
+     "total": 1, "succeeded": 1, "failed": 0, "duration_s": 150},
+])
+# Fixture B2F (round 3, finding 6): bravo3.plan failed, then bravo3-fix.plan
+# started but only ever saw dispatch_start: no seat yet, so the fix round
+# folds nothing while NOW has nothing to take the failure's place.
+failed("events-m-b2f", "m-b2f-fail.jsonl", "bravo3.plan", "feat/bravo3", 900, 600)
+write("events-m-b2f", "m-b2f-live.jsonl", [
+    {"ts": ts(120), "event": "dispatch_start", "mode": "wave",
+     "repo": "dev-agents", "plan": "bravo3-fix.plan"},
+])
+# Fixtures P and P2 (round 3, finding 7): a row failed on feat/track (P) or
+# feat/track-c (P2), then p-c-fix.plan landed; its header reads "Track C fix
+# round on feat/track-c". In P the row branch is only a prefix of the header
+# token, so the row stays open; in P2 the row branch is the whole token, so
+# the row folds. The plan file lives under $TMP and the queue points at it,
+# so the fix-round header rule reads the real header.
+failed("events-m-p", "m-p-fail.jsonl", "p-b.plan", "feat/track", 900, 600)
+failed("events-m-p2", "m-p2-fail.jsonl", "p2.plan", "feat/track-c", 900, 600)
+for dirname, name, branch in (("events-m-p", "m-p-land", "feat/track-c"),
+                              ("events-m-p2", "m-p2-land", "feat/p2-later")):
+    write(dirname, name + ".jsonl", [
+        {"ts": ts(550), "event": "dispatch_start", "mode": "wave",
+         "repo": "dev-agents", "plan": "p-c-fix.plan"},
+        {"ts": ts(545), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+         "branch": branch, "wave": 1, "provider": "local"},
+        {"ts": ts(405), "event": "seat_exit", "task_id": "0", "agent": "devops",
+         "branch": branch, "wave": 1, "status": "success", "exit": 0, "duration_s": 140},
+        {"ts": ts(400), "event": "dispatch_end", "status": "completed",
+         "total": 1, "succeeded": 1, "failed": 0, "duration_s": 150},
+    ])
+M_P_PLANS = os.path.join(out, "plans-m"); os.makedirs(M_P_PLANS, exist_ok=True)
+M_P_FIX = os.path.join(M_P_PLANS, "p-c-fix.plan")
+with open(M_P_FIX, "w", encoding="utf-8") as fh:
+    fh.write("# Track C fix round on feat/track-c\n"
+             "1 | devops | Fix the track C regression. | feat/track-c\n")
+json.dump({"schema": "fleet-queue/1", "updated_at": "2026-09-13T00:00:00Z", "entries": [
+    {"plan": M_P_FIX, "repo": "dev-agents",
+     "purpose": "Track C fix round on feat/track-c", "issue": 86,
+     "added_at": "2026-09-13T00:00:00Z", "status": "running",
+     "dispatch_id": "m-p-land", "settled_at": None, "settled_status": None},
+]}, open(os.path.join(out, "queue-m-p.json"), "w"), indent=2)
 for dirname, latest in (("events-m-g", "m-g-v3c.jsonl"), ("events-m-f", "m-f.jsonl"),
-                        ("events-m-h", "m-h-land.jsonl"), ("events-m-b2", "m-b2-live.jsonl")):
+                        ("events-m-h", "m-h-land.jsonl"), ("events-m-b2", "m-b2-live.jsonl"),
+                        ("events-m-h2", "m-h2-land.jsonl"), ("events-m-b2f", "m-b2f-live.jsonl"),
+                        ("events-m-p", "m-p-land.jsonl"), ("events-m-p2", "m-p2-land.jsonl")):
     with open(os.path.join(out, dirname, "latest"), "w", encoding="utf-8") as fh:
         fh.write(latest + "\n")
 MFIX
@@ -3034,6 +3092,42 @@ assert_py "B2: a re-dispatch with only dispatch_start and no seat does not fold 
 'and d["needs_you_meta"]["count"]==1 and d["needs_you_meta"]["superseded"]==[]'
 assert_py "B2: NOW has no running seat for the re-dispatch yet" "$M_B2" \
   'd["summary"]["running"]==0'
+
+M_H2="$TMP/out/live-m-h2.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --events-dir "$TMP/events-m-h2" --queue-file "$M_Q" --out "$M_H2" >/dev/null 2>&1 \
+  && ok "--once exits 0 on critic fixture H2" || bad "--once exits 0 on critic fixture H2"
+assert_py "H2: a fix-suffix round landed in another repo does not supersede the failure" "$M_H2" \
+  '(lambda e: e["plan"]=="shared.plan" and e["repo"]=="dev-agents" and "superseded_by" not in e)'\
+'(d["needs_you"][0]) and d["needs_you_meta"]["count"]==1 and d["needs_you_meta"]["superseded"]==[]'
+assert_py "H2: the strip still counts the cross-repo fix round" "$M_H2" \
+  'len(d["today"])==2 and sum(1 for t in d["today"] if t["outcome"]=="landed")==1'
+
+M_B2F="$TMP/out/live-m-b2f.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --events-dir "$TMP/events-m-b2f" --queue-file "$M_Q" --out "$M_B2F" >/dev/null 2>&1 \
+  && ok "--once exits 0 on critic fixture B2F" || bad "--once exits 0 on critic fixture B2F"
+assert_py "B2F: a fix round with only dispatch_start and no seat does not fold the failure" "$M_B2F" \
+  '(lambda e: e["plan"]=="bravo3.plan" and "superseded_by" not in e)(d["needs_you"][0]) '\
+'and d["needs_you_meta"]["count"]==1 and d["needs_you_meta"]["superseded"]==[]'
+assert_py "B2F: NOW has no running seat for the fix round yet" "$M_B2F" \
+  'd["summary"]["running"]==0 and d["seats"]==[]'
+
+M_P_Q="$TMP/queue-m-p.json"
+M_P="$TMP/out/live-m-p.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --events-dir "$TMP/events-m-p" --queue-file "$M_P_Q" --out "$M_P" >/dev/null 2>&1 \
+  && ok "--once exits 0 on critic fixture P" || bad "--once exits 0 on critic fixture P"
+assert_py "P: a row branch that is only a prefix of a header token does not fold" "$M_P" \
+  '(lambda e: e["plan"]=="p-b.plan" and e["branch"]=="feat/track" and "superseded_by" not in e)'\
+'(d["needs_you"][0]) and d["needs_you_meta"]["count"]==1 and d["needs_you_meta"]["superseded"]==[]'
+assert_py "P: the fix-round header was really read from the plan file" "$M_P" \
+  'd["plan_context"]["purpose"]=="Track C fix round on feat/track-c"'
+
+M_P2="$TMP/out/live-m-p2.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --events-dir "$TMP/events-m-p2" --queue-file "$M_P_Q" --out "$M_P2" >/dev/null 2>&1 \
+  && ok "--once exits 0 on critic fixture P2" || bad "--once exits 0 on critic fixture P2"
+assert_py "P2: a row branch that is a whole token in the header still folds" "$M_P2" \
+  'd["needs_you"]==[] and (lambda s: len(s)==1 and s[0]["plan"]=="p2.plan" '\
+'and s[0]["superseded_by"]["kind"]=="plan" and s[0]["superseded_by"]["plan"]=="p-c-fix.plan")'\
+'(d["needs_you_meta"]["superseded"])'
 
 echo ""
 echo "----------------------------------------"

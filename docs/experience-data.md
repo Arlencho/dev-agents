@@ -1036,7 +1036,8 @@ row is superseded when:
 2. a dispatch ran a fix round for it: the plan file is the same stem with a
    fix suffix (`x.plan` → `x-fix.plan`, `x-fix2.plan`), or the plan header
    carries fix-round wording (`fix round`, `fix wave`, any case) and names the
-   row by its stem or its branch (a row branch in the header or among the
+   row by its stem or its branch (a row branch as a whole token in the header,
+   so `feat/track` does not match inside `feat/track-c`, or among the
    candidate's own branches, or the candidate stem growing out of the row's
    stem), never by a subset of the row's title words;
 3. a dispatch on one of its branches ended `landed`;
