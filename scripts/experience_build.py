@@ -1152,56 +1152,204 @@ class Renderer:
                 parts.append(f"heartbeat {self._fmt_ago(now['heartbeat_age_s'])}")
         return ", ".join(parts) + "."
 
-    def _floor_summary_html(self, live: Dict[str, Any], state: str, age: Optional[int]) -> str:
-        """Top line in plain words from the summary object (issue 69).
+    @staticmethod
+    def _outcome_word(t: Dict[str, Any]) -> str:
+        """Outcome word for a finished run (mirrored in floor.js).
 
-        The age is the build-time value of the same clock floor.js recomputes
-        from last_event_ts on every poll, so the snapshot prints what the page
-        would show at build time and the two lines can never disagree. Off a
-        live stream the line says so in place and the running count is
-        qualified as of the last event. A replay carries no summary, so the
-        line stays hidden instead of guessing.
+        Reads today[].outcome (landed, failed, aborted), which the projection
+        derives from the seat exits; status alone cannot tell a failed run
+        from an operator stop. Older projections without outcome fall back
+        to the status map.
         """
-        s = live.get("summary")
-        parts = []
-        if isinstance(s, dict):
-            degraded = state in ("stale", "offline")
-            if self._is_num(s.get("running")):
-                parts.append(f"{s['running']} running" + (" at last event" if degraded else ""))
-            if self._is_num(s.get("queued")):
-                parts.append(f"{s['queued']} up next")
-            if self._is_num(s.get("landed_today")):
-                parts.append(f"{s['landed_today']} landed today")
-            if isinstance(age, int):
-                parts.append(f"last event {self._fmt_ago(age)}")
-            if degraded:
-                parts.append(f"stream {state}")
-        if not parts:
-            return '<p class="floor-summary" id="floor-summary" hidden></p>'
-        return f'<p class="floor-summary" id="floor-summary">{esc(" · ".join(parts))}</p>'
+        return t.get("outcome") or {
+            "settled": "landed", "failed": "failed", "aborted": "aborted",
+        }.get(t.get("status") or "", t.get("status") or "unknown")
 
-    def _floor_state_note_html(self, live: Dict[str, Any], state: str) -> str:
-        """The LED state explained in place, one short sentence when it applies.
+    def _floor_strip_html(self, live: Dict[str, Any], state: str, age: Optional[int]) -> str:
+        """The v3 status strip (proposal section 4.1, mirrored in floor.js).
 
-        Replay needs none: its watermark already says what it is, and that copy
-        is not touched here. floor.js recomputes the same sentence on every
-        poll from the staleness thresholds the projection publishes.
+        First thing under the title: running, up next, landed, failed, needs
+        you, last event. Every figure is a link to its section. Under stale
+        or offline the state sentence comes first, in words, before any
+        number. A replay carries no summary, so no figure paints: the
+        watermark above the strip says what the page is. The age is the
+        build-time value of the same clock floor.js recomputes from
+        last_event_ts on every poll, so the snapshot and the live page can
+        never disagree.
         """
+        led_cls = {"live": "led live", "stale": "led stale", "replay": "led replay"}.get(state, "led off")
         staleness = live.get("staleness") or {}
         stale = staleness.get("stale_after_s") or 120
         offline = staleness.get("offline_after_s") or 900
-        txt = ""
-        if state == "live":
-            txt = "Live: events are arriving, so this page shows what is happening now."
-        elif state == "stale":
-            txt = (f"Stale: no new event for over {self._fmt_min(stale)}, so the page "
-                   "shows the last known state and the clocks stay frozen.")
+        note = ""
+        if state == "stale":
+            note = (f"Stale: no new event for over {self._fmt_min(stale)}, so the page "
+                    "shows the last known state and the clocks stay frozen.")
         elif state == "offline":
-            txt = (f"Offline: no new event for over {self._fmt_min(offline)}, so "
-                   "everything below is history, not the present.")
-        if not txt:
-            return '<span class="state-note" id="floor-state-note" hidden></span>'
-        return f'<span class="state-note" id="floor-state-note">{esc(txt)}</span>'
+            note = (f"Offline: no new event for over {self._fmt_min(offline)}, so "
+                    "everything below is history, not the present.")
+        note_html = (f'<span class="state-note" id="floor-state-note">{esc(note)}</span>' if note
+                     else '<span class="state-note" id="floor-state-note" hidden></span>')
+
+        degraded = state in ("stale", "offline")
+        s = live.get("summary")
+        has_summary = isinstance(s, dict) and state != "replay"
+        today = live.get("today") or []
+        landed = sum(1 for t in today if self._outcome_word(t) == "landed")
+        failed = sum(1 for t in today if self._outcome_word(t) == "failed")
+
+        def fig(fid: str, href: str, text: str, cls: str = "sfig", on: bool = True) -> str:
+            hid = "" if on else " hidden"
+            return f'<a class="{cls}" id="{fid}" href="{href}"{hid}>{esc(text)}</a>'
+
+        figs = []
+        if has_summary and self._is_num(s.get("running")):
+            figs.append(fig("strip-running", "#floor-now-card",
+                            f"{s['running']} running" + (" at last event" if degraded else "")))
+        else:
+            figs.append(fig("strip-running", "#floor-now-card", "", on=False))
+        if has_summary and self._is_num(s.get("queued")):
+            figs.append(fig("strip-queued", "#floor-queue-card", f"{s['queued']} up next"))
+        else:
+            figs.append(fig("strip-queued", "#floor-queue-card", "", on=False))
+        if has_summary:
+            figs.append(fig("strip-landed", "#floor-landed-card", f"{landed} landed"))
+            figs.append(fig("strip-failed", "#floor-failed-card", f"{failed} failed",
+                            "sfig bad" if failed > 0 else "sfig"))
+            needs = s.get("needs_you")
+            if not self._is_num(needs):
+                needs = len(live.get("needs_you") or [])
+            figs.append(fig("strip-needs", "#floor-needs-card", f"needs you: {needs}",
+                            "sfig hot" if needs > 0 else "sfig"))
+        else:
+            figs.append(fig("strip-landed", "#floor-landed-card", "", on=False))
+            figs.append(fig("strip-failed", "#floor-failed-card", "", on=False))
+            figs.append(fig("strip-needs", "#floor-needs-card", "", on=False))
+        if state != "replay" and isinstance(age, int):
+            figs.append(fig("strip-event", "#floor-legacy", f"last event {self._fmt_ago(age)}", "sfig dim"))
+        else:
+            figs.append(fig("strip-event", "#floor-legacy", "", "sfig dim", on=False))
+
+        return f"""
+    <div class="strip" id="floor-strip">
+      {note_html}
+      <span class="{led_cls}" id="floor-led" aria-hidden="true"></span>
+      {' '.join(figs)}
+    </div>
+"""
+
+    def _live_needs_card(self, live: Dict[str, Any]) -> str:
+        """NEEDS YOU (proposal section 4.2, mirrored in floor.js).
+
+        One row per item, newest first (the projection orders), each with
+        exactly one action. The action links to the item's source url when
+        the source carries one. An unverified item says so. Checks that
+        could not run are named in the note, so an empty list never reads as
+        "verified nothing to do" when a source was absent. The honesty rule
+        is the projection's: needs_you never invents an item.
+        """
+        check_words = {
+            "critic_block": "critic verdicts",
+            "ready_to_merge": "merge-ready PRs",
+            "quiet_seat": "quiet seats",
+            "failed_dispatch": "failed runs",
+            "prd_proposed": "PRD sign-offs",
+            "missing_variable": "repository variables",
+        }
+        items = live.get("needs_you") or []
+        meta = live.get("needs_you_meta") or {}
+        skipped = [c for c in (meta.get("checks") or []) if c.get("status") == "skipped"]
+        if skipped:
+            names = ", ".join(check_words.get(c.get("check") or "", c.get("check") or "?")
+                              for c in skipped)
+            reason = skipped[0].get("reason")
+            note = f"not checked: {esc(names)}" + (f" ({esc(reason)})" if reason else "")
+            note_html = f'<span class="more faint" id="floor-needs-note">{note}</span>'
+        else:
+            note_html = '<span class="more faint" id="floor-needs-note" hidden></span>'
+        if items:
+            rows = []
+            for it in items:
+                src = it.get("source") or {}
+                action = esc(it.get("action") or "look")
+                act = (f'<a class="act" href="{esc(src["url"])}">{action}</a>'
+                       if src.get("url") else f'<span class="act">{action}</span>')
+                unv = it.get("verified") is False
+                rows.append(
+                    f'<li class="nrow{" unv" if unv else ""}"><span class="nbody">'
+                    + (f'<span class="rname">{esc(it["repo"])}</span> ' if it.get("repo") else "")
+                    + esc(it.get("text") or "item without text")
+                    + (' <span class="faint">(not verified)</span>' if unv else "")
+                    + f"</span>{act}</li>"
+                )
+            rows_html = "".join(rows)
+        else:
+            rows_html = '<li class="muted">Nothing needs you.</li>'
+        return f"""
+    <div class="card mt" id="floor-needs-card">
+      <div class="cardhead"><h2>Needs you</h2>{note_html}</div>
+      <ol class="nlist" id="floor-needs-list">{rows_html}</ol>
+    </div>
+"""
+
+    def _live_initiatives_card(self, live: Dict[str, Any]) -> str:
+        """INITIATIVES (proposal section 4.5, mirrored in floor.js).
+
+        One row per open milestone with recent activity: waves landed of
+        planned, open issues, last landed PR, the exit sentence. A fallback
+        row (lookup skipped) shows only what the streams and the queue alone
+        prove, and says so.
+        """
+        rows_data = live.get("initiatives") or []
+        meta = live.get("initiatives_meta") or {}
+        days = meta.get("active_days") if isinstance(meta.get("active_days"), int) else 30
+        note = (f"open milestones active in the last {days} days" if rows_data else "")
+        note_html = (f'<span class="more faint" id="floor-initiatives-note">{esc(note)}</span>'
+                     if note else '<span class="more faint" id="floor-initiatives-note" hidden></span>')
+        if rows_data:
+            rows = []
+            for r in rows_data:
+                title = (f'<a href="{esc(r["url"])}">{esc(r.get("title") or "milestone")}</a>'
+                         if r.get("url") else f'<strong>{esc(r.get("title") or "milestone")}</strong>')
+                bits = []
+                w = r.get("waves") or {}
+                if isinstance(w.get("planned"), int):
+                    bits.append(f"wave {w.get('landed') or 0} of {w['planned']}")
+                if isinstance(r.get("open_issues"), int):
+                    n = r["open_issues"]
+                    bits.append(f"{n} open issue" + ("" if n == 1 else "s"))
+                ll = r.get("last_landed")
+                if isinstance(ll, dict) and isinstance(ll.get("number"), int):
+                    bits.append(f"last landed #{ll['number']}"
+                                + (f" {ll['title']}" if ll.get("title") else ""))
+                if r.get("exit"):
+                    bits.append(f"exit: {r['exit']}")
+                tail = ""
+                if r.get("lookup") == "skipped":
+                    tail = ('<span class="ifall">streams and queue alone'
+                            + (f" · milestone not verified ({esc(r['reason'])})" if r.get("reason")
+                               else " · milestone not verified")
+                            + "</span>")
+                elif r.get("exit_lookup") == "skipped":
+                    tail = '<span class="ifall">exit sentence not verified</span>'
+                facts = esc(" · ".join(bits)) + (" · " if bits and tail else "") + tail
+                rows.append(
+                    '<li class="irow"><span class="ibody">'
+                    f'<span class="ititle"><span class="rname">{esc(r.get("repo") or "repo not reported")}</span> '
+                    f'{title}</span>'
+                    f'<span class="ifacts">{facts}</span>'
+                    "</span></li>"
+                )
+            rows_html = "".join(rows)
+        else:
+            rows_html = ('<li class="muted">No open milestone with recent activity is known '
+                         "to this projection.</li>")
+        return f"""
+    <div class="card mt" id="floor-initiatives-card">
+      <div class="cardhead"><h2>Initiatives</h2>{note_html}</div>
+      <ol class="ilist" id="floor-initiatives-list">{rows_html}</ol>
+    </div>
+"""
 
     def _now_row(self, s: Dict[str, Any], state: str, last_event_ts: Any) -> str:
         """One live seat card (mirrored in floor.js).
@@ -1323,7 +1471,8 @@ class Renderer:
         Honesty: the block says who declared it and when the newest entry was
         added, and every row reads "queued". A queued plan is never drawn as
         motion, so the page cannot imply a plan is running before a dispatch
-        opened a stream for it.
+        opened a stream for it. A blocked plan shows its reason in place
+        (Floor v3-A queue[].blocked) instead of pretending it is ready.
         """
         queue = live.get("queue") or []
         meta = live.get("queue_meta") or {}
@@ -1339,9 +1488,10 @@ class Renderer:
                     "<code>./scripts/queue.sh add &lt;plan&gt; &lt;repo&gt; &lt;purpose&gt;</code>.")
         if queue:
             # Repo is the first word of the row; the issue number follows
-            # when the plan header names one (issue 72).
+            # when the plan header names one (issue 72); a blocked reason
+            # renders in place on the dim plan line (Floor v3).
             rows = "".join(
-                '<li class="qrow">'
+                f'<li class="qrow{" isblocked" if q.get("blocked") else ""}">'
                 f'<span class="qpos mono">{esc(q.get("position"))}</span>'
                 f'<span class="qbody"><span class="qpurpose"><span class="rname">'
                 f'{esc(q.get("repo") or "repo not declared")}</span>'
@@ -1350,7 +1500,10 @@ class Renderer:
                    else "")
                 + f' {esc(q.get("purpose") or "no purpose declared")}</span>'
                 f'<span class="qmeta"><span class="mono faint">'
-                f'{esc(q.get("plan_basename") or q.get("plan") or "")}</span></span></span>'
+                f'{esc(q.get("plan_basename") or q.get("plan") or "")}</span>'
+                + (f'<span class="qblocked">blocked: {esc(q["blocked"])}</span>'
+                   if q.get("blocked") else "")
+                + '</span></span>'
                 '<span class="st st-unk">queued</span></li>'
                 for q in queue
             )
@@ -1365,14 +1518,44 @@ class Renderer:
     </div>
 """
 
-    def _live_today_card(self, live: Dict[str, Any], state: str = "none") -> str:
-        """Landed today: every dispatch that ENDED on this local calendar day.
+    def _today_row(self, t: Dict[str, Any]) -> str:
+        """One finished-run row (mirrored in floor.js todayRow).
 
-        The "still live" count is a liveness claim, so it wears the same
-        watermark as the rest of the Floor: off a live stream it is qualified
-        with "at last event" rather than asserted in the present tense.
+        Failed and aborted wear different pills so a scan of the column
+        tells them apart. Repo is the first word of the row; the PR number
+        follows when one exists for the landing's branch (issue 72).
+        """
+        word = self._outcome_word(t)
+        cls = {"landed": "st st-done", "failed": "st st-fail",
+               "aborted": "st st-warn"}.get(word, "st st-unk")
+        branches = " ".join(
+            f'<span class="mono faint">{esc(b)}</span>' for b in (t.get("branches") or [])
+        ) or '<span class="faint">no branch reported</span>'
+        pr = t.get("pr")
+        pr_html = (f' <span class="mono">PR #{pr["number"]}</span>'
+                   if isinstance(pr, dict) and isinstance(pr.get("number"), int) else "")
+        return (
+            '<li class="trow">'
+            f'<span class="tbody"><span class="tpurpose"><span class="rname">'
+            f'{esc(t.get("repo") or "repo not reported")}</span>{pr_html} '
+            f'{esc(t.get("purpose") or t.get("plan_basename") or t.get("dispatch_id"))}</span>'
+            f'<span class="tmeta">{branches}</span></span>'
+            f'<span class="{cls} tout">{esc(word)}</span>'
+            f'<span class="timer mono">{esc(self._fmt_min(t.get("duration_s")))}</span></li>'
+        )
+
+    def _live_today_cards(self, live: Dict[str, Any], state: str = "none") -> str:
+        """FAILED and LANDED today (proposal section 4.6, mirrored in floor.js).
+
+        Two lists, failed first when non-empty. Every dispatch whose
+        dispatch_end fell on this local calendar day. Aborted runs sit in
+        the failed list with their own word: they did not land. The "still
+        live" count is a liveness claim, so off a live stream it wears the
+        same qualification as the rest of the Floor.
         """
         today = live.get("today") or []
+        failed_rows = [t for t in today if self._outcome_word(t) in ("failed", "aborted")]
+        landed_rows = [t for t in today if self._outcome_word(t) not in ("failed", "aborted")]
         meta = live.get("today_meta") or {}
         live_n = len(meta.get("live") or [])
         if not live_n:
@@ -1384,47 +1567,29 @@ class Renderer:
         note = (f'dispatch_end on {esc(meta.get("date") or "today")} · '
                 f'{esc(meta.get("streams_read") or 0)} stream(s) read'
                 + live_note)
-        if today:
-            rows = []
-            for t in today:
-                # Outcome in words from the projection's today[].outcome
-                # (landed, failed, aborted), which reads the seat exits;
-                # status alone cannot tell a failed run from an operator
-                # stop. Older projections without outcome fall back to the
-                # status map. Failed and aborted wear different pills so a
-                # scan of the column tells them apart.
-                word = t.get("outcome") or {
-                    "settled": "landed", "failed": "failed", "aborted": "aborted",
-                }.get(t.get("status") or "", t.get("status") or "unknown")
-                cls = {"landed": "st st-done", "failed": "st st-fail",
-                       "aborted": "st st-warn"}.get(word, "st st-unk")
-                branches = " ".join(
-                    f'<span class="mono faint">{esc(b)}</span>' for b in (t.get("branches") or [])
-                ) or '<span class="faint">no branch reported</span>'
-                # Repo is the first word of the row; the PR number follows
-                # when one exists for the landing's branch (issue 72).
-                pr = t.get("pr")
-                pr_html = (f' <span class="mono">PR #{pr["number"]}</span>'
-                           if isinstance(pr, dict) and isinstance(pr.get("number"), int) else "")
-                rows.append(
-                    '<li class="trow">'
-                    f'<span class="tbody"><span class="tpurpose"><span class="rname">'
-                    f'{esc(t.get("repo") or "repo not reported")}</span>{pr_html} '
-                    f'{esc(t.get("purpose") or t.get("plan_basename") or t.get("dispatch_id"))}</span>'
-                    f'<span class="tmeta">{branches}</span></span>'
-                    f'<span class="{cls} tout">{esc(word)}</span>'
-                    f'<span class="timer mono">{esc(self._fmt_min(t.get("duration_s")))}</span></li>'
-                )
-            rows_html = "".join(rows)
-        else:
-            rows_html = '<li class="muted">Nothing has landed today yet.</li>'
-        return f"""
-    <div class="card mt" id="floor-today-card">
-      <div class="cardhead"><h2>Landed today</h2><span class="more faint">from the event stream</span></div>
-      <p class="muted" id="floor-today-note">{note}</p>
-      <ol class="tlist" id="floor-today-list">{rows_html}</ol>
+        failed_html = ""
+        if failed_rows:
+            failed_html = f"""
+    <div class="card mt" id="floor-failed-card">
+      <div class="cardhead"><h2>Failed today</h2><span class="more faint">from the event stream</span></div>
+      <ol class="tlist" id="floor-failed-list">{"".join(self._today_row(t) for t in failed_rows)}</ol>
     </div>
 """
+        else:
+            failed_html = """
+    <div class="card mt" id="floor-failed-card" hidden>
+      <div class="cardhead"><h2>Failed today</h2><span class="more faint">from the event stream</span></div>
+      <ol class="tlist" id="floor-failed-list"></ol>
+    </div>
+"""
+        landed_html = f"""
+    <div class="card mt" id="floor-landed-card">
+      <div class="cardhead"><h2>Landed today</h2><span class="more faint">from the event stream</span></div>
+      <p class="muted" id="floor-today-note">{note}</p>
+      <ol class="tlist" id="floor-today-list">{"".join(self._today_row(t) for t in landed_rows) if landed_rows else '<li class="muted">Nothing has landed today yet.</li>'}</ol>
+    </div>
+"""
+        return failed_html + landed_html
 
     def live_page(self) -> None:
         live = self.live
@@ -1480,7 +1645,12 @@ class Renderer:
 """
 
     def _live_shell_body(self) -> str:
-        """Phase A teach shell — no live.json in this build, nothing faked."""
+        """Phase A teach shell: no live.json in this build, nothing faked.
+
+        Same v3 section order as the live page, every section an honest
+        empty state that teaches the next command. No figure paints: there
+        is no projection to count from.
+        """
         hier = self.hier(
             [
                 ("Global", "Fleet Desk", "../index.html", False),
@@ -1509,37 +1679,20 @@ class Renderer:
       <h1>Ops Floor</h1>
     </div>
     {self._floor_watermark_region()}
-    <p class="floor-summary" id="floor-summary" hidden></p>
-    <details class="floor-legacy" id="floor-legacy">
-      <summary>Replay, schema intro, pipeline and trail links</summary>
-      {hier}
-      <p class="lede"><strong>This is the empty shell</strong> — no
-      <span class="mono">live.json</span> in this build, so no agents are shown or faked.
-      Run a dispatch (<span class="mono">logs/fleet-events/</span>) and
-      <code>make desk-live</code> to light it up; this page polls
-      <span class="mono">data/live.json</span> and repaints itself when a projection appears.
-      Settled runs open the Phase C <strong>REPLAY</strong> scrubber (never a green LIVE LED).
-      Law: <span class="mono">docs/proposals/fleet-desk-v2-SYNTHESIS.md</span>.</p>
-      {self._floor_legacy_regions()}
-
-      <div class="pipeline" role="group" aria-label="Pipeline">
-        <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">&mdash;</span></div><div class="desc" id="pipe-queued-desc">no queue declared in this build</div></div>
-        <div class="pipe wip"><div class="ph">Running <span class="n" id="pipe-inflight">—</span></div><div class="desc">no seat live</div></div>
-        <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">—</span></div><div class="desc">—</div></div>
-        <div class="pipe done"><div class="ph">Done <span class="n" id="pipe-settled">—</span></div><div class="desc">settled work lives in the <a href="../work/index.html">Almanac</a></div></div>
-      </div>
-    </details>
-
-    <div class="ambient">
+    <div class="strip" id="floor-strip">
+      <span class="state-note" id="floor-state-note">Offline: no live projection in this build, so nothing below can claim the present.</span>
       <span class="led off" id="floor-led" aria-hidden="true"></span>
-      <span class="msg" id="floor-msg"><strong>offline</strong> — no live run in this build</span>
-      <span class="meta" id="floor-meta">fleet-events: none · age —</span>
-      <span class="state-note" id="floor-state-note" hidden></span>
+      <a class="sfig" id="strip-running" href="#floor-now-card" hidden></a>
+      <a class="sfig" id="strip-queued" href="#floor-queue-card" hidden></a>
+      <a class="sfig" id="strip-landed" href="#floor-landed-card" hidden></a>
+      <a class="sfig" id="strip-failed" href="#floor-failed-card" hidden></a>
+      <a class="sfig" id="strip-needs" href="#floor-needs-card" hidden></a>
+      <a class="sfig dim" id="strip-event" href="#floor-legacy" hidden></a>
     </div>
 
-    <div class="waiting">
-      <div class="label">Waiting on</div>
-      <div id="floor-waiting-items"><p class="muted flush">Nothing waiting — there is no live dispatch to wait on.</p></div>
+    <div class="card mt" id="floor-needs-card">
+      <div class="cardhead"><h2>Needs you</h2><span class="more faint" id="floor-needs-note" hidden></span></div>
+      <ol class="nlist" id="floor-needs-list"><li class="muted">No live projection, so nothing can be claimed to need you.</li></ol>
     </div>
 
     <div class="card mt" id="floor-now-card">
@@ -1556,49 +1709,95 @@ class Renderer:
       <ol class="qlist" id="floor-queue-list"><li class="muted">Nothing armed in this build.</li></ol>
     </div>
 
-    <div class="card mt" id="floor-today-card">
+    <div class="card mt" id="floor-initiatives-card">
+      <div class="cardhead"><h2>Initiatives</h2><span class="more faint" id="floor-initiatives-note" hidden></span></div>
+      <ol class="ilist" id="floor-initiatives-list"><li class="muted">No live projection, so no milestone can be claimed to be active.</li></ol>
+    </div>
+
+    <div class="card mt" id="floor-failed-card" hidden>
+      <div class="cardhead"><h2>Failed today</h2><span class="more faint">from the event stream</span></div>
+      <ol class="tlist" id="floor-failed-list"></ol>
+    </div>
+
+    <div class="card mt" id="floor-landed-card">
       <div class="cardhead"><h2>Landed today</h2><span class="more faint">from the event stream</span></div>
       <p class="muted" id="floor-today-note">No projection in this build. Landed rows come from the
       <code>dispatch_end</code> events of the day, so nothing is claimed until a stream is read.</p>
       <ol class="tlist" id="floor-today-list"><li class="muted">No live projection, so nothing can be claimed about today.</li></ol>
     </div>
 
-    <div id="floor-mode-body">
-    <div class="card">
-      <div class="cardhead"><h2>Wave layout — parallel seat lanes</h2><span class="more faint">structure preview</span></div>
-      <p class="muted">Ghost lanes show where plan seats will sit. Rate-cap and failover ride the lane as honest chrome.</p>
-      <div class="lanes">{lanes}
+    <details class="floor-legacy" id="floor-legacy">
+      <summary>Replay, stream facts, schema, lanes and trail links</summary>
+      <p class="lede"><strong>This is the empty shell</strong>: no
+      <span class="mono">live.json</span> in this build, so no agents are shown or faked.
+      Run a dispatch (<span class="mono">logs/fleet-events/</span>) and
+      <code>make desk-live</code> to light it up; this page polls
+      <span class="mono">data/live.json</span> and repaints itself when a projection appears.
+      Settled runs open the Phase C <strong>REPLAY</strong> scrubber (never a green live LED).
+      Law: <span class="mono">docs/proposals/fleet-desk-v2-SYNTHESIS.md</span>.</p>
+      {hier}
+      {self._floor_legacy_regions()}
+
+      <div class="ambient">
+        <span class="msg" id="floor-msg"><strong>offline</strong>, no live run in this build</span>
+        <span class="meta" id="floor-meta">fleet-events: none · age —</span>
       </div>
-    </div>
 
-    <div class="card mt">
-      <div class="cardhead"><h2>Conductor layout — serial spine</h2><span class="more faint">structure preview</span></div>
-      <p class="muted">A Conductor run renders as a spine: settled nodes fill, the hot pin marks the live seat, dashed nodes stay ahead of it.</p>
-      <div class="spine">{spine}</div>
-    </div>
+      <div class="waiting">
+        <div class="label">Waiting on</div>
+        <div id="floor-waiting-items"><p class="muted flush">Nothing waiting: there is no live dispatch to wait on.</p></div>
+      </div>
 
-    <div class="card mt teaser">
-      <div class="cardhead"><h2>Go live</h2></div>
-      <p>Phase B wires <span class="mono">dispatch.sh</span> events to this page
-      (<code>make desk-live</code>, SSE and/or <span class="mono">live.json</span> polling).
-      Until then the Almanac — <a href="../index.html">Global</a>, <a href="../missions/index.html">Missions</a>,
-      <a href="../work/index.html">Work</a> — is the honest record.</p>
-    </div>
-    </div>
+      <div class="pipeline" role="group" aria-label="Pipeline">
+        <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">&mdash;</span></div><div class="desc" id="pipe-queued-desc">no queue declared in this build</div></div>
+        <div class="pipe wip"><div class="ph">Running <span class="n" id="pipe-inflight">—</span></div><div class="desc">no seat live</div></div>
+        <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">—</span></div><div class="desc">—</div></div>
+        <div class="pipe done"><div class="ph">Done <span class="n" id="pipe-settled">—</span></div><div class="desc">settled work lives in the <a href="../work/index.html">Almanac</a></div></div>
+      </div>
 
-    <div class="card mt">
-      <div class="cardhead"><h2>Event tail</h2><span class="more faint">redaction-safe</span></div>
-      <ol class="events" id="floor-events"><li class="muted">No live run — no events to show.</li></ol>
-    </div>
+      <div id="floor-mode-body">
+      <div class="card">
+        <div class="cardhead"><h2>Wave layout, parallel seat lanes</h2><span class="more faint">structure preview</span></div>
+        <p class="muted">Ghost lanes show where plan seats will sit. Rate-cap and failover ride the lane as honest chrome.</p>
+        <div class="lanes">{lanes}
+        </div>
+      </div>
+
+      <div class="card mt">
+        <div class="cardhead"><h2>Conductor layout, serial spine</h2><span class="more faint">structure preview</span></div>
+        <p class="muted">A Conductor run renders as a spine: settled nodes fill, the hot pin marks the live seat, dashed nodes stay ahead of it.</p>
+        <div class="spine">{spine}</div>
+      </div>
+
+      <div class="card mt teaser">
+        <div class="cardhead"><h2>Go live</h2></div>
+        <p>Phase B wires <span class="mono">dispatch.sh</span> events to this page
+        (<code>make desk-live</code>, SSE and/or <span class="mono">live.json</span> polling).
+        Until then the Almanac (<a href="../index.html">Global</a>, <a href="../missions/index.html">Missions</a>,
+        <a href="../work/index.html">Work</a>) is the honest record.</p>
+      </div>
+      </div>
+
+      <div class="card mt">
+        <div class="cardhead"><h2>Event tail</h2><span class="more faint">redaction-safe</span></div>
+        <ol class="events" id="floor-events"><li class="muted">No live run, no events to show.</li></ol>
+      </div>
+    </details>
 """
         return body
 
     def _live_floor_body(self, live: Dict[str, Any]) -> str:
-        """Snapshot of the live/1 projection — only stream facts, labeled as such.
-        Staleness is derived from last_event_ts at build time (see _live_state),
-        so a stale snapshot never rebuilds as a green LED."""
+        """Snapshot of the live/1 projection, v3 page order (proposal section 4).
+
+        Only stream facts, labeled as such. Staleness is derived from
+        last_event_ts at build time (see _live_state), so a stale snapshot
+        never rebuilds as a green LED. Top to bottom: status strip, NEEDS
+        YOU, NOW grouped by repo, UP NEXT, INITIATIVES, FAILED and LANDED
+        today, then one details control (closed by default) holding replay,
+        the scrubber, stream facts, the schema line, the pipeline tiles, the
+        lanes or spine, the event tail and the trail links.
+        """
         state, age = self._live_state(live)
-        led_cls = {"live": "led live", "stale": "led stale", "replay": "led replay"}.get(state, "led off")
         repo = live.get("repo")
         plan = live.get("plan")
         wave = live.get("wave") or {}
@@ -1631,7 +1830,7 @@ class Renderer:
                 for w in waiting
             )
         else:
-            wait_items = '<p class="muted flush">Nothing waiting — no open gates, no rate-caps.</p>'
+            wait_items = '<p class="muted flush">Nothing waiting: no open gates, no rate-caps.</p>'
         counts = live.get("counts") or {}
 
         def cn(key: str) -> Any:
@@ -1651,37 +1850,47 @@ class Renderer:
             queued_desc = "no queue declared, showing plan seats not started"
 
         if mode == "conductor":
-            mode_title = "Conductor — serial spine"
+            mode_title = "Conductor, serial spine"
             mode_sub = "Settled nodes fill, the hot pin marks the live seat, dashed nodes stay ahead of it."
             mode_body = self._live_spine(live)
         else:
-            mode_title = "Wave — parallel seat lanes"
+            mode_title = "Wave, parallel seat lanes"
             mode_sub = "Ghost lanes are plan seats not yet started. Rate-cap and failover ride the lane as honest chrome."
             mode_body = self._live_lanes(live)
-        led_html = "led replay" if state == "replay" else led_cls
         msg_extra = ' · <strong class="wm-inline">REPLAY</strong>' if state == "replay" else stale_note
         wm_static = self._replay_static_watermark(state)
-        # Issue 72: the summary line is the first thing on the page. The
-        # legacy chrome (replay scrubber, schema intro, trail block, the
-        # four pipeline tiles, and the stale mission breadcrumb) folds
-        # behind one details control, closed by default. Only the honesty
-        # chrome (REPLAY watermark) and the page title sit above the line.
         body = f"""
     <div class="pagehead">
       <h1>Ops Floor</h1>
     </div>
     {self._floor_watermark_region()}
     {wm_static}
-    {self._floor_summary_html(live, state, age)}
+    {self._floor_strip_html(live, state, age)}
+{self._live_needs_card(live)}
+{self._live_now_card(live, state)}
+{self._live_queue_card(live)}
+{self._live_initiatives_card(live)}
+{self._live_today_cards(live, state)}
+
     <details class="floor-legacy" id="floor-legacy">
-      <summary>Replay, schema intro, pipeline and trail links</summary>
-      {hier}
+      <summary>Replay, stream facts, schema, lanes and trail links</summary>
       <p class="lede">Snapshot of <span class="mono">data/live.json</span> (schema <span class="mono">live/1</span>,
       generated {esc(live.get("generated_at") or "—")}). Served via <code>make desk-live</code> this page
       re-reads the projection every few seconds and repaints itself. Only facts from the dispatch event
-      stream are shown — live state never enters <span class="mono">index.json</span>.
+      stream are shown; live state never enters <span class="mono">index.json</span>.
       Settled runs: enter <strong>REPLAY</strong> to scrub history with an honesty watermark.</p>
+      {hier}
       {self._floor_legacy_regions()}
+
+      <div class="ambient">
+        <span class="msg" id="floor-msg"><strong>{esc(status)}</strong>, dispatch <span class="mono">{esc(live.get("dispatch_id") or "—")}</span>{msg_extra}</span>
+        <span class="meta" id="floor-meta">{esc(live.get("source") or "live.json")} · last event {esc(age_txt)} · snapshot {esc(live.get("generated_at") or "—")}</span>
+      </div>
+
+      <div class="waiting">
+        <div class="label">Waiting on</div>
+        <div id="floor-waiting-items">{wait_items}</div>
+      </div>
 
       <div class="pipeline" role="group" aria-label="Pipeline">
         <div class="pipe todo"><div class="ph">Queued <span class="n" id="pipe-queued">{queued_n}</span></div><div class="desc" id="pipe-queued-desc">{queued_desc}</div></div>
@@ -1689,35 +1898,20 @@ class Renderer:
         <div class="pipe blocked"><div class="ph">Blocked <span class="n" id="pipe-blocked">{cn("blocked")}</span></div><div class="desc">failed · rate-capped · unknown</div></div>
         <div class="pipe done"><div class="ph">Settled <span class="n" id="pipe-settled">{cn("settled")}</span></div><div class="desc">record lands in the <a href="../work/index.html">Almanac</a></div></div>
       </div>
+
+      <div id="floor-mode-body">
+      <div class="card">
+        <div class="cardhead"><h2>{esc(mode_title)}</h2><span class="more faint">{esc(mode)} mode</span></div>
+        <p class="muted">{esc(mode_sub)}</p>
+        {mode_body}
+      </div>
+      </div>
+
+      <div class="card mt">
+        <div class="cardhead"><h2>Event tail</h2><span class="more faint">redaction-safe · newest first</span></div>
+        <ol class="events" id="floor-events">{self._live_events(live)}</ol>
+      </div>
     </details>
-
-    <div class="ambient">
-      <span class="{led_html}" id="floor-led" aria-hidden="true"></span>
-      <span class="msg" id="floor-msg"><strong>{esc(status)}</strong> — dispatch <span class="mono">{esc(live.get("dispatch_id") or "—")}</span>{msg_extra}</span>
-      <span class="meta" id="floor-meta">{esc(live.get("source") or "live.json")} · last event {esc(age_txt)} · snapshot {esc(live.get("generated_at") or "—")}</span>
-      {self._floor_state_note_html(live, state)}
-    </div>
-
-    <div class="waiting">
-      <div class="label">Waiting on</div>
-      <div id="floor-waiting-items">{wait_items}</div>
-    </div>
-{self._live_now_card(live, state)}
-{self._live_queue_card(live)}
-{self._live_today_card(live, state)}
-
-    <div id="floor-mode-body">
-    <div class="card">
-      <div class="cardhead"><h2>{esc(mode_title)}</h2><span class="more faint">{esc(mode)} mode</span></div>
-      <p class="muted">{esc(mode_sub)}</p>
-      {mode_body}
-    </div>
-    </div>
-
-    <div class="card mt">
-      <div class="cardhead"><h2>Event tail</h2><span class="more faint">redaction-safe · newest first</span></div>
-      <ol class="events" id="floor-events">{self._live_events(live)}</ol>
-    </div>
 """
         return body
 

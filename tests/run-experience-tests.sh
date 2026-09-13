@@ -611,6 +611,276 @@ grep -q 'class="led off" id="floor-led"' "$FL" \
   && ok "removing live.json restores the teach shell" || bad "removing live.json restores the teach shell"
 assert_absent_html "post-degrade floor invents no live chrome" "$FIXOUT/live" 'lane run|spine-node hot|led live'
 
+# ── Floor v3-B: the page in the proposal order (floor-v3-purpose.md §4) ──
+# A synthetic live/1 projection in the v3-A shape: two repos live, one
+# critic BLOCK in NEEDS YOU, a blocked queue entry, one initiative row, one
+# landed and one failed run today. Fresh timestamps, so the strip derives
+# live. Stale and replay variants are derived from the same fixture.
+python3 - "$TMP/live-v3.json" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+ISO = "%Y-%m-%dT%H:%M:%SZ"
+now = datetime.now(timezone.utc).replace(microsecond=0)
+def ts(delta_s):
+    return (now - timedelta(seconds=delta_s)).strftime(ISO)
+def seat(task_id, agent, repo, branch, wave, started_s, phase="editing", program="make"):
+    return {
+        "task_id": task_id, "agent": agent, "branch": branch, "wave": wave,
+        "provider": "local", "worker": "local", "model": None, "status": "running",
+        "pipeline": "in_flight", "exit": None, "attempt": 1,
+        "started_at": ts(started_s), "ended_at": None, "duration_s": None,
+        "elapsed_s": started_s, "providers_tried": ["local"], "failovers": [],
+        "ratecapped": False, "log": None, "activity": None, "dispatch_id": "v3-run",
+        "foreign": False, "repo": repo,
+        "issue": {"number": 501, "source": "plan", "milestone": "Track K", "lookup": "verified", "reason": None},
+        "task_line": "Do the " + agent + " part of the wave.", "task": "Do the " + agent + " part of the wave.",
+        "pr": {"branch": branch, "number": None, "title": None, "state": None, "url": None,
+               "lookup": "verified", "reason": "no open or merged PR for this branch"},
+        "last_heartbeat_ts": ts(10), "heartbeat_age_s": 10, "quiet": False,
+        "now": {"role": agent, "phase": phase, "program": program,
+                "purpose": "Track K W1-A: the wave. Issue 501.", "purpose_source": "queue",
+                "wave": wave, "wave_total": 2, "elapsed_s": started_s, "heartbeat_age_s": 10},
+    }
+d = {
+    "schema": "live/1", "generated_at": ts(2),
+    "dispatch_id": "v3-run", "source": "logs/fleet-events/v3-run.jsonl",
+    "repo": "olympus-platform", "plan": "track-k.plan", "mode": "wave",
+    "status": "running", "reason": None, "wave": {"current": 1, "total": 2},
+    "seats": [
+        seat("0", "go-backend", "olympus-platform", "feat/k-a", 1, 300),
+        seat("1", "web-frontend", "olympus-platform", "feat/k-b", 1, 240),
+        seat("2", "devops", "dev-agents", "feat/k-c", 1, 120),
+    ],
+    "counts": {"queued": 0, "in_flight": 3, "blocked": 0, "settled": 0, "total": 3},
+    "summary": {"running": 3, "queued": 2, "landed_today": 2, "needs_you": 1,
+                "last_event_ts": ts(5)},
+    "waiting_on": [], "last_event_ts": ts(5),
+    "staleness": {"seconds": 5, "state": "live", "stale_after_s": 120, "offline_after_s": 900},
+    "events_seen": 12,
+    "recent_events": [
+        {"schema": "fleet-events/1", "seq": 12, "ts": ts(5), "dispatch_id": "v3-run",
+         "event": "seat_progress", "task_id": "0", "agent": "go-backend", "phase": "editing"},
+    ],
+    "warnings": [], "view": "live", "replay": None,
+    "queue": [
+        {"position": 1, "plan": "wave-plans/k-next.plan", "plan_basename": "k-next.plan",
+         "repo": "olympus-platform", "purpose": "Track K W2-A: the next wave. Issue 503.",
+         "added_at": ts(3600), "status": "queued",
+         "issue": {"number": 503, "source": "plan", "milestone": None, "lookup": "skipped",
+                   "reason": "no lookup"},
+         "blocked": "S11 awaits sign-off",
+         "blocked_by": {"type": "prd_proposed", "source": {"kind": "file"}}},
+        {"position": 2, "plan": "wave-plans/k-later.plan", "plan_basename": "k-later.plan",
+         "repo": "dev-agents", "purpose": "Track K W2-B: the later wave. Issue 506.",
+         "added_at": ts(3500), "status": "queued",
+         "issue": {"number": 506, "source": "plan", "milestone": None, "lookup": "skipped",
+                   "reason": "no lookup"},
+         "blocked": None, "blocked_by": None},
+    ],
+    "queue_meta": {"source": "logs/fleet-queue.json", "declared": True, "declared_at": ts(3500),
+                   "total": 2, "queued": 2, "running": 0, "settled": 0},
+    "today": [
+        {"dispatch_id": "v3-landed", "source": "logs/fleet-events/v3-landed.jsonl",
+         "plan": "wave-plans/k-w1.plan", "plan_basename": "k-w1.plan", "repo": "olympus-platform",
+         "purpose": "Track K W1: the first wave.", "purpose_source": "queue",
+         "status": "settled", "outcome": "landed", "end_status": "completed",
+         "duration_s": 615, "started_at": ts(4000), "ended_at": ts(3385),
+         "seats": 1, "succeeded": 1, "failed": 0, "branches": ["feat/k-w1"],
+         "pr": {"branch": "feat/k-w1", "number": 95, "title": "feat: the contract",
+                "state": "MERGED", "url": "https://example.invalid/pr/95",
+                "lookup": "verified", "reason": None},
+         "prs": []},
+        {"dispatch_id": "v3-failed", "source": "logs/fleet-events/v3-failed.jsonl",
+         "plan": "wave-plans/k-w0b.plan", "plan_basename": "k-w0b.plan", "repo": "dev-agents",
+         "purpose": "Track K W0-B: the fix wave.", "purpose_source": "queue",
+         "status": "aborted", "outcome": "failed", "end_status": "completed",
+         "duration_s": 437, "started_at": ts(3000), "ended_at": ts(2563),
+         "seats": 1, "succeeded": 0, "failed": 1, "branches": ["feat/k-w0b"],
+         "pr": {"branch": "feat/k-w0b", "number": None, "title": None, "state": None,
+                "url": None, "lookup": "verified",
+                "reason": "no open or merged PR for this branch"},
+         "prs": []},
+    ],
+    "today_meta": {"date": now.strftime("%Y-%m-%d"), "streams_read": 3,
+                   "live": ["v3-run"], "ended": 2},
+    "repos": [
+        {"repo": "olympus-platform", "seats_live": 2, "dispatches_live": 1,
+         "queued": 1, "landed_today": 1, "dispatch_ids": ["v3-run"]},
+        {"repo": "dev-agents", "seats_live": 1, "dispatches_live": 1,
+         "queued": 1, "landed_today": 1, "dispatch_ids": ["v3-run"]},
+    ],
+    "gh_enrichment": {"status": "ok", "reason": None, "owner": "testowner",
+                      "calls": 4, "cached": 0, "skipped": 0},
+    "needs_you": [
+        {"type": "critic_block",
+         "text": "Iris round 2 blocked by backend critic, 3 findings",
+         "action": "open the comment",
+         "source": {"kind": "comment", "repo": "olympus-platform", "comment_id": 9001,
+                    "url": "https://example.invalid/issues/900#c9001", "pr": 101,
+                    "issue": 900, "verdict": "BLOCK-FIX", "round": 2, "stem": "CRITIC K"},
+         "verified": True, "at": ts(60), "repo": "olympus-platform",
+         "branch": "feat/k-blocked", "pr": 101, "plan": None},
+    ],
+    "needs_you_meta": {"count": 1, "unverified": 0,
+                       "checks": [{"check": "critic_block", "status": "ok", "reason": None,
+                                   "looked_at": 2}],
+                       "comment_lookback_days": 7, "quiet_after_s": 90},
+    "initiatives": [
+        {"repo": "olympus-platform", "title": "Track K", "number": 1,
+         "url": "https://example.invalid/milestone/1", "lookup": "verified", "reason": None,
+         "epic": 500, "epic_title": "[Track K] Epic: the whole thing",
+         "exit": "five distinct testers complete a checkout.", "exit_lookup": "verified",
+         "waves": {"landed": 2, "planned": 4, "landed_ids": ["W0", "W1-A"],
+                   "planned_ids": ["W0", "W1-A", "W1-B", "W2-A"]},
+         "open_issues": 5,
+         "last_landed": {"number": 95, "title": "feat: the contract", "branch": "feat/k-w1",
+                         "merged_at": ts(3385), "milestone": "Track K"},
+         "updated_at": ts(60), "plans": ["k-w0.plan", "k-w1.plan"],
+         "source": {"milestone": "verified", "landed": "streams of the day"}},
+    ],
+    "initiatives_meta": {"count": 1,
+                         "repos": [{"repo": "olympus-platform", "lookup": "verified",
+                                    "reason": None}],
+                         "active_days": 30, "plans_seen": 2},
+}
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+
+cp "$TMP/live-v3.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with the v3 two-repo fixture" || bad "renderer succeeds with the v3 two-repo fixture"
+
+grep -q 'id="strip-running" href="#floor-now-card">3 running' "$FL" \
+  && ok "strip: running figure links to NOW" || bad "strip: running figure links to NOW"
+grep -q 'id="strip-queued" href="#floor-queue-card">2 up next' "$FL" \
+  && ok "strip: up-next figure links to UP NEXT" || bad "strip: up-next figure links to UP NEXT"
+grep -q 'id="strip-landed" href="#floor-landed-card">1 landed' "$FL" \
+  && ok "strip: landed figure links to LANDED" || bad "strip: landed figure links to LANDED"
+grep -q 'class="sfig bad" id="strip-failed" href="#floor-failed-card">1 failed' "$FL" \
+  && ok "strip: failed figure links to FAILED and marks red" || bad "strip: failed figure links to FAILED and marks red"
+grep -q 'class="sfig hot" id="strip-needs" href="#floor-needs-card">needs you: 1' "$FL" \
+  && ok "strip: needs-you figure is red when non-zero and links to its section" \
+  || bad "strip: needs-you figure is red when non-zero and links to its section"
+grep -q 'id="strip-event" href="#floor-legacy">last event ' "$FL" \
+  && ok "strip: last event links to the details fold" || bad "strip: last event links to the details fold"
+grep -q 'id="floor-state-note" hidden' "$FL" \
+  && ok "strip: a live stream shows no state sentence" || bad "strip: a live stream shows no state sentence"
+
+grep -q 'Iris round 2 blocked by backend critic, 3 findings' "$FL" \
+  && grep -q 'href="https://example.invalid/issues/900#c9001">open the comment</a>' "$FL" \
+  && ok "NEEDS YOU row renders the critic block with its one action" \
+  || bad "NEEDS YOU row renders the critic block with its one action"
+
+grep -q '<li class="repohead"><span class="rname">olympus-platform</span>' "$FL" \
+  && grep -q '<li class="repohead"><span class="rname">dev-agents</span>' "$FL" \
+  && ok "NOW groups both repos under their own headers" \
+  || bad "NOW groups both repos under their own headers"
+
+grep -q 'class="qrow isblocked"' "$FL" \
+  && grep -q 'blocked: S11 awaits sign-off' "$FL" \
+  && ok "UP NEXT shows the blocked plan's reason in place" \
+  || bad "UP NEXT shows the blocked plan's reason in place"
+
+grep -q 'Track K' "$FL" && grep -q 'wave 2 of 4' "$FL" \
+  && grep -q '5 open issues' "$FL" && grep -q 'last landed #95' "$FL" \
+  && grep -q 'exit: five distinct testers complete a checkout.' "$FL" \
+  && ok "INITIATIVES row: waves, open issues, last landed PR, exit sentence" \
+  || bad "INITIATIVES row: waves, open issues, last landed PR, exit sentence"
+
+python3 - "$FL" <<'PY' \
+  && ok "FAILED sits before LANDED when non-empty" || bad "FAILED sits before LANDED when non-empty"
+import sys
+html = open(sys.argv[1]).read()
+sys.exit(0 if html.index('id="floor-failed-card"') < html.index('id="floor-landed-card"') else 1)
+PY
+
+grep -q '<details class="floor-legacy" id="floor-legacy">' "$FL" \
+  && ok "the details control sits at the bottom, closed by default" \
+  || bad "the details control sits at the bottom, closed by default"
+python3 - "$FL" <<'PY' \
+  && ok "details closes last: every section stands above it" || bad "details closes last: every section stands above it"
+import sys
+html = open(sys.argv[1]).read()
+fold = html.index('id="floor-legacy"')
+order = ['id="floor-strip"', 'id="floor-needs-card"', 'id="floor-now-card"',
+         'id="floor-queue-card"', 'id="floor-initiatives-card"', 'id="floor-landed-card"']
+sys.exit(0 if all(html.index(x) < fold for x in order) else 1)
+PY
+
+# Stale: the strip says so first, in words, before any number.
+python3 - "$TMP/live-v3.json" "$TMP/live-v3-stale.json" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+ISO = "%Y-%m-%dT%H:%M:%SZ"
+d = json.load(open(sys.argv[1]))
+def shift(node, delta):
+    if isinstance(node, dict):
+        return {k: shift(v, delta) for k, v in node.items()}
+    if isinstance(node, list):
+        return [shift(v, delta) for v in node]
+    if isinstance(node, str) and len(node) == 20 and node.endswith("Z") and node[10] == "T":
+        try:
+            return (datetime.strptime(node, ISO).replace(tzinfo=timezone.utc) + delta).strftime(ISO)
+        except ValueError:
+            return node
+    return node
+json.dump(shift(d, -timedelta(seconds=200)), open(sys.argv[2], "w"), indent=2)
+PY
+cp "$TMP/live-v3-stale.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with the stale v3 fixture" || bad "renderer succeeds with the stale v3 fixture"
+python3 - "$FL" <<'PY' \
+  && ok "stale: the sentence comes before any strip number" \
+  || bad "stale: the sentence comes before any strip number"
+import sys
+html = open(sys.argv[1]).read()
+note = html.index('id="floor-state-note"')
+first_fig = html.index('id="strip-running"')
+sys.exit(0 if "Stale: no new event" in html and note < first_fig else 1)
+PY
+grep -q 'id="strip-running" href="#floor-now-card">3 running at last event' "$FL" \
+  && ok "stale: the running figure is qualified at last event" \
+  || bad "stale: the running figure is qualified at last event"
+
+# Replay: watermark on, NEEDS YOU empty, no strip figure borrows the present.
+python3 - "$TMP/live-v3.json" "$TMP/live-v3-replay.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["view"] = "replay"
+d["summary"] = None
+d["needs_you"] = []
+d["needs_you_meta"] = {"count": 0, "unverified": 0, "checks": [],
+                       "comment_lookback_days": 7, "quiet_after_s": 90}
+d["initiatives"] = []
+d["initiatives_meta"] = {"count": 0, "repos": [], "active_days": 30, "plans_seen": 0}
+d["queue"] = []
+d["queue_meta"] = {"declared": False}
+d["today"] = []
+d["today_meta"] = {"date": "2026-09-13", "streams_read": 0, "live": [], "ended": 0}
+d["repos"] = []
+d["replay"] = {"as_of_seq": 12, "total_events": 12, "max_seq": 12,
+               "watermark": "REPLAY", "settled_run": True}
+d["staleness"] = dict(d["staleness"], state="replay")
+for s in d["seats"]:
+    s["now"] = None
+json.dump(d, open(sys.argv[2], "w"), indent=2)
+PY
+cp "$TMP/live-v3-replay.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with the replay v3 fixture" || bad "renderer succeeds with the replay v3 fixture"
+grep -q 'wm-badge' "$FL" && grep -q 'REPLAY' "$FL" \
+  && ok "replay fixture shows the watermark" || bad "replay fixture shows the watermark"
+grep -q 'class="led replay" id="floor-led"' "$FL" \
+  && ok "replay strip LED is violet, never green" || bad "replay strip LED is violet, never green"
+grep -q 'Nothing needs you\.' "$FL" \
+  && ok "replay NEEDS YOU renders its empty state" || bad "replay NEEDS YOU renders its empty state"
+grep -q 'id="strip-needs" href="#floor-needs-card" hidden' "$FL" \
+  && ok "replay strip paints no needs-you figure (no summary, no borrowing)" \
+  || bad "replay strip paints no needs-you figure (no summary, no borrowing)"
+
+rm "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1
+
 # ── v2: mission derivation from issue_links (injected contract) ───────
 # Offline: enrich the fixture JSON with issue refs the way handoffs would,
 # then check the renderer groups trails into missions — multi-wave grouping,
