@@ -141,6 +141,8 @@ read -r c_pid c_pgid c_tty <<< "$(ps -o pid=,pgid=,tty= -p "$PID" 2>/dev/null | 
 check "child pid" "$PID" "${c_pid:-}"
 check "child leads its own process group (pgid == pid)" "$PID" "${c_pgid:-}"
 check_true "child's group is not the launcher's" test "${c_pgid:-}" != "$LAUNCHER"
+# macOS ps prints ?? for no controlling terminal, Linux ps prints ?; accept both.
+case "${c_tty:-}" in "?"|"??") c_tty="??" ;; esac
 check "child has no controlling terminal" "??" "${c_tty:-}"
 
 echo ""
