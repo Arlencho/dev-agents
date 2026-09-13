@@ -13,7 +13,9 @@ the bookkeeping around it, in four subcommands the runner calls in order:
               verdict); then the head must be green (a run on another commit
               or a cancelled workflow is red); then every assigned critic
               seat must have said SAFE-TO-MERGE or APPROVE-MERGE under its own
-              heading; then the PR must be CLEAN and this machine must hold a
+              heading, on the current head (a verdict word on a body line is
+              no verdict, and a SAFE recorded on an earlier head does not
+              count); then the PR must be CLEAN and this machine must hold a
               checkout of the repo; then a landing through scripts/land.sh.
               Also clears stops whose PR has since merged or closed.
   guard       read free memory and swap; say once per change of state whether
@@ -523,6 +525,32 @@ def head_checks_state(rollup, head):
     return checks_state(rollup)
 
 
+# A commit a critic comment names: a token of 40 or more word characters, the
+# shape of "Head at report: <sha>" and of "Reviewed <sha>." A SAFE is bound
+# to the head it names.
+HEAD_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9]{40,}(?![A-Za-z0-9])")
+
+
+def safes_on_head(threads, head):
+    """The threads, minus landing verdicts recorded on an earlier head.
+
+    A SAFE-TO-MERGE or APPROVE-MERGE comment records the head it reports on.
+    When that commit is not the head any more, the verdict does not count: a
+    push after SAFE returns the PR to waiting for critics. A comment that
+    names no commit is unbound and still counts."""
+    head = str(head or "")
+    if not head:
+        return list(threads)
+    out = []
+    for thread in threads:
+        if thread.get("verdict") in LANDING_VERDICTS:
+            named = HEAD_TOKEN_RE.findall(thread.get("_body") or "")
+            if named and head not in named:
+                continue
+        out.append(thread)
+    return out
+
+
 def escalation_reason(body):
     """The escalation word or charter reason a comment body carries, else None."""
     match = ESCALATION_RE.search(str(body or "")) or ESCALATION_REASON_RE.search(str(body or ""))
@@ -611,16 +639,16 @@ def assign_threads(threads, headings, plan):
 
     A seat whose plan line names a heading needs a thread under that stem,
     exactly. A seat the plan does not name takes an unclaimed thread whose
-    heading shares a word with the run (the named headings minus CRITIC, or
-    the plan's own name); any other stem is somebody else's comment and covers
-    nobody. Returns the seats left without a thread, by heading or role."""
+    heading shares a word with a heading the run did name (minus CRITIC); a
+    word shared with the plan filename alone never counts, and any other stem
+    is somebody else's comment and covers nobody. The plan argument stays in
+    the signature for the callers that already pass it. Returns the seats
+    left without a thread, by heading or role."""
     by_stem = {t["stem"].upper(): t for t in threads}
     run_words = set()
     for _role, heading in headings:
         if heading:
             run_words |= set(heading.upper().split()) - {"CRITIC"}
-    stem_name = os.path.basename(str(plan or "")).rsplit(".", 1)[0].upper()
-    run_words |= {w for w in re.split(r"[^A-Z0-9]+", stem_name) if w}
     claimed, missing = set(), []
     for _role, heading in headings:
         if heading is None:
@@ -890,8 +918,10 @@ def settle_one(args, gh, pid_path, info, stream_path):
             continue
 
         # 3. Every assigned critic seat said SAFE-TO-MERGE or APPROVE-MERGE,
-        #    each under its own heading; a stem the run did not assign covers
-        #    no seat.
+        #    each under its own heading, on the head that is about to merge:
+        #    a SAFE recorded on an earlier head does not count after the head
+        #    moves, and a stem the run did not assign covers no seat.
+        threads = safes_on_head(threads, head)
         missing = assign_threads(threads, headings, plan)
         if missing:
             open_stop(args.stops, dispatch_id, "critic_silent", dry,

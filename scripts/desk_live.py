@@ -2883,7 +2883,8 @@ STEM_MAX = 80
 
 # The critic first-line convention: the first line of the comment carries the
 # word CRITIC, the verdict opens the text after a colon on that line or closes
-# it (else it opens a later line of its own), and a re-review says ROUND n.
+# it, and a re-review says ROUND n. A verdict word on a later body line is not
+# a verdict; the landing rule reads first lines only.
 # "CRITIC TILE CONNECT GUIDE ROUND 2: SAFE-TO-MERGE". See first_line_verdict.
 CRITIC_LINE_RE = re.compile(r"\bCRITIC\b")
 VERDICT_WORDS = "BLOCK-ESCALATE|BLOCK-FIX|BLOCK-CLOSE|SAFE-TO-MERGE|APPROVE-MERGE|BLOCK|SAFE"
@@ -2903,7 +2904,7 @@ PR_REF_RE = re.compile(r"\bPR #?(\d{1,7})\b", re.IGNORECASE)
 def first_line_verdict(first_line):
     """The verdict the first line of a critic comment carries, else None.
 
-    Same start-of-token rule as a body line: the verdict opens the text after
+    Start-of-token rule: the verdict opens the text after
     a colon ("CRITIC K ROUND 2: BLOCK-FIX on two items") or closes the line
     ("CRITIC FLOOR V3A BLOCK-FIX"). A verdict quoted mid-sentence ("the last
     review said BLOCK-FIX but this is not a verdict") never counts, and a
@@ -2934,19 +2935,12 @@ def first_line_verdict(first_line):
 
 
 def critic_verdict(first_line, body):
-    """The verdict a critic comment carries, from its first line else a line
-    of its own in the body ("BLOCK-FIX on two items", "Verdict: SAFE-TO-MERGE").
-    A verdict quoted mid-sentence ("SAFE-TO-MERGE or BLOCK-FIX") never counts."""
-    verdict = first_line_verdict(first_line)
-    if verdict:
-        return verdict
-    for line in str(body or "").splitlines()[1:]:
-        clean = re.sub(r"^[\s*#>_`-]+", "", line).strip()
-        clean = re.sub(r"^verdict\s*[:.]\s*", "", clean, flags=re.IGNORECASE)
-        match = VERDICT_RE.match(clean)
-        if match:
-            return match.group(1)
-    return None
+    """The verdict a critic comment carries. First lines only: a comment whose
+    first line carries no single verdict word has no verdict, whatever a later
+    body line says ("BLOCK-FIX on two items" or "Verdict: SAFE-TO-MERGE" on a
+    line of its own in the body count for nothing). The body argument stays in
+    the signature for the callers that already hold the comment."""
+    return first_line_verdict(first_line)
 
 
 def critic_record(comment_id, url, created_at, body, kind="comment"):

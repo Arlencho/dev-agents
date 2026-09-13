@@ -337,7 +337,8 @@ the Floor uses, never a second copy.
   a bare `BLOCK`, a `BLOCK-FIX` whose body carries an escalation word or one of the five
   escalation reasons (`scope grew`, `PRD is wrong or silent`, `pre-existing defect found`,
   `cheaper path exists`, `security judgment`: that is a judgment case and reads as
-  `BLOCK-ESCALATE`), a verdict only quoted mid-sentence, or a critic that posted nothing
+  `BLOCK-ESCALATE`), a verdict only quoted mid-sentence, a verdict word carried only by a body
+  line (the rule reads first lines only), or a critic that posted nothing
   since the run started: nothing queued, a stop each. A critic's newest comment decides: a
   later `BLOCK` takes an earlier `SAFE` back whatever `ROUND` either carries, and a later first
   line with two verdict words or none is silence that replaces the earlier verdict and stops
@@ -347,10 +348,13 @@ the Floor uses, never a second copy.
 - *Landing.* In this order, each gate a stop when it fails: the head is green (a run that
   names another commit is stale, a run whose workflow was cancelled is not green, zero checks
   is not green); every assigned critic seat posted `SAFE-TO-MERGE` or `APPROVE-MERGE` since
-  the run started under its own heading (the seat's plan line names it, "first line reads
-  CRITIC ZETA"; a seat the plan does not name takes a heading that shares a word with the
-  run; any other stem covers nobody, so a second `SAFE` under a strange heading never stands
-  in for a silent seat); the merge state is `CLEAN`; this machine holds a checkout of the repo
+  the run started under its own heading, on the head that is about to merge (the seat's plan
+  line names it, "first line reads CRITIC ZETA"; a seat the plan does not name takes a heading
+  that shares a word with a heading the run did name, never a word of the plan filename; any
+  other stem covers nobody, so a second `SAFE` under a strange heading never stands in for a
+  silent seat; and a `SAFE` that names an earlier head stops counting the moment the head
+  moves, so a push after `SAFE` returns the PR to waiting for critics); the merge state is
+  `CLEAN`; this machine holds a checkout of the repo
   (`$FLEET_HOME/<repo>` or this repo itself; without one the landing is refused and stopped,
   land.sh never stands in another repo's tree). Then, because `gh pr list`'s rollup names no
   commit per run, the runner reads the head commit's own checks once more (one GraphQL call,
