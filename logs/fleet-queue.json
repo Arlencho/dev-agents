@@ -1,6 +1,6 @@
 {
   "schema": "fleet-queue/1",
-  "updated_at": "2026-09-13T14:12:25Z",
+  "updated_at": "2026-09-13T20:27:42Z",
   "entries": [
     {
       "plan": "wave-plans/assistant-channel/2026-09-13-pilot-search-results.plan",
@@ -246,20 +246,20 @@
       "repo": "dev-agents",
       "purpose": "Floor v3-B: the page in the order of the proposal, five-question acceptance test",
       "added_at": "2026-09-12T21:03:31Z",
-      "status": "queued",
+      "status": "settled",
       "dispatch_id": null,
-      "settled_at": null,
-      "settled_status": null
+      "settled_at": "2026-09-13T19:28:18Z",
+      "settled_status": "completed"
     },
     {
       "plan": "wave-plans/dev-agents/2026-09-12-floor-v3c-yesterday-notify.plan",
       "repo": "dev-agents",
       "purpose": "Floor v3-C: yesterday toggle and needs-you notifications",
       "added_at": "2026-09-12T21:03:31Z",
-      "status": "queued",
+      "status": "settled",
       "dispatch_id": null,
-      "settled_at": null,
-      "settled_status": null
+      "settled_at": "2026-09-13T19:28:18Z",
+      "settled_status": "completed"
     },
     {
       "plan": "wave-plans/assistant-channel/2026-09-13-w2c-fixes.plan",
@@ -322,10 +322,10 @@
       "purpose": "Connected assistants tile follow-ups, re-queued after being stopped for the pilot fix (issue 2827)",
       "issue": 2827,
       "added_at": "2026-09-13T09:40:27Z",
-      "status": "queued",
+      "status": "settled",
       "dispatch_id": null,
-      "settled_at": null,
-      "settled_status": null
+      "settled_at": "2026-09-13T19:28:18Z",
+      "settled_status": "completed"
     },
     {
       "plan": "wave-plans/assistant-channel/2026-09-13-pilot-search-results-fix.plan",
@@ -421,10 +421,10 @@
       "purpose": "The orchestrator loop: the runner moves work between waves, critics stop it when judgment is needed, a person answers the stop. Owner decision 2026-09-13. 2026-09-13",
       "issue": null,
       "added_at": "2026-09-13T13:34:14Z",
-      "status": "running",
+      "status": "settled",
       "dispatch_id": "20260913-133413-dev-agents-50304",
-      "settled_at": null,
-      "settled_status": null
+      "settled_at": "2026-09-13T15:06:51Z",
+      "settled_status": "completed"
     },
     {
       "plan": "wave-plans/dev-agents/2026-09-13-floor-v3c-yesterday-notify.plan",
@@ -432,10 +432,10 @@
       "purpose": "Floor v3-C: the yesterday toggle and the notification path. Owner approval 2026-09-12 (docs/proposals/floor-v3-purpose.md section 5). 2026-09-13",
       "issue": null,
       "added_at": "2026-09-13T13:34:32Z",
-      "status": "running",
+      "status": "settled",
       "dispatch_id": "20260913-133432-dev-agents-51107",
-      "settled_at": null,
-      "settled_status": null
+      "settled_at": "2026-09-13T14:19:19Z",
+      "settled_status": "completed"
     },
     {
       "plan": "wave-plans/assistant-channel/2026-09-13-handover-landing-fix1.plan",
@@ -476,10 +476,10 @@
       "purpose": "Floor v3-B fix round: the findings from CRITIC FLOOR V3B BLOCK-FIX on PR 78. 2026-09-13",
       "issue": null,
       "added_at": "2026-09-13T13:45:02Z",
-      "status": "running",
+      "status": "settled",
       "dispatch_id": "20260913-134501-dev-agents-84929",
-      "settled_at": null,
-      "settled_status": null
+      "settled_at": "2026-09-13T14:42:44Z",
+      "settled_status": "completed"
     },
     {
       "plan": "wave-plans/assistant-channel/2026-09-13-tile-followups-rebase.plan",
@@ -491,6 +491,251 @@
       "dispatch_id": "20260913-134520-olympus-platform-87634",
       "settled_at": "2026-09-13T14:03:59Z",
       "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-13-handover-identity-fix2.plan",
+      "repo": "olympus-platform",
+      "purpose": "Handover identity round 3: the web half after issue 2842 landed, plus the remaining critic findings. 2026-09-13",
+      "issue": 2842,
+      "added_at": "2026-09-13T14:28:12Z",
+      "status": "settled",
+      "dispatch_id": "20260913-142812-olympus-platform-10199",
+      "settled_at": "2026-09-13T15:31:15Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-floor-terminal-view.plan",
+      "repo": "dev-agents",
+      "purpose": "Floor in the terminal: the same five sections, plain text, over the same live.json. Owner request 2026-09-13. 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T14:43:09Z",
+      "status": "settled",
+      "dispatch_id": "20260913-144309-dev-agents-60641",
+      "settled_at": "2026-09-13T15:28:17Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-floor-v3b-fix2.plan",
+      "repo": "dev-agents",
+      "purpose": "Floor v3-B fix round 3: R2-1 and R2-2 from CRITIC FLOOR V3B ROUND 2 BLOCK-FIX (posted on PR 78, the branch now lives as PR 80). 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T14:44:43Z",
+      "status": "settled",
+      "dispatch_id": "20260913-144443-dev-agents-65141",
+      "settled_at": "2026-09-13T15:38:07Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-floor-v3c-fix1.plan",
+      "repo": "dev-agents",
+      "purpose": "Floor v3-C fix round: two findings from CRITIC FLOOR V3C BLOCK-FIX on PR 79. 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T14:44:43Z",
+      "status": "settled",
+      "dispatch_id": "20260913-144443-dev-agents-65163",
+      "settled_at": "2026-09-13T15:14:13Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-orchestrator-loop-fix1.plan",
+      "repo": "dev-agents",
+      "purpose": "Orchestrator loop fix round: the seven findings from CRITIC ORCHESTRATOR LOOP BLOCK-FIX on PR 82. 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T15:09:19Z",
+      "status": "settled",
+      "dispatch_id": "20260913-150919-dev-agents-62747",
+      "settled_at": "2026-09-13T15:43:53Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-floor-v3c-fix2.plan",
+      "repo": "dev-agents",
+      "purpose": "Floor v3-C fix round 3: one finding from CRITIC FLOOR V3C ROUND 2 BLOCK-FIX on PR 79 (a path hidden inside a token still reaches the toast). 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T15:14:53Z",
+      "status": "settled",
+      "dispatch_id": "20260913-151453-dev-agents-77428",
+      "settled_at": "2026-09-13T15:30:34Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-floor-v3b-critic3.plan",
+      "repo": "dev-agents",
+      "purpose": "Floor v3-B critic round 3: the critic seat died on the spend limit at 17:37; the round 3 fix is on the branch at ae35e8f. PR 80. 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T18:17:45Z",
+      "status": "settled",
+      "dispatch_id": "20260913-181745-dev-agents-65164",
+      "settled_at": "2026-09-13T18:29:03Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-13-handover-identity-critics2.plan",
+      "repo": "olympus-platform",
+      "purpose": "Handover identity critics round 2: the three critic seats that died on the spend limit at 17:31 (frontend, api, security). Backend critic round 3 is SAFE. PR 2845 at 6aef472e. 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T18:17:45Z",
+      "status": "settled",
+      "dispatch_id": "20260913-181745-olympus-platform-65144",
+      "settled_at": "2026-09-13T18:50:06Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-orchestrator-loop-fix2.plan",
+      "repo": "dev-agents",
+      "purpose": "Orchestrator loop fix round 2: the round 1 fix seat died on the spend limit at 17:30 and fixed nothing; the round 2 critic lists nine findings on PR 82 (six from round 1 still open, three new). 2026-0",
+      "issue": null,
+      "added_at": "2026-09-13T18:17:45Z",
+      "status": "settled",
+      "dispatch_id": "20260913-181745-dev-agents-65197",
+      "settled_at": "2026-09-13T18:52:56Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-floor-terminal-fix1.plan",
+      "repo": "dev-agents",
+      "purpose": "Floor terminal fix round: five findings from CRITIC FLOOR TERMINAL BLOCK-FIX on PR 83. 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T18:17:45Z",
+      "status": "settled",
+      "dispatch_id": "20260913-181745-dev-agents-65231",
+      "settled_at": "2026-09-13T18:49:36Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-floor-v3c-fix3.plan",
+      "repo": "dev-agents",
+      "purpose": "Floor v3-C fix round 4: one finding from CRITIC FLOOR V3C ROUND 3 BLOCK-FIX on PR 79 (a percent-encoded path in a title still reaches the toast). 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T18:17:45Z",
+      "status": "settled",
+      "dispatch_id": "20260913-181745-dev-agents-65267",
+      "settled_at": "2026-09-13T18:37:28Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-13-handover-identity-fix3.plan",
+      "repo": "olympus-platform",
+      "purpose": "Handover identity round 4: the two round 2 blocks (S20 never reaches the copy and the sign-in path remounts the page; one api.yaml sentence). PR 2845. 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T18:45:51Z",
+      "status": "settled",
+      "dispatch_id": "20260913-184550-olympus-platform-57549",
+      "settled_at": "2026-09-13T19:39:55Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-floor-v3c-fix4.plan",
+      "repo": "dev-agents",
+      "purpose": "Floor v3-C fix round 5: the notification text stops carrying free text at all. Owner-side decision by the orchestrator after four blocks on the same class (path shapes in titles). PR 79. 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T18:45:51Z",
+      "status": "settled",
+      "dispatch_id": "20260913-184551-dev-agents-57571",
+      "settled_at": "2026-09-13T19:04:36Z",
+      "settled_status": "aborted"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-floor-terminal-rebase.plan",
+      "repo": "dev-agents",
+      "purpose": "Floor terminal: rebase onto main after the page merged; critic round 2 is SAFE at the pre-rebase head. Owner rule 2026-09-13: Floor work runs on the web-frontend and plan-critic seats only. PR 83. 202",
+      "issue": null,
+      "added_at": "2026-09-13T19:05:44Z",
+      "status": "settled",
+      "dispatch_id": "20260913-190544-dev-agents-89520",
+      "settled_at": "2026-09-13T19:24:56Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-floor-v3c-fix5.plan",
+      "repo": "dev-agents",
+      "purpose": "Floor v3-C fix round 5, re-issued on the web-frontend seat (owner rule 2026-09-13: Floor work runs on the web-frontend and plan-critic seats only). The toast carries fixed phrases and identifiers, nev",
+      "issue": null,
+      "added_at": "2026-09-13T19:05:44Z",
+      "status": "settled",
+      "dispatch_id": "20260913-190544-dev-agents-89540",
+      "settled_at": "2026-09-13T20:06:35Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-orchestrator-loop-fix3.plan",
+      "repo": "dev-agents",
+      "purpose": "Orchestrator loop fix round 3: three new landing holes from CRITIC ORCHESTRATOR LOOP ROUND 3 on PR 82 (the round 2 nine are closed). 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T19:06:48Z",
+      "status": "settled",
+      "dispatch_id": "20260913-190648-dev-agents-94436",
+      "settled_at": "2026-09-13T19:41:56Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-routing-grok-producers.plan",
+      "repo": "dev-agents",
+      "purpose": "Routing: Grok on trial as the producer for Go, Python, API contract, migrations, devops and docs; Kimi stays on web; Claude holds every critic and the security seat; producers never fail over to Claud",
+      "issue": null,
+      "added_at": "2026-09-13T19:17:19Z",
+      "status": "settled",
+      "dispatch_id": "20260913-191719-dev-agents-15119",
+      "settled_at": "2026-09-13T20:06:55Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-13-refine-revision-guard.plan",
+      "repo": "olympus-platform",
+      "purpose": "Refine revision guard, issue 2843, first trial of the cross-vendor producer seats; waits for the routing PR to merge",
+      "issue": 2843,
+      "added_at": "2026-09-13T19:28:18Z",
+      "status": "queued",
+      "dispatch_id": null,
+      "settled_at": null,
+      "settled_status": null,
+      "blocked": "waits for the routing PR feat/routing-grok-producers to merge"
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-floor-needs-you-superseded.plan",
+      "repo": "dev-agents",
+      "purpose": "Floor: NEEDS YOU drops dispatches a later round superseded, and stops printing the repo twice. Issue 86. Owner rule 2026-09-13: Floor work runs on the web-frontend and plan-critic seats only. 2026-09-",
+      "issue": 86,
+      "added_at": "2026-09-13T19:33:16Z",
+      "status": "running",
+      "dispatch_id": "20260913-193315-dev-agents-82648",
+      "settled_at": null,
+      "settled_status": null
+    },
+    {
+      "plan": "wave-plans/dev-agents/2026-09-13-orchestrator-loop-fix4.plan",
+      "repo": "dev-agents",
+      "purpose": "Orchestrator loop fix round 4: three new landing holes from CRITIC ORCHESTRATOR LOOP ROUND 4 on PR 82 (rounds 2 and 3 fixtures all closed). 2026-09-13",
+      "issue": null,
+      "added_at": "2026-09-13T19:45:28Z",
+      "status": "settled",
+      "dispatch_id": "20260913-194527-dev-agents-56450",
+      "settled_at": "2026-09-13T20:26:07Z",
+      "settled_status": "completed"
+    },
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-13-assistant-pages-styling.plan",
+      "repo": "olympus-platform",
+      "purpose": "Assistant channel: the API-rendered sign-in and consent pages look like Olympus; waits for the routing PR",
+      "issue": 2340,
+      "added_at": "2026-09-13T19:52:06Z",
+      "status": "queued",
+      "dispatch_id": null,
+      "settled_at": null,
+      "settled_status": null,
+      "blocked": "waits for the routing PR feat/routing-grok-producers to merge"
+    },
+    {
+      "plan": "wave-plans/assistant-channel/2026-09-13-brief-and-entry-moment.plan",
+      "repo": "olympus-platform",
+      "purpose": "Brief honoured (2847) and the host calls Olympus only at the booking moment; waits for the routing PR",
+      "issue": 2847,
+      "added_at": "2026-09-13T20:27:42Z",
+      "status": "queued",
+      "dispatch_id": null,
+      "settled_at": null,
+      "settled_status": null,
+      "blocked": "waits for the routing PR to merge"
     }
   ]
 }
