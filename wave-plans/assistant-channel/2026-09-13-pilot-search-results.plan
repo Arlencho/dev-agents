@@ -1,0 +1,22 @@
+# Pilot finding: the platform found flights, the connector told the host there were none. 2026-09-13
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/olympus-platform.git wave-plans/assistant-channel/2026-09-13-pilot-search-results.plan --auto --retries 1
+#
+# First real journey, host B, 2026-09-13 10:02 to 10:05 UTC, traveller arlen. Facts from
+# the production logs, nothing inferred:
+#  a. search call 1 refused: not_available, reason date_flexibility_not_supported, field
+#     date_flexibility_days=2. The manifest (tools.go near lines 291 and 321) advertises
+#     that field with minimum 0 maximum 3, so the host used it in good faith.
+#  b. search call 2 served in 16.4 s: the API created result session
+#     fa5fcdb4-c578-448a-8c67-c82130b9f193, Duffel answered 201 then three 200 batches,
+#     offers capped, search_completed flow flights destination ROM, ranked results
+#     emitted at 10:03:17.472, then GET of the session 200 at 10:03:17.481. The host then
+#     reported the flight search found no results, so the tool result carried outcome
+#     empty or zero options although the session had ranked results.
+#  c. refine refused the same way as a for date_flexibility_days=3.
+#  d. earlier in the session, four POST /mcp answered 400 with no reason in any log line.
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | go-backend | Branch fix/ac-pilot-search-results. Fix the four facts above in services/iris (and apps/api only if the session projection is the cause). ONE (b, the important one): reproduce with the real session id fa5fcdb4-c578-448a-8c67-c82130b9f193 by reading how search.go near line 598 to 604 builds the result payload from the session: it reads result_snapshot, and confirm against apps/api/internal/service/result_sessions.go what the interactive projection carries for a completed flights search (where the ranked results actually live in the envelope, and whether result_snapshot is populated for an assistant-scope read); make the tool read the field the API actually fills, add a test that projects a completed session with ranked offers and asserts outcome results with the right count and options, and a second test for a genuinely empty session. TWO (a and c): either implement date flexibility by forwarding it to the API search the way the website does, or remove the field from both schemas and the arg struct so the manifest never advertises what the tool refuses; pick the one the API supports today and say which in the PR body. THREE: the served log line must carry result_count and outcome so this class of bug is visible in the log without a host. FOUR (d): every 400 the MCP handler writes must log a reason field (which JSON-RPC parse or validation failure) with no payload. VERIFY: go test ./... with the race flag in services/iris and apps/api, real exit codes in the PR body. HOUSE STYLE: no long dash anywhere, no AI tool or vendor name, no Co-Authored-By trailer. Open a draft PR with Refs 2800 and 2340. | fix/ac-pilot-search-results
+
+2 | backend-critic | READ-ONLY REVIEW of the PR on branch fix/ac-pilot-search-results. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Build a fixture that mirrors the production session in the plan header (a completed flights search with ranked offers in the shape the API interactive projection emits) and drive the search tool through it: the result must be outcome results with the offers, never empty; drive an empty session and get empty; drive a search with date_flexibility_days and get either results or an invalid_input for a field the manifest no longer advertises, never not_available; confirm the served log line carries result_count; send three malformed POST /mcp bodies and confirm each 400 logs a reason and no payload. Post ONE comment on issue 2340 whose first line reads CRITIC PILOT SEARCH RESULTS with SAFE-TO-MERGE or BLOCK-FIX and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | fix/ac-pilot-search-results

@@ -1,0 +1,6 @@
+# Host carries intent critic round 2: the two PRD lines B1 and B2 were applied at f9815334. 2026-09-13
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/olympus-platform.git wave-plans/assistant-channel/2026-09-13-host-carries-intent-critic2.plan --detach --retries 1
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | backend-critic | READ-ONLY REVIEW ROUND 2 of PR 2841 on branch feat/ac-host-carries-intent. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Confirm B1 and B2 of the round 1 comment on issue 2340 (first line CRITIC HOST CARRIES INTENT) are closed in docs/prd/pages/assistant-channel.md section 3.4 and match the wire shape in services/iris; confirm go test ./... in services/iris still passes on this SHA. Post ONE comment on issue 2340 whose first line reads CRITIC HOST CARRIES INTENT ROUND 2 with SAFE-TO-MERGE or BLOCK-FIX and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/ac-host-carries-intent

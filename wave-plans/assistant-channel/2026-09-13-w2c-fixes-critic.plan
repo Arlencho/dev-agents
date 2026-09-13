@@ -1,0 +1,8 @@
+# W2-C fix wave, RESUME 2: the database, service and docs waves all landed (d37c855b, c699bb58, 9b670168); only the critic remains. 2026-09-13
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/olympus-platform.git wave-plans/assistant-channel/2026-09-13-w2c-fixes-critic.plan --auto --retries 1
+# Critic comment on issue 2340, first line CRITIC W2C UPDATE AND HOSTS: items 1, 2
+# block, 4 and 6 fix in PR, 3 and 5 clean. CI job Iris Build + Test is red.
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | backend-critic | READ-ONLY RE-REVIEW of PR 2833 on branch feat/ac-w2c-update-and-hosts after the fix waves. No commits, no push, no review, no labels, no edits; tmp writes only. Record head SHA at start and at report. Grade items 1, 2, 4 and 6 from your round-one comment CLEARED or STILL OPEN with proof: run your three tests; write the race again against the real revision column (a website write between the assistant read and write must produce 409 then stale_revision with the current state); confirm a linked record PATCH writes nothing when the tool reports not_available; confirm the matrix walks every registered route and paste the count; check the three doc lines against their citations. Re-confirm items 3 and 5 still hold and the CI job Iris Build + Test is green. Post ONE comment on issue 2340 whose first line reads CRITIC W2C UPDATE AND HOSTS ROUND 2 with SAFE-TO-MERGE or BLOCK-FIX and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/ac-w2c-update-and-hosts
