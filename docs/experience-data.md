@@ -368,7 +368,7 @@ One JSON object per line, appended, never rewritten. Every line carries:
 | `schema` | string | `fleet-events/1` |
 | `seq` | int | 1-based, monotonic **per writer**. The dispatcher numbers its own spine in process; a seat reader (`seat_progress`) appends from a separate process, so the two counters share no space and a number can repeat. File order is the true order; the replay scrub cuts the spine on `seq` and the reader's lines on `ts` |
 | `ts` | string | UTC ISO-8601 `YYYY-MM-DDTHH:MM:SSZ` |
-| `dispatch_id` | string | `<UTC timestamp>-<repo slug>`, also the filename stem |
+| `dispatch_id` | string | `<UTC timestamp>-<repo slug>-<dispatcher pid>`, also the filename stem; the pid keeps two dispatches started in the same second apart |
 | `event` | string | Event type (below) |
 
 ### Event types

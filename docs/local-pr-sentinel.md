@@ -185,7 +185,13 @@ machine reached 74 worktrees and 243 local branches. Two hooks close that loop.
 2. Daily launchd backstop `com.arlen.worktree-sweep` for runs that never reach `land.sh`:
    `make worktree-sweep-install` / `-uninstall`, log `~/Library/Logs/worktree-sweep.log`.
 
-Manual: `make worktree-sweep` (dry run) or `make worktree-sweep-apply` in olympus-platform.
+Both hooks also run `scripts/seat-worktree-sweep.sh --apply` from dev-agents: the per-seat
+worktrees and per-dispatch launcher runtimes that `scripts/run-remote.sh` keeps under `~/dev`
+(a different clone from the one above), removed once older than a day; a live seat is never
+touched. The launchd command finds dev-agents through `DEV_AGENTS_ROOT`.
+
+Manual: `make worktree-sweep` (dry run) or `make worktree-sweep-apply` in olympus-platform;
+`make seat-worktree-sweep` / `make seat-worktree-sweep-apply` in dev-agents.
 
 ---
 

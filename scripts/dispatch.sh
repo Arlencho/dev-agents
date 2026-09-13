@@ -28,7 +28,7 @@ fi
 #   --retry-on-different-worker Retry failed tasks on a different worker
 #   --skip-auth-preflight      Skip vendor session preflight (not recommended)
 #   --no-wait                  Exit 9 instead of queueing when another dispatch
-#                              already holds this repo's localhost lock
+#                              already holds a lock on one of this plan's branches
 #
 # Example plan.txt:
 #   1 | go-backend | implement payment service | feat/payments-svc
@@ -99,8 +99,8 @@ usage() {
     echo "  --review                     Run autoplan review before dispatching"
     echo "  --retry-on-different-worker  Retry failed tasks on a different worker"
     echo "  --skip-auth-preflight        Skip vendor CLI session preflight (default: on)"
-    echo "  --no-wait                    Do not queue behind another dispatch on this repo;"
-    echo "                               exit 9 immediately if the localhost lock is held"
+    echo "  --no-wait                    Do not queue behind another dispatch on one of this"
+    echo "                               plan's branches; exit 9 immediately if a lock is held"
     echo ""
     echo "Plan file format:"
     echo "  [wave] | agent | task description | [branch-name]"
@@ -776,34 +776,33 @@ retry_task() {
 }
 
 # --------------------------------------------------
-# Local dispatch lock (one dispatch per repo on localhost workers)
+# Local dispatch lock (one dispatch per branch on localhost workers)
 # --------------------------------------------------
-# Every localhost seat runs its git checkout in the SAME shared tree:
-# run-remote.sh sets WORK_DIR="$HOME/dev/<repo>" and each seat does
-# `cd "$WORK_DIR"; git fetch; git checkout main; git pull; git checkout <branch>`
-# there (scripts/run-remote.sh:120 and :245-262). Two dispatches running side
-# by side therefore fight over one index and one HEAD: the second checkout
-# yanks the first agent's branch away mid-edit.
-#
-# This lock serializes whole dispatches, which removes the cross-dispatch
-# collision only. Seats inside one wave still share the tree. The real fix is
-# a per-seat git worktree in run-remote.sh: see issue #66.
+# Every localhost seat runs in its own git worktree (scripts/run-remote.sh,
+# issue #66), so two dispatches on one repo no longer share a checkout and can
+# run side by side. What still must not interleave is two dispatches driving
+# the same branch: their producer / critic seats would take turns on one
+# branch with no plan-level ordering. So the lock is per branch: a dispatch
+# takes one lock per distinct branch in its plan, in sorted order (two
+# dispatches sharing several branches therefore queue on the first common one
+# and never deadlock), and holds them until the run ends.
 #
 # Remote (ssh) workers are unaffected: they have their own machines and their
-# own checkouts, so the lock is taken only when a localhost worker is in play.
+# own checkouts, so the locks are taken only when a localhost worker is in play.
 # ---- dispatch-lock:begin (tests/run-dispatch-lock-tests.sh sources this block) ----
-# Machine-global, not per fleet clone. What the lock protects is the single
-# shared checkout every localhost seat works in, $HOME/dev/<repo> (WORK_DIR in
+# Machine-global, not per fleet clone. What a lock protects is a branch of the
+# fetch point every localhost seat works from, $HOME/dev/<repo> (FETCH_DIR in
 # scripts/run-remote.sh), so two dev-agents clones on one host must contend for
 # the same file; a path under this clone's logs/ would give each clone a private
 # lock and serialize nothing. FLEET_HOME is the per-user fleet base on a machine,
 # the one that already holds ~/dev/agent-logs, ~/dev/agent-runtime and the seat
-# checkouts. The locks sit beside them, keyed by repo name.
+# worktrees. The locks sit beside them: <LOCK_DIR>/<repo>/<branch>.lock, with
+# the branch's slashes written as dashes.
 FLEET_HOME="${FLEET_HOME:-$HOME/dev}"
 LOCK_DIR="${LOCK_DIR:-$FLEET_HOME/dispatch-locks}"
 LOCK_REPO_NAME=$(basename "$REPO_URL" .git)
-LOCK_FILE="$LOCK_DIR/${LOCK_REPO_NAME}.lock"
-LOCK_HELD=false
+LOCK_FILES=()        # one per distinct branch in the plan, sorted
+LOCK_HELD_FILES=()   # the ones this pid owns
 # Distinct from 1 so a caller can tell "another dispatch is running" apart from
 # "this dispatch failed".
 LOCK_BUSY_EXIT=9
@@ -822,59 +821,74 @@ dispatch_lock_uses_localhost() {
     return 1
 }
 
+dispatch_lock_files() {
+    local b
+    LOCK_FILES=()
+    while IFS= read -r b; do
+        [ -n "$b" ] && LOCK_FILES+=("$LOCK_DIR/$LOCK_REPO_NAME/$b.lock")
+    done < <(printf '%s\n' "${TASK_BRANCH[@]}" | tr '/ ' '--' | sort -u)
+}
+
 # Atomic create-or-fail: noclobber makes ">" fail when the file already exists.
-dispatch_lock_try_acquire() {
-    mkdir -p "$LOCK_DIR"
+dispatch_lock_try_acquire() { # <lock file>
+    mkdir -p "$(dirname "$1")"
     if ( set -o noclobber; printf '%s\n%s\n%s\n' \
-            "$$" "$PLAN_SOURCE" "$(date -u +%FT%TZ)" > "$LOCK_FILE" ) 2>/dev/null; then
-        LOCK_HELD=true
+            "$$" "$PLAN_SOURCE" "$(date -u +%FT%TZ)" > "$1" ) 2>/dev/null; then
+        LOCK_HELD_FILES+=("$1")
         return 0
     fi
     return 1
 }
 
-# Release only our own lock, once, and never a lock another pid has since taken.
+# Release only our own locks, once, and never a lock another pid has since taken.
 dispatch_lock_release() {
-    [ "${LOCK_HELD:-false}" = true ] || return 0
-    LOCK_HELD=false
-    local owner
-    owner=$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || echo "")
-    [ "$owner" = "$$" ] && rm -f "$LOCK_FILE"
+    local f owner
+    for f in ${LOCK_HELD_FILES[@]+"${LOCK_HELD_FILES[@]}"}; do
+        owner=$(sed -n '1p' "$f" 2>/dev/null || echo "")
+        [ "$owner" = "$$" ] && rm -f "$f"
+    done
+    LOCK_HELD_FILES=()
     return 0
 }
 
-# Block until this dispatch owns the repo lock. Exits $LOCK_BUSY_EXIT instead of
-# queueing when --no-wait was given.
+# Block until this dispatch owns every branch lock its plan needs. Exits
+# $LOCK_BUSY_EXIT (releasing anything already taken) instead of queueing when
+# --no-wait was given.
 dispatch_lock_acquire() {
-    local holder_pid holder_plan holder_since waited
-    while ! dispatch_lock_try_acquire; do
-        holder_pid=$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || echo "")
-        holder_plan=$(sed -n '2p' "$LOCK_FILE" 2>/dev/null || echo "unknown plan")
-        holder_since=$(sed -n '3p' "$LOCK_FILE" 2>/dev/null || echo "unknown time")
+    local f branch_label holder_pid holder_plan holder_since waited
+    dispatch_lock_files
+    for f in ${LOCK_FILES[@]+"${LOCK_FILES[@]}"}; do
+        branch_label=$(basename "$f" .lock)
+        while ! dispatch_lock_try_acquire "$f"; do
+            holder_pid=$(sed -n '1p' "$f" 2>/dev/null || echo "")
+            holder_plan=$(sed -n '2p' "$f" 2>/dev/null || echo "unknown plan")
+            holder_since=$(sed -n '3p' "$f" 2>/dev/null || echo "unknown time")
 
-        # A lock file with no live owner is the residue of a killed dispatch.
-        if [ -z "$holder_pid" ] || ! kill -0 "$holder_pid" 2>/dev/null; then
-            echo -e "${YELLOW}Clearing stale $LOCK_REPO_NAME dispatch lock (pid ${holder_pid:-unknown} is gone).${NC}"
-            rm -f "$LOCK_FILE"
-            continue
-        fi
-
-        echo -e "${YELLOW}Another dispatch holds the $LOCK_REPO_NAME lock: pid $holder_pid running plan '$holder_plan' (since $holder_since).${NC}"
-        if [ "${NO_WAIT:-false}" = true ]; then
-            echo -e "${RED}--no-wait given: not queueing behind it. Exiting $LOCK_BUSY_EXIT.${NC}" >&2
-            exit "$LOCK_BUSY_EXIT"
-        fi
-        echo "Waiting for it to finish. Ctrl-C to give up, or re-run with --no-wait to fail fast."
-
-        waited=0
-        while kill -0 "$holder_pid" 2>/dev/null && [ -f "$LOCK_FILE" ] \
-              && [ "$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || echo "")" = "$holder_pid" ]; do
-            sleep "$LOCK_POLL_S"
-            waited=$(( waited + LOCK_POLL_S ))
-            if [ "$waited" -ge 60 ]; then
-                echo "  still waiting on pid $holder_pid, plan '$holder_plan' ($(date -u +%FT%TZ))"
-                waited=0
+            # A lock file with no live owner is the residue of a killed dispatch.
+            if [ -z "$holder_pid" ] || ! kill -0 "$holder_pid" 2>/dev/null; then
+                echo -e "${YELLOW}Clearing stale $LOCK_REPO_NAME/$branch_label dispatch lock (pid ${holder_pid:-unknown} is gone).${NC}"
+                rm -f "$f"
+                continue
             fi
+
+            echo -e "${YELLOW}Another dispatch holds $LOCK_REPO_NAME branch $branch_label: pid $holder_pid running plan '$holder_plan' (since $holder_since).${NC}"
+            if [ "${NO_WAIT:-false}" = true ]; then
+                echo -e "${RED}--no-wait given: not queueing behind it. Exiting $LOCK_BUSY_EXIT.${NC}" >&2
+                dispatch_lock_release
+                exit "$LOCK_BUSY_EXIT"
+            fi
+            echo "Waiting for it to finish. Ctrl-C to give up, or re-run with --no-wait to fail fast."
+
+            waited=0
+            while kill -0 "$holder_pid" 2>/dev/null && [ -f "$f" ] \
+                  && [ "$(sed -n '1p' "$f" 2>/dev/null || echo "")" = "$holder_pid" ]; do
+                sleep "$LOCK_POLL_S"
+                waited=$(( waited + LOCK_POLL_S ))
+                if [ "$waited" -ge 60 ]; then
+                    echo "  still waiting on pid $holder_pid, plan '$holder_plan', branch $branch_label ($(date -u +%FT%TZ))"
+                    waited=0
+                fi
+            done
         done
     done
     return 0
@@ -883,9 +897,9 @@ dispatch_lock_acquire() {
 # Blocking builtins defer traps. `wait` hands the shell to the kernel until the
 # child exits, and a long `sleep` does the same, so a signal that arrives first
 # is only serviced once the block returns: Ctrl-C during a wave could leave the
-# lock file behind for as long as the seats keep running. Poll in short slices
-# instead, so a queued INT/TERM trap runs at most one slice late and the lock is
-# released while the seats are still live.
+# lock files behind for as long as the seats keep running. Poll in short slices
+# instead, so a queued INT/TERM trap runs at most one slice late and the locks
+# are released while the seats are still live.
 DISPATCH_WAIT_SLICE_S="${DISPATCH_WAIT_SLICE_S:-1}"
 
 # Wait for one background seat and return its exit status. bash keeps the status
@@ -910,7 +924,7 @@ dispatch_sleep_interruptible() {
     done
 }
 
-# Close-out traps for a run that holds the lock: release it on every exit path
+# Close-out traps for a run that holds locks: release them on every exit path
 # (normal end, `set -e` abort, Ctrl-C, kill, hangup). dispatch_lock_release is
 # idempotent, so the explicit call at the end of the run is harmless here.
 # A function rather than inline traps so the lock suite can arm the real thing.
@@ -924,7 +938,7 @@ dispatch_lock_arm_traps() {
 
 if dispatch_lock_uses_localhost; then
     dispatch_lock_acquire
-    echo -e "${GREEN}Holding the $LOCK_REPO_NAME dispatch lock${NC} (pid $$, $LOCK_FILE)"
+    echo -e "${GREEN}Holding the $LOCK_REPO_NAME branch locks${NC} (pid $$): $(printf '%s ' "${LOCK_HELD_FILES[@]#"$LOCK_DIR"/}")"
     echo ""
     dispatch_lock_arm_traps
 fi
@@ -1254,6 +1268,14 @@ for i in "${!TASK_AGENT[@]}"; do
         fi
     fi
 done
+
+# --------------------------------------------------
+# Per-dispatch launcher runtime: gone with the dispatch (localhost only; a
+# remote worker's copy is left to the daily seat worktree sweep)
+# --------------------------------------------------
+if [ -n "${FLEET_DISPATCH_ID:-}" ] && dispatch_lock_uses_localhost; then
+    rm -rf "$HOME/dev/agent-runtime/${FLEET_DISPATCH_ID}" 2>/dev/null || true
+fi
 
 # --------------------------------------------------
 # Save wave plan state

@@ -10,13 +10,21 @@ This will:
   - Copy this plist to ~/Library/LaunchAgents/
   - Load it with launchctl
 
-After installation the sweep runs once a day and removes worktrees and local
-branches whose PR has already merged. scripts/land.sh runs the same sweep at
-the end of every landing; this is the backstop for runs that never land.
+After installation the sweep runs once a day and does two things:
+  1. removes worktrees and local branches of the olympus-platform checkout
+     whose PR has already merged (make worktree-sweep-apply there);
+  2. removes per-seat worktrees and per-dispatch launcher runtimes that
+     scripts/run-remote.sh keeps under ~/dev and that are older than a day
+     (make seat-worktree-sweep-apply in dev-agents; a live seat is never
+     touched).
+scripts/land.sh runs both sweeps at the end of every landing; this is the
+backstop for runs that never land.
 
-The checkout it sweeps comes from OLYMPUS_ROOT, defaulting to the same
-dev-projects/AI-Orchestration parent the PR Sentinel plist points at. Override
-it with:  launchctl setenv OLYMPUS_ROOT /path/to/olympus-platform
+The olympus checkout comes from OLYMPUS_ROOT and the dev-agents checkout from
+DEV_AGENTS_ROOT, both defaulting to the same dev-projects/AI-Orchestration
+parent the PR Sentinel plist points at. Override with:
+  launchctl setenv OLYMPUS_ROOT /path/to/olympus-platform
+  launchctl setenv DEV_AGENTS_ROOT /path/to/dev-agents
 
 RunAtLoad is deliberately false: installing the backstop should not start
 deleting branches at that same moment. The first run is one interval later.
@@ -39,7 +47,7 @@ Log file: ~/Library/Logs/worktree-sweep.log
     <array>
         <string>/bin/zsh</string>
         <string>-c</string>
-        <string>cd "${OLYMPUS_ROOT:-/Users/arlenrios/Desktop/dev-projects/AI-Orchestration/olympus-platform}" &amp;&amp; make worktree-sweep-apply &gt;&gt; ~/Library/Logs/worktree-sweep.log 2&gt;&amp;1</string>
+        <string>cd "${OLYMPUS_ROOT:-/Users/arlenrios/Desktop/dev-projects/AI-Orchestration/olympus-platform}" &amp;&amp; make worktree-sweep-apply &gt;&gt; ~/Library/Logs/worktree-sweep.log 2&gt;&amp;1; cd "${DEV_AGENTS_ROOT:-/Users/arlenrios/Desktop/dev-projects/AI-Orchestration/dev-agents}" &amp;&amp; make seat-worktree-sweep-apply &gt;&gt; ~/Library/Logs/worktree-sweep.log 2&gt;&amp;1</string>
     </array>
 
     <key>StartInterval</key>

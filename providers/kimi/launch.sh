@@ -57,5 +57,9 @@ esac
 
 # If the kimi CLI ever truncates long argv prompts, switch to stdin piping here.
 # ${arr[@]+…} guard: empty-array expansion errors under `set -u` on bash 3.2 (macOS).
+# A shell variable, not an export: the classifier drops output lines that
+# appear verbatim in the prompt, and the CLI must not carry a second copy.
+# shellcheck disable=SC2034  # read by run_and_classify in the sourced lib.sh
+AGENT_PROMPT_TEXT="$PROMPT"
 run_and_classify kimi \
     kimi -p "$PROMPT" --output-format text ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"}

@@ -233,6 +233,16 @@ sweep_worktrees() {
   if [ "$rc" -ne 0 ]; then
     warn "sweep exited $rc - worktrees may still be stale. Landing result is unaffected."
   fi
+  # Second sweep: the per-seat worktrees and per-dispatch runtimes that
+  # scripts/run-remote.sh keeps under ~/dev, older than a day (a different
+  # clone from the one above, so a different sweep).
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  out=$("$here/seat-worktree-sweep.sh" --apply 2>&1); rc=$?
+  printf '%s\n' "$out" | grep -E '^(seat worktrees:|runtimes +:)' | sed 's/^/  /'
+  if [ "$rc" -ne 0 ]; then
+    warn "seat sweep exited $rc - seat worktrees may still be stale. Landing result is unaffected."
+  fi
   # Never let teardown decide whether the landing succeeded.
   return 0
 }

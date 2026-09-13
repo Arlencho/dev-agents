@@ -90,7 +90,7 @@ The heterogeneity invariant extended across vendors — same-vendor different-ti
 
 Agents load **charter (L1) + skill packs (L2) + case file (L3 preamble) + task**. Skills are short, evidence-cited playbooks under `skills/<id>/SKILL.md`, mapped per role in `config/role-skills.yaml`.
 
-**Runtime (fleet dispatch):** `scripts/run-remote.sh` runs `scripts/skill-inject.sh` and places L2 text **before** the L3 preamble (not inside `preamble.sh`). Missing packs warn and continue — never block dispatch. Workers also receive a copy under `~/dev/agent-runtime/skills/`.
+**Runtime (fleet dispatch):** `scripts/run-remote.sh` runs `scripts/skill-inject.sh` and places L2 text **before** the L3 preamble (not inside `preamble.sh`). Missing packs warn and continue — never block dispatch. Workers also receive a copy under `~/dev/agent-runtime/<dispatch id>/skills/`, shipped once per dispatch.
 
 **Starter packs (shared, not 50 novels):** `evidence-first`, `untrusted-prior`, `handoff-intent`, `git-ship`, `docs-no-hallucinate`, `session-modes` (orchestrator). Lint with `./scripts/skills-lint.sh`.
 
@@ -181,26 +181,45 @@ brew install bash
 - `--retries N` — max retries per task (default: 2). Set higher for flaky agents.
 - `--review` — run autoplan review before dispatching (see `autoplan.sh`).
 - `--retry-on-different-worker` — on failure, try the same task on a different worker.
-- `--no-wait`: do not queue behind another dispatch on the same repo; exit 9 immediately instead.
+- `--no-wait`: do not queue behind another dispatch on one of this plan's branches; exit 9 immediately instead.
 
-**One local dispatch per repo.** Every localhost seat checks out and pulls inside the same
-shared tree (`~/dev/<repo>`, see `scripts/run-remote.sh`), so two dispatches running at once
-fight over one index and one HEAD. Before the first wave, `dispatch.sh` takes a per-repo lock
-whenever a localhost worker is in play. A second dispatch prints the holder's pid and plan and
-then queues (heartbeat line every 60s), or exits 9 straight away with `--no-wait`.
+**One worktree per seat.** `scripts/run-remote.sh` keeps `~/dev/<repo>` on the worker as a
+fetch point only (cloned once, then only ever fetched; HEAD stays detached at `origin/main`, so no
+branch, `main` included, is ever checked out there and a seat on any branch can start) and
+gives every seat its own git worktree at `~/dev/worktrees/<repo>/<dispatch id>/<task id>-<branch>`
+(the dispatch id is `<UTC second>-<repo>-<dispatcher pid>`, so two dispatches started in the same
+second never share a directory),
+added from `origin/<branch>` when the branch exists on origin, else as a new branch from
+`origin/main`. The seat runs, commits and pushes in that worktree; `handoff.md` is copied next to
+the seat log before the worktree is removed at seat exit, on every path (normal end, launcher
+exit 1 / 69 / 75, Ctrl-C, kill). Set `FLEET_KEEP_FAILED_WORKTREES=1` on the dispatcher to keep the
+worktree of a seat that exited non-zero for inspection; the daily sweep removes it after a day.
+Fetch-point operations (clone, fetch, hook install, worktree add / remove) are serialized per
+repo by `~/dev/<repo>.seat-lock`, so the seats of one wave can start in the same second.
 
-The lock is **machine-global, not per clone**: it lives at `~/dev/dispatch-locks/<repo>.lock`,
-the same per-user fleet base as `~/dev/agent-logs` and the `~/dev/<repo>` checkout it protects,
-keyed by repo name. Two clones of dev-agents on one host therefore contend for the same file
-instead of each holding a private one. Override the base with `FLEET_HOME` (or the directory
-with `LOCK_DIR`) if your fleet keeps its per-user state elsewhere.
+**One local dispatch per branch.** Because every seat has its own worktree, two dispatches on
+the same repo run concurrently. What still must not interleave is two dispatches driving the
+same branch (their producer and critic seats would take turns on it with no plan-level
+ordering), so before the first wave `dispatch.sh` takes one lock per distinct branch in its
+plan whenever a localhost worker is in play, in sorted order, and holds them until the run
+ends. A second dispatch that needs a held branch prints the holder's pid, plan and branch and
+then queues (heartbeat line every 60s), or exits 9 straight away with `--no-wait`, releasing
+any lock it had already taken.
 
-The lock is released on normal exit, on error, and on Ctrl-C / kill / hangup, including while a
-wave is still running: the wave wait and the retry backoff poll in short slices rather than
+The locks are **machine-global, not per clone**: they live at
+`~/dev/dispatch-locks/<repo>/<branch>.lock` (slashes in the branch written as dashes), the same
+per-user fleet base as `~/dev/agent-logs` and the `~/dev/<repo>` fetch point they protect. Two
+clones of dev-agents on one host therefore contend for the same files instead of each holding
+private ones. Override the base with `FLEET_HOME` (or the directory with `LOCK_DIR`) if your
+fleet keeps its per-user state elsewhere.
+
+The locks are released on normal exit, on error, and on Ctrl-C / kill / hangup, including while
+a wave is still running: the wave wait and the retry backoff poll in short slices rather than
 blocking, so a signal is serviced within about a second instead of waiting for the seats. The
 run keeps its exit code through the close-out (130 interrupted, 143 terminated). A lock whose
-owner pid is gone is cleared automatically. Remote-only fleets never take it. Seats *within*
-one wave still share the tree: the real fix is a per-seat git worktree, tracked in issue #66.
+owner pid is gone is cleared automatically. Remote-only fleets never take them. Inside one
+dispatch, a seat whose branch is still held by a live seat (same wave, or a retry) waits for
+that seat instead of failing; see `wait_for_branch` in `scripts/run-remote.sh`.
 
 **Example: fast, parallel, hands-off dispatch:**
 ```bash

@@ -40,6 +40,25 @@ for vendor in claude kimi grok; do
     check "$vendor / binary-absent" 69 "$got"
 done
 
+echo "== row 13b: a cap or auth phrase in the prompt never classifies the run =="
+# The shims echo their prompt. A learning or a task that quotes an earlier
+# failure must not turn a seat that did its work into a cap or auth exit.
+QUOTED_PROMPT="## Relevant Learnings
+- [2026-09-12] [medium] [failure] devops: Not logged in. Please run /login
+- HTTP 401 unauthorized: please run 'kimi login'
+- Not authenticated. Run 'grok login' first.
+- You've reached your usage limit. Limit resets at 5pm.
+- HTTP 429 Too Many Requests, quota exceeded
+YOUR TASK: do the thing"
+for vendor in claude kimi grok; do
+    got=$(SHIM_MODE=success run_launcher "$vendor" web-frontend "$QUOTED_PROMPT")
+    check "$vendor / quoted phrases in prompt, success" 0 "$got"
+    got=$(SHIM_MODE=noauth run_launcher "$vendor" web-frontend "$QUOTED_PROMPT")
+    check "$vendor / quoted phrases in prompt, real noauth" 69 "$got"
+    got=$(SHIM_MODE=ratecap run_launcher "$vendor" web-frontend "$QUOTED_PROMPT")
+    check "$vendor / quoted phrases in prompt, real ratecap" 75 "$got"
+done
+
 echo "== row 14: kimi injects the role charter into the prompt =="
 ARGV_LOG="$(mktemp)"
 SHIM_MODE=success SHIM_ARGV_LOG="$ARGV_LOG" PATH="$SHIMS:$PATH" \
