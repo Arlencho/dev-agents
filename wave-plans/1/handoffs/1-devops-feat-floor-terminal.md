@@ -1,37 +1,36 @@
-# Handoff: Floor in the terminal (feat/floor-terminal, Refs 72)
+# Handoff: PR 83 round 2, the five critic block findings on the terminal
 
 ## Built
 
-- `scripts/floor_tty.py`: renders `site/experience/data/live.json` (the file the page reads, never the streams) as plain text in the section 4 order: status line, NEEDS YOU, NOW by repo, UP NEXT, FAILED then LANDED today. At most 60 lines and 100 columns; refreshes every 5 s in place, `q` quits, `--once` prints and exits 0, `--color` adds colour without changing a character, `--now` pins the clock for tests, `--file` picks another projection.
-- `Makefile`: `make floor` target (help comment, `FLOOR_FLAGS` pass-through), wired `tests/run-floor-tty-tests.sh` into `make test` after the desk-live suite.
-- `tests/run-floor-tty-tests.sh` (66 checks) with `tests/fixtures/live/floor-v3.json` (a populated v3 projection: two repos live, a quiet seat, six NEEDS YOU items, a blocked queue row, landed, failed and aborted rows, plus planted stream paths, plan paths, log names and urls that must never print) and the pinned renders under `tests/fixtures/floor-tty/`.
-- Docs: one line in `README.md` next to `make desk-follow`, a paragraph in `docs/experience.md` next to `make desk-live`.
+- `scripts/floor_tty.py`: `NotAProjection` gate in `load()` (dict with `schema == "live/1"`, the page's rule); the loop catches `OSError, ValueError, TypeError, AttributeError, KeyError` and paints `Could not read <file>: <reason>` on a cleared screen; `--once` exits 2 with the reason. New `initiatives_section` (4.5, between UP NEXT and the day), wrapped rows with a hanging indent, `Section` trims by whole row. Status line is the page's strip (figures need a `summary`; without one: `no counts: this projection carries no summary`). Missing `needs_you`/`queue`/`today`/`initiatives` read as empty with the page's copy. NOW header `unknown`, queue row `repo not declared`. `file_cite()` prints checkout-relative file and line only.
+- `tests/run-floor-tty-tests.sh`: Part D, one block per finding (31 checks); order assertion includes INITIATIVES; the stale test plants a summary.
+- `tests/fixtures/floor-tty/{wave,conductor,floor-v3}.txt`: re-pinned.
+- `docs/experience.md`: the terminal paragraph names INITIATIVES and the gate.
+- PR 83 body: Round 2 heading, exit codes, live `--once` render.
 
 ## Decisions
 
-- Branched from `origin/feat/floor-v3b` because v3-B (PR 80) is not on main yet; the PR body says so.
-- State (live, stale, offline) derives from `last_event_ts` against the projection's thresholds, like the page, never from the stored `staleness.state`; replay is forced by the projection's own watermark.
-- Rows are laid out by a fitter that shaves the longest flexible part first (with per-part floors) and paints colour after layout, so colour and plain modes print the same characters and nothing important vanishes first. The quiet clause leads the seat sentence so a width cut can never drop it.
-- References print as text only (comment id and issue, PR number, run id, file and line inside the checkout); urls, stream paths, plan paths and log names are never printed.
-- Replay: no counts of the present, no queue, no day, no "live" word; the REPLAY watermark is on the status line and every section header.
+- Off-schema in `--once` exits 2 with the reason on stderr (same path as missing and broken files) rather than printing an empty shell on stdout: a script consuming `--once` must not read a refusal as a render.
+- Initiative rows use the page's DOM text form (`repo title: facts`) and wrap rather than shave, because the exit sentence is the answer to question 5.
+- `wave 0 of 0` on real rows is the page's behaviour too (`typeof planned === "number"`); left as is.
+- PR left as draft: its base is `feat/floor-v3b`, not `main`, by the author's stated choice; marking it ready would expose it to the auto-merge sweep against a non-main base.
 
 ## Do not repeat
 
-- Nesting a heredoc with the same delimiter inside a patch heredoc silently truncates the patch (zsh parse error, nothing applied).
-- `echo ======` in zsh triggers `=cmd` expansion; use other separators.
-- `cat` is aliased to `bat` in this shell; use `command cat` for `-v`.
-- A test that greps for the long dash must build the pattern from code points or it matches itself.
+- A bash heredoc patch containing inner `<<'PY'` heredocs must use a different outer delimiter, or the outer heredoc ends early and nothing is written.
+- `wrap()` collapses runs of spaces via `norm()`; do not expect a double-space separator to survive it.
+- zsh does not word-split `$var` in `for n in "a b"; do set -- $n`; run per-fixture commands separately.
 
 ## Evidence
 
-- `./tests/run-floor-tty-tests.sh` exit 0, `floor tty: 66 passed, 0 failed`.
-- `shellcheck -S warning tests/run-floor-tty-tests.sh` exit 0.
-- `make floor FLOOR_FLAGS=--once` on a projection of the main checkout's four streams (read-only, `--events-dir`): exit 0, first line `Offline: no new event for over 15 min, so everything below is history.`
-- `./tests/run-experience-tests.sh` exit 0 (354 passed), `./tests/run-desk-live-tests.sh` exit 0 (368 passed), `bash tests/critic/phase-b-honesty-repro.sh` exit 0 (6 passed).
-- `make test` exit 2: stops at `tests/run-worktree-tests.sh` (94 passed, 6 failed, the two "two real dispatches" sections). Same suite on pristine origin/feat/floor-v3b: 96 passed, 4 failed, same section. Pre-existing, as PR 80 notes.
-- `./tests/run-detached-dispatch-tests.sh` exit 1 (34 passed, 45 failed) with an identical ok/FAIL pattern on the pristine base: the environment, not the branch.
-- Draft PR: https://github.com/Arlencho/dev-agents/pull/83 (base feat/floor-v3b, retarget to main after #80 merges). Commit 35f9edd.
+- `./tests/run-floor-tty-tests.sh` -> exit 0, 97 passed 0 failed
+- `shellcheck -S warning tests/run-floor-tty-tests.sh` -> exit 0
+- `./tests/run-experience-tests.sh` -> exit 0, 354 passed 0 failed
+- `./tests/run-desk-live-tests.sh` -> exit 0, 368 passed 0 failed
+- `bash tests/critic/phase-b-honesty-repro.sh` -> exit 0, 6 passed 0 failed
+- `make desk-live-once` -> exit 0; `make floor FLOOR_FLAGS=--once` -> exit 0
+- commit `00b2d0b` on `feat/floor-terminal`, pushed; PR 83 head `00b2d0b8cbeb17f1ae3ef4461c52e65ed2bff62c`
 
-## Open questions
+## Next hint
 
-- INITIATIVES (section 4.5) is not rendered; the task did not list it and the 60-line budget is tight. Easy to add as a sixth `Section` if wanted.
+- The critic re-reviews from its own `/tmp` fixtures; Part D rebuilds them from the report, so a green Part D should match its re-run.

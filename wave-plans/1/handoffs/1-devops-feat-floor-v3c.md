@@ -1,37 +1,26 @@
-# Handoff: PR 79 round 2 (feat/floor-v3c)
-
 ## Built
 
-- `scripts/desk_live.py`: `mark_paths()` factors the slash-token loop out of `first_sentence` and is applied in `add()` (every NEEDS YOU line), in `pr_view` (the title) and in the `pr list` join (the same title on seat rows).
-- `scripts/notify.sh`: `needs_you_due` keys the seen file on `type|kind|<stable fields>` (comment_id; repo+pr; dispatch_id+task_id; checkout+file+line) and refuses an item whose text still carries an absolute, home, variable, `file:` or parent-escape token (stderr line, nothing sent, not seen).
-- `tests/run-desk-live-tests.sh`: Part L round 2, 33 checks, inserted before "a missing projection is nothing to push".
-- `docs/experience-data.md`: the push paragraph states both rules.
-- PR 79 body: Round 2 heading with real exit codes. Commit e3b44e6, pushed.
+- `scripts/desk_live.py`: `percent_decode()` (bounded `urllib.parse.unquote` loop); `task_path` decodes the token before the must-contain-slash skip; `mark_paths` also hands a token holding `%` to `task_path`.
+- `scripts/notify.sh`: the same `percent_decode()` inside `needs_you_due`; `has_operator_path` decodes each token before the slash skip.
+- `tests/run-desk-live-tests.sh`: Part L round 4 (12 checks): unit shapes, the product path with the encoded PR 102 title, PR 108 and 109 refused in the hand-written file (count 7 to 9).
+- PR 79 body: Round 4 section with real exit codes. Commit `def5c3a`, pushed to `origin/feat/floor-v3c`.
 
 ## Decisions
 
-- Bare `$HOME` (no slash) is left alone: the critic's fix line asks for the slash-token rule of `task_path`, and a bare variable name is not a path. Stated in the PR body so the critic can object explicitly if wanted.
-- A refused item is not recorded as seen, so the same item marked by the projector later is still pushed. Recording it would silently lose a real item.
-- `event` and `ts` are outside the stream identity: a quiet seat that heartbeats once and goes quiet again is the same item.
-- Milestone, issue and merged-PR titles (Almanac side) keep `scrub_text` only; out of the critic's scope.
+- Full percent decoding, not only `%2F`: `%7E`, `%24`, `%2E%2E` would otherwise be the next round. Bounded at 4 passes so `%252F` unfolds too.
+- A token that reads as no path is returned as it came (`50%25` stays). One that is a repo-relative path, branch or URL reads decoded; nothing leaks either way.
 
 ## Do not repeat
 
-- `cd scripts` in one Bash call changed the working directory for the sibling calls in the same batch; use absolute paths.
-- BSD grep has no `-P`; scan for banned dashes with Python.
-- `shellcheck tests/run-desk-live-tests.sh` exits 1 at HEAD already on note-level SC2015/SC2016; compare at `-S warning` (three pre-existing lines: 89, 157, 172).
+- A `python3 - <<'PY'` patch script whose payload itself contains a `<<'PY'` heredoc terminates early in the outer shell. Use a distinct terminator or a temp file.
 
 ## Evidence
 
 ```
-./tests/run-desk-live-tests.sh     exit 0  passed: 450 failed: 0
-./tests/run-experience-tests.sh    exit 0  337 passed, 0 failed
-shellcheck scripts/notify.sh       exit 0
-python3 -m py_compile scripts/desk_live.py  exit 0
+./tests/run-desk-live-tests.sh   exit 0   passed: 473 failed: 0  (461 before)
+./tests/run-experience-tests.sh  exit 0   337 passed, 0 failed
+shellcheck scripts/notify.sh     exit 0
+python3 -m py_compile scripts/desk_live.py scripts/experience_build.py  exit 0
 node --check templates/experience/floor.js  exit 0
-git log --oneline -1  e3b44e6 fix(floor): keep operator paths out of the toast, key the push on the item identity
+shellcheck -S warning tests/run-desk-live-tests.sh  lines 89, 157, 172 only (pre-existing)
 ```
-
-## Next hint
-
-The critic re-reviews PR 79 from comment 5653828539. If it wants bare `$HOME` marked too, extend `task_path` (one `startswith` on a slashless token) and add one `assert_fn`.
