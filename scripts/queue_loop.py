@@ -1249,8 +1249,10 @@ def _size_gb(number, unit):
 
 
 def read_memory():
-    """{free_pct, swap_used_gb, detail} or (None, reason). macOS first, then
-    /proc/meminfo; unreadable means the guard cannot judge and says so."""
+    """{free_pct, swap_used_gb, detail} or (None, reason). macOS first; the
+    /proc/meminfo fallback is for a machine with no vm_stat at all. A vm_stat
+    that answers garbage is an unreadable sensor, not a reading: the guard
+    cannot judge and says so."""
     rc, out, _err = run(["vm_stat"])
     if rc == 0 and "Pages free" in out:
         page = re.search(r"page size of (\d+) bytes", out)
@@ -1281,6 +1283,8 @@ def read_memory():
         return {"free_pct": free_pct, "swap_used_gb": swap_gb,
                 "detail": "free %.0f%% of %.0f GB, swap used %.1f GB" % (
                     free_pct, total / (1024.0 ** 3), swap_gb)}, None
+    if rc == 0:
+        return None, "vm_stat answered but its output is unreadable"
     try:
         with open("/proc/meminfo", "r", encoding="utf-8") as fh:
             info = {}
