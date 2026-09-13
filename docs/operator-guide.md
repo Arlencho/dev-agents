@@ -245,6 +245,8 @@ On failure, re-login on the **worker** machine (`claude login` / `kimi login` / 
 - `--retries N` — Max retries per failed task (default: 2)
 - `--review` — Run `autoplan.sh` before dispatching
 - `--retry-on-different-worker` — On failure, retry on a different worker (useful if a worker has issues)
+- `--no-wait`: exit 9 at once instead of queueing behind another dispatch on one of this plan's branches
+- `--detach`: run as a session leader in the background, print the dispatch id and return (implies `--auto`); then `scripts/dispatch-status.sh <id>` or `scripts/dispatch-wait.sh <id> [timeout]`. See the README section "Detached dispatch"
 
 ### Example Dispatches
 

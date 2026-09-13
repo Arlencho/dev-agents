@@ -29,6 +29,11 @@ fi
 #   --skip-auth-preflight      Skip vendor session preflight (not recommended)
 #   --no-wait                  Exit 9 instead of queueing when another dispatch
 #                              already holds a lock on one of this plan's branches
+#   --detach                   Re-exec as a session leader (fork + setsid, stdin
+#                              from /dev/null, HUP ignored), all output to
+#                              logs/dispatch-runs/<dispatch id>.log, pid file next
+#                              to it; print the id and the log path and return.
+#                              Implies --auto. Check: scripts/dispatch-status.sh
 #
 # Example plan.txt:
 #   1 | go-backend | implement payment service | feat/payments-svc
@@ -101,6 +106,9 @@ usage() {
     echo "  --skip-auth-preflight        Skip vendor CLI session preflight (default: on)"
     echo "  --no-wait                    Do not queue behind another dispatch on one of this"
     echo "                               plan's branches; exit 9 immediately if a lock is held"
+    echo "  --detach                     Run as a session leader in the background: output to"
+    echo "                               logs/dispatch-runs/<dispatch id>.log, pid file beside it,"
+    echo "                               prints the id and returns (implies --auto)"
     echo ""
     echo "Plan file format:"
     echo "  [wave] | agent | task description | [branch-name]"
@@ -124,15 +132,21 @@ RETRY_DIFFERENT_WORKER=false
 REVIEW_PLAN=false
 SKIP_AUTH_PREFLIGHT=false
 NO_WAIT=false
+DETACH=false
+# The flags a detached child is re-executed with: everything but --detach
+# itself and --review (the review gate runs in the foreground, before the fork).
+PASS_ARGS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --auto)
             AUTO_CONTINUE=true
+            PASS_ARGS+=("$1")
             shift
             ;;
         --retries)
             MAX_RETRIES="${2:?--retries requires a number}"
+            PASS_ARGS+=("$1" "$2")
             shift 2
             ;;
         --review)
@@ -141,14 +155,21 @@ while [ $# -gt 0 ]; do
             ;;
         --retry-on-different-worker)
             RETRY_DIFFERENT_WORKER=true
+            PASS_ARGS+=("$1")
             shift
             ;;
         --skip-auth-preflight)
             SKIP_AUTH_PREFLIGHT=true
+            PASS_ARGS+=("$1")
             shift
             ;;
         --no-wait)
             NO_WAIT=true
+            PASS_ARGS+=("$1")
+            shift
+            ;;
+        --detach)
+            DETACH=true
             shift
             ;;
         --help|-h)
@@ -169,6 +190,105 @@ if [ "$REVIEW_PLAN" = true ] && [ "$PLAN_SOURCE" != "--interactive" ]; then
     "$SCRIPT_DIR/autoplan.sh" "$PLAN_SOURCE" || { echo "Plan review failed."; exit 1; }
     echo ""
 fi
+
+# --------------------------------------------------
+# Detached mode: re-exec as a session leader, print the id, return
+# --------------------------------------------------
+# A dispatch started from a chat session or an ssh shell dies with that shell:
+# the harness kills the process group of its background tasks when the turn
+# ends, a hangup kills the terminal's session. --detach forks a child that
+# calls setsid() so it is the leader of a session of its own with no controlling
+# terminal, gives it /dev/null for stdin and the run log for stdout and stderr,
+# ignores HUP in it (what nohup does), and execs this script again in it. Nothing
+# aimed at the parent, its process group or its session reaches the child. The
+# two steps are done in one perl call because macOS ships nohup but no setsid
+# binary; perl and its POSIX module are on every mac and every worker.
+#
+# The parent returns at once with the dispatch id, the pid and the log path.
+# The child runs the attached code path unchanged: same lock, same queue marks,
+# same events, same notify hooks. It carries its id in DISPATCH_DETACHED so the
+# event stream is opened under the id the parent already printed.
+#
+#   logs/dispatch-runs/<id>.log    everything the run prints
+#   logs/dispatch-runs/<id>.pid    pid, repo slug, plan, start time (one per line)
+#   logs/dispatch-runs/<id>.exit   the run's exit code, written on its way out
+#
+# ---- dispatch-detach:begin (tests/run-detached-dispatch-tests.sh reads this block) ----
+DISPATCH_RUNS_DIR="${DISPATCH_RUNS_DIR:-$LOGS_DIR/dispatch-runs}"
+
+# Detached child only: leave the exit code where dispatch-status.sh reads it.
+dispatch_run_note_exit() { # <rc>
+    [ -n "${DISPATCH_DETACHED:-}" ] || return 0
+    printf '%s\n' "$1" > "$DISPATCH_RUNS_DIR/$DISPATCH_DETACHED.exit" 2>/dev/null || true
+}
+
+if [ "$DETACH" = true ] && [ -z "${DISPATCH_DETACHED:-}" ]; then
+    if [ "$PLAN_SOURCE" = "--interactive" ]; then
+        echo -e "${RED}ERROR: --detach needs a plan file; a detached run has no stdin to read tasks from${NC}" >&2
+        exit 1
+    fi
+    if [ ! -f "$PLAN_SOURCE" ]; then
+        echo -e "${RED}ERROR: Plan file not found: $PLAN_SOURCE${NC}" >&2
+        exit 1
+    fi
+    if ! command -v perl >/dev/null 2>&1; then
+        echo -e "${RED}ERROR: --detach needs perl (fork + POSIX::setsid); it was not found on PATH${NC}" >&2
+        exit 1
+    fi
+    if ! mkdir -p "$DISPATCH_RUNS_DIR" 2>/dev/null; then
+        echo -e "${RED}ERROR: cannot create $DISPATCH_RUNS_DIR${NC}" >&2
+        exit 1
+    fi
+    # Same shape as fleet-events.sh builds: <utc second>-<repo slug>-<pid>. The
+    # pid is the parent's here; the id is an opaque token, nothing parses it.
+    detach_slug="$(printf '%s' "$(basename "$REPO_URL" .git)" | LC_ALL=C tr -c 'A-Za-z0-9._-' '-' | cut -c1-40)"
+    DETACH_ID="$(date -u +%Y%m%d-%H%M%S)-${detach_slug:-fleet}-$$"
+    DETACH_LOG="$DISPATCH_RUNS_DIR/$DETACH_ID.log"
+    DETACH_PIDFILE="$DISPATCH_RUNS_DIR/$DETACH_ID.pid"
+    : > "$DETACH_LOG"
+
+    # perl prints the child's pid on stdout and exits; the child (already a
+    # session leader, stdio moved off the pipe) execs this script.
+    DETACH_PID="$(DISPATCH_DETACHED="$DETACH_ID" DISPATCH_RUN_LOG="$DETACH_LOG" perl -e '
+        use strict; use POSIX qw(setsid);
+        my $log = $ENV{DISPATCH_RUN_LOG};
+        my $pid = fork();
+        defined $pid or die "fork: $!\n";
+        if ($pid) { print "$pid\n"; exit 0; }
+        setsid() != -1 or die "setsid: $!\n";
+        open(STDIN,  "<",  "/dev/null") or die "stdin: $!\n";
+        open(STDOUT, ">>", $log)        or die "open $log: $!\n";
+        open(STDERR, ">&", \*STDOUT)    or die "stderr: $!\n";
+        $SIG{HUP} = "IGNORE";
+        exec @ARGV or die "exec: $!\n";
+    ' -- "$BASH" "$0" "$REPO_URL" "$PLAN_SOURCE" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"})"
+    if [ -z "$DETACH_PID" ]; then
+        echo -e "${RED}ERROR: could not fork the detached dispatch${NC}" >&2
+        exit 1
+    fi
+    printf '%s\n%s\n%s\n%s\n' "$DETACH_PID" "${detach_slug:-fleet}" "$PLAN_SOURCE" "$(date -u +%FT%TZ)" > "$DETACH_PIDFILE"
+
+    echo "dispatch id: $DETACH_ID"
+    echo "pid:         $DETACH_PID (session leader)"
+    echo "log:         $DETACH_LOG"
+    echo "check:       scripts/dispatch-status.sh $DETACH_ID"
+    echo "wait:        scripts/dispatch-wait.sh $DETACH_ID [timeout seconds]"
+    exit 0
+fi
+
+if [ -n "${DISPATCH_DETACHED:-}" ]; then
+    # The child. No one is at the other end of stdin, so every wave gate would
+    # read EOF: --auto is implied. Colors are noise in a log file.
+    AUTO_CONTINUE=true
+    RED='' GREEN='' YELLOW='' CYAN='' BOLD='' NC=''
+    # Until the run's own close-out traps are armed, an early exit (bad config,
+    # no workers) still leaves its code behind for dispatch-status.sh.
+    trap 'dispatch_run_note_exit $?' EXIT
+    echo "Detached dispatch $DISPATCH_DETACHED: pid $$, session leader, started $(date -u +%FT%TZ)"
+    echo "--auto implied (stdin is /dev/null)"
+    echo ""
+fi
+# ---- dispatch-detach:end ----
 
 # --------------------------------------------------
 # Parse workers.yaml (simple grep-based — no yq dependency)
@@ -461,7 +581,8 @@ detect_dispatch_mode() {
 
 DISPATCH_MODE="$(detect_dispatch_mode)"
 REPO_SLUG_EVENTS="$(basename "$REPO_URL" .git)"
-fleet_events_init "$REPO_SLUG_EVENTS" "$DISPATCH_MODE" "$PLAN_SOURCE"
+# A detached child opens the stream under the id its parent already printed.
+fleet_events_init "$REPO_SLUG_EVENTS" "$DISPATCH_MODE" "$PLAN_SOURCE" "${DISPATCH_DETACHED:-}"
 fleet_event dispatch_plan waves="${#SORTED_WAVES[@]}" seats="${#TASK_AGENT[@]}" format="$FORMAT"
 # Queue: this plan is now running. Armed plans keep their position and gain the
 # dispatch id; a plan dispatched without being armed is appended as running with
@@ -500,7 +621,7 @@ fleet_close_dispatch() {
 # The EXIT trap captures the status it was entered with and exits with it again,
 # so the close-out cannot report success over a run that was interrupted (130),
 # terminated (143) or failed. Wrappers read that code.
-trap 'dispatch_rc=$?; fleet_close_dispatch aborted; exit "$dispatch_rc"' EXIT
+trap 'dispatch_rc=$?; fleet_close_dispatch aborted; dispatch_run_note_exit "$dispatch_rc"; exit "$dispatch_rc"' EXIT
 trap 'fleet_close_dispatch aborted; exit 130' INT
 trap 'fleet_close_dispatch aborted; exit 143' TERM
 
@@ -929,7 +1050,7 @@ dispatch_sleep_interruptible() {
 # idempotent, so the explicit call at the end of the run is harmless here.
 # A function rather than inline traps so the lock suite can arm the real thing.
 dispatch_lock_arm_traps() {
-    trap 'dispatch_rc=$?; dispatch_lock_release; fleet_close_dispatch aborted; exit "$dispatch_rc"' EXIT
+    trap 'dispatch_rc=$?; dispatch_lock_release; fleet_close_dispatch aborted; dispatch_run_note_exit "$dispatch_rc"; exit "$dispatch_rc"' EXIT
     trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 130' INT
     trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 143' TERM
     trap 'dispatch_lock_release; fleet_close_dispatch aborted; exit 129' HUP
@@ -1388,3 +1509,6 @@ if git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git -C "$REPO_DIR" commit -m "dispatch: save wave plan for ${REPO_SLUG_SHORT} ($(date +%Y-%m-%d))" \
         "$PLAN_STATE" "$EXEC_LOG" 2>/dev/null || true
 fi
+
+# Normal end: the close-out traps were disarmed above, so leave the code here.
+dispatch_run_note_exit 0

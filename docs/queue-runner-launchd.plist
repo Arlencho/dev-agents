@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Queue runner - macOS launchd configuration
+
+INSTALLATION (recommended):
+  cd dev-agents
+  make queue-runner-install
+
+This will:
+  - Copy this plist to ~/Library/LaunchAgents/
+  - Load it with launchctl
+
+After installation the runner ticks once a minute: if no dispatch is running
+for a repo and the Ops Floor queue (logs/fleet-queue.json) holds a queued plan
+for that repo whose blocked reason is empty, it starts that plan with
+  ./scripts/dispatch.sh <repo-url> <plan> --detach --auto <flags>
+reading the repo URL and the flags from the plan's own "# DISPATCH:" header
+line. At most one start per tick, one running dispatch per repo. What it
+started is written to logs/dispatch-runs/queue-runner.log in dev-agents.
+
+Off by default: nothing runs until this file is installed. RunAtLoad is false
+so installing it never starts a plan at that same moment; the first tick is
+one minute later.
+
+PAUSE (one variable, the runner does nothing while it is set):
+  launchctl setenv QUEUE_RUNNER_PAUSE 1
+  launchctl unsetenv QUEUE_RUNNER_PAUSE
+
+The dispatch the runner starts is a session leader of its own (that is what
+--detach does), so it survives the end of the tick. AbandonProcessGroup is set
+as a second guard: launchd must not reap what the tick left behind.
+
+The dev-agents checkout comes from DEV_AGENTS_ROOT, defaulting to the same
+dev-projects/AI-Orchestration parent the PR Sentinel plist points at:
+  launchctl setenv DEV_AGENTS_ROOT /path/to/dev-agents
+
+USEFUL COMMANDS:
+  make queue-runner-status
+  make queue-runner-dry              (what the next tick would start)
+  tail -f ~/Library/Logs/queue-runner.log
+  make queue-runner-uninstall
+
+Log file: ~/Library/Logs/queue-runner.log (the tick's own output; the runs it
+starts log under logs/dispatch-runs/ in dev-agents)
+
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.arlen.queue-runner</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-c</string>
+        <string>cd "${DEV_AGENTS_ROOT:-/Users/arlenrios/Desktop/dev-projects/AI-Orchestration/dev-agents}" &amp;&amp; ./scripts/queue-runner.sh &gt;&gt; ~/Library/Logs/queue-runner.log 2&gt;&amp;1</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>60</integer>   <!-- once a minute -->
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>AbandonProcessGroup</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/arlenrios/Library/Logs/queue-runner.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/arlenrios/Library/Logs/queue-runner.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
