@@ -1,16 +1,33 @@
-/* Fleet Desk — Ops Floor poller + Phase C replay scrubber.
+/* Fleet Desk Ops Floor, v3 page: poller + replay scrubber.
    Served as site/experience/assets/floor.js; loaded only by /live/index.html.
 
-   Live mode (Phase B):
-     Reads data/live.json (live/1) over http and repaints regions.
-   Replay mode (Phase C):
-     Scrubs a settled stream via /api/replay?dispatch_id=&as_of_seq=
-     (or a build-time snapshot stamped view=replay). Honesty watermark REPLAY
-     is always visible; green LIVE LED is never painted in replay.
+   Page order (docs/proposals/floor-v3-purpose.md section 4, mirrored by the
+   build-time snapshot in scripts/experience_build.py):
+     1. status strip (running, up next, landed, failed, needs you, last event;
+        every figure a link to its section; stale or offline speaks first in
+        words, before any number)
+     2. NEEDS YOU
+     3. NOW grouped by repo
+     4. UP NEXT (a blocked plan shows its reason in place)
+     5. INITIATIVES
+     6. FAILED and LANDED today (failed first when non-empty)
+     7. one details control, closed by default: replay scrubber, stream facts,
+        schema line, pipeline tiles, lanes or spine, event tail, trail links
+
+   Live mode: reads data/live.json (live/1) over http and repaints regions.
+   Replay mode: scrubs a settled stream via /api/replay?dispatch_id=&as_of_seq=
+   (or a build-time snapshot stamped view=replay). The REPLAY watermark is
+   always visible; a green live LED is never painted in replay, and a replay
+   carries no summary, no queue, no today, no needs_you and no initiatives,
+   so the strip and those sections cannot borrow the present.
 
    Honesty rules:
-     - only projection facts — no invented seats
-     - staleness from last_event_ts for live; replay forces state=replay
+     - only projection facts; no invented seats, no predicted outcomes
+     - queued is declared intent and never renders as running
+     - staleness derives from last_event_ts for live; replay forces state=replay
+     - stale and offline degrade every element
+     - no prompt, task body, argument, secret or absolute path is in the data,
+       so none can reach the page
      - file:// desks keep the build snapshot when fetch fails
    No frameworks, no build step. */
 (function () {
@@ -47,6 +64,12 @@
     return String(s == null ? "" : s)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function show(id, on) {
+    var el = $(id);
+    if (el) el.hidden = !on;
+    return el;
   }
 
   function fmtDur(secs) {
@@ -148,35 +171,96 @@
     }
   }
 
-  function seatLane(seat) {
-    var links = almanacLinks();
-    var chips = "";
-    if (seat.ratecapped) chips += '<span class="vendor warn">rate-cap</span>';
-    (seat.failovers || []).forEach(function (f) {
-      chips += '<span class="vendor warn">failover ' + esc(f.from) + " → " + esc(f.to) + "</span>";
-    });
-    var vendor = [seat.provider, seat.model].filter(Boolean).join(" · ");
-    var branch = seat.branch || "";
-    var trailId = branch && links.by_branch ? links.by_branch[branch] : null;
-    var branchHtml = esc(branch || "branch not yet reported");
-    if (trailId) {
-      branchHtml = '<a href="../trail/' + esc(trailId) + '/index.html" class="mono">' +
-        esc(branch) + "</a> <span class=\"faint\">→ trail</span>";
-    }
-    return '<div class="lane' + (seat.status === "running" ? " run" : "") + '">' +
-      '<div class="lane-top"><span class="role">' + esc(seat.agent || seat.task_id) + "</span>" +
-      seatPill(seat) + '<span class="timer">' + seatTimer(seat) + "</span></div>" +
-      '<div class="branch">' + branchHtml + "</div>" +
-      '<span class="vendor">' + esc(vendor || "provider —") + "</span>" + chips +
-      "</div>";
+  /* Outcome word for a finished run, from the projection's today[].outcome
+     (landed, failed, aborted), which reads the seat exits; status alone
+     cannot tell a failed run from an operator stop. Older projections
+     without outcome fall back to the status map. */
+  function outcomeWord(t) {
+    return t.outcome ||
+      (t.status === "settled" ? "landed"
+      : t.status === "failed" ? "failed"
+      : t.status === "aborted" ? "aborted" : (t.status || "unknown"));
   }
 
-  function ghostLane() {
-    return '<div class="lane ghost">' +
-      '<div class="lane-top"><span class="role">plan seat</span>' +
-      '<span class="st st-unk">queued</span><span class="timer">—</span></div>' +
-      '<div class="branch">seat planned by the dispatch, not yet started</div>' +
-      '<span class="vendor">provider —</span></div>';
+  function outcomeClass(word) {
+    return word === "landed" ? "st st-done"
+      : word === "failed" ? "st st-fail"
+      : word === "aborted" ? "st st-warn" : "st st-unk";
+  }
+
+  /* ── 4.1 status strip ─────────────────────────────────────────────── */
+
+  /* The strip is the first thing under the title: every figure a link to
+     its section. Under stale or offline the state sentence renders first,
+     in words, before any number. A replay carries no summary, so no figure
+     paints: the watermark above the strip says what the page is. */
+  function renderStrip(d, st) {
+    var led = $("floor-led");
+    if (led) led.className = LED_CLASS[st.state] || "led off";
+
+    var note = $("floor-state-note");
+    if (note) {
+      var stale = (d.staleness && d.staleness.stale_after_s) || 120;
+      var offline = (d.staleness && d.staleness.offline_after_s) || 900;
+      var txt = "";
+      if (st.state === "stale") {
+        txt = "Stale: no new event for over " + fmtMin(stale) +
+          ", so the page shows the last known state and the clocks stay frozen.";
+      } else if (st.state === "offline") {
+        txt = "Offline: no new event for over " + fmtMin(offline) +
+          ", so everything below is history, not the present.";
+      }
+      note.hidden = !txt;
+      note.textContent = txt;
+    }
+
+    var degraded = st.state === "stale" || st.state === "offline";
+    var s = d.summary;
+    var hasSummary = s && typeof s === "object" && st.state !== "replay";
+
+    var today = d.today || [];
+    var landed = 0, failed = 0, aborted = 0;
+    today.forEach(function (t) {
+      var w = outcomeWord(t);
+      if (w === "landed") landed++;
+      else if (w === "failed") failed++;
+      else if (w === "aborted") aborted++;
+    });
+
+    var el;
+    el = show("strip-running", !!(hasSummary && typeof s.running === "number"));
+    if (el && !el.hidden) {
+      el.textContent = s.running + " running" + (degraded ? " at last event" : "");
+    }
+    el = show("strip-queued", !!(hasSummary && typeof s.queued === "number"));
+    if (el && !el.hidden) el.textContent = s.queued + " up next";
+    el = show("strip-landed", !!hasSummary);
+    if (el && !el.hidden) el.textContent = landed + " landed";
+    el = show("strip-failed", !!hasSummary);
+    if (el && !el.hidden) {
+      /* The figure must equal what it links to: the FAILED list holds
+         failed and aborted rows alike, so both counts ride the figure. */
+      el.textContent = aborted
+        ? failed + " failed · " + aborted + " aborted"
+        : failed + " failed";
+      el.className = "sfig" + (failed > 0 ? " bad" : "");
+    }
+    var needs = hasSummary && typeof s.needs_you === "number"
+      ? s.needs_you : (hasSummary ? (d.needs_you || []).length : null);
+    var skippedChecks = ((d.needs_you_meta || {}).checks || [])
+      .filter(function (c) { return c.status === "skipped"; }).length;
+    el = show("strip-needs", needs != null);
+    if (el && !el.hidden) {
+      /* A zero next to skipped checks is not a verified zero: say so in
+         the figure itself. */
+      el.textContent = "needs you: " + needs +
+        (skippedChecks
+          ? " (" + skippedChecks + (skippedChecks === 1 ? " check" : " checks") + " skipped)"
+          : "");
+      el.className = "sfig" + (needs > 0 ? " hot" : "");
+    }
+    el = show("strip-event", !!(st.state !== "replay" && typeof st.age === "number"));
+    if (el && !el.hidden) el.textContent = "last event " + fmtAgo(st.age);
   }
 
   function renderWatermark(st, d) {
@@ -186,7 +270,7 @@
       wm.hidden = false;
       wm.innerHTML =
         '<span class="wm-badge" aria-label="Replay mode">REPLAY</span>' +
-        '<span class="wm-copy">Historical scrub — not a live dispatch. ' +
+        '<span class="wm-copy">Historical scrub, not a live dispatch. ' +
         "Only events at or before the scrubber position are shown.</span>";
     } else {
       wm.hidden = true;
@@ -194,137 +278,117 @@
     }
   }
 
-  function renderAmbient(d, st) {
-    var led = $("floor-led");
-    if (led) led.className = LED_CLASS[st.state] || "led off";
-    var msg = $("floor-msg");
-    if (msg) {
-      var extra = "";
-      if (st.state === "replay") extra = " · <strong class=\"wm-inline\">REPLAY</strong>";
-      else if (st.state !== "live") extra = " · stream " + esc(st.state);
-      // Hang honesty: still "running" but quiet → call it out in ambient
-      var quiet = (d.waiting_on || []).some(function (w) { return w.kind === "quiet_stream"; });
-      if (quiet && st.state !== "replay") {
-        extra += ' · <strong class="wm-inline">QUIET</strong> (no new events)';
-      }
-      msg.innerHTML = "<strong>" + esc(d.status || "unknown") + "</strong> — dispatch " +
-        "<span class=\"mono\">" + esc(d.dispatch_id || "—") + "</span>" + extra;
-    }
-    var meta = $("floor-meta");
-    if (meta) {
-      var seqNote = "";
-      if (d.replay && d.replay.as_of_seq != null) {
-        seqNote = " · as_of_seq " + d.replay.as_of_seq + "/" + (d.replay.total_events || "—");
-      }
-      meta.textContent = (d.source || "live.json") +
-        " · last event " + (st.age == null ? "—" : fmtDur(st.age) + " ago") +
-        (st.age != null && st.age >= 90 ? " · follow may be stuck" : "") +
-        " · snapshot " + esc(d.generated_at || "—") + seqNote;
-    }
-  }
+  /* ── 4.2 NEEDS YOU ────────────────────────────────────────────────── */
 
-  function renderWaiting(d) {
-    var box = $("floor-waiting-items");
+  /* The reason the page exists: one row per item, newest first (the
+     projection orders), each with exactly one reachable action. The action
+     links to the item's source url when the source carries one, else to the
+     place on this page that answers it. An unverified item says so. Checks
+     that could not run are named in the note, and when the list is empty
+     because they did not run, the empty row itself carries the qualification
+     instead of reading as a verified all-clear. */
+  var CHECK_WORDS = {
+    critic_block: "critic verdicts",
+    ready_to_merge: "merge-ready PRs",
+    quiet_seat: "quiet seats",
+    failed_dispatch: "failed runs",
+    prd_proposed: "PRD sign-offs",
+    missing_variable: "repository variables",
+  };
+
+  function renderNeeds(d) {
+    var box = $("floor-needs-list");
     if (!box) return;
-    var items = d.waiting_on || [];
+    var items = d.needs_you || [];
+    var meta = d.needs_you_meta || {};
+    var skipped = (meta.checks || []).filter(function (c) { return c.status === "skipped"; });
+    var skippedNames = function () {
+      return skipped.map(function (c) {
+        return CHECK_WORDS[c.check] || c.check;
+      }).join(", ");
+    };
+    var note = $("floor-needs-note");
+    if (note) {
+      if (skipped.length) {
+        var reason = skipped[0].reason ? " (" + skipped[0].reason + ")" : "";
+        note.textContent = "not checked: " + skippedNames() + reason;
+        note.hidden = false;
+      } else {
+        note.textContent = "";
+        note.hidden = true;
+      }
+    }
     if (!items.length) {
-      box.innerHTML = '<p class="muted flush">Nothing waiting — no open gates, no rate-caps.</p>';
+      if (skipped.length) {
+        /* A skipped check means "unknown", never "nothing": when the checks
+           that matter did not run, the empty row itself says so, in words,
+           instead of claiming an all-clear (docs/experience-data.md). */
+        var reasons = [];
+        skipped.forEach(function (c) {
+          if (c.reason && reasons.indexOf(c.reason) < 0) reasons.push(c.reason);
+        });
+        box.innerHTML = '<li class="muted">Nothing found in the checks that ran; ' +
+          esc(skippedNames()) + " not checked" +
+          (reasons.length ? " (" + esc(reasons.join("; ")) + ")" : "") + ".</li>";
+      } else {
+        box.innerHTML = '<li class="muted">Nothing needs you.</li>';
+      }
       return;
     }
-    box.innerHTML = items.map(function (w) {
-      var kind = w.kind || "wait";
-      var pillCls = kind === "quiet_stream" ? "pill warn" : "pill accent";
-      return '<p class="witem flush' + (kind === "quiet_stream" ? " quiet" : "") + '">' +
-        '<span class="' + pillCls + '">' + esc(kind) + "</span> " +
-        esc(w.label || "waiting") +
-        (w.seconds != null ? ' <span class="muted mono">(' + esc(fmtDur(w.seconds)) + ")</span>" : "") +
-        (w.since && kind !== "quiet_stream" ? ' <span class="muted">since ' + esc(timeOf(w.since)) + "</span>" : "") +
-        "</p>";
+    /* Every row carries one reachable action: the source url when there is
+       one, else the place on this page that answers it. A failed run's
+       action opens the replay of its own stream; a PRD sign-off or a missing
+       variable jumps to the queue row it blocks; a quiet seat jumps to NOW.
+       A dead span is not an action. */
+    var queueRows = d.queue || [];
+    var actHref = function (it) {
+      var src = it.source || {};
+      if (src.url) return src.url;
+      if (it.type === "failed_dispatch") {
+        return src.dispatch_id
+          ? "?replay=1&dispatch_id=" + encodeURIComponent(src.dispatch_id)
+          : "#floor-failed-card";
+      }
+      if (it.type === "quiet_seat") return "#floor-now-card";
+      if (it.type === "prd_proposed" || it.type === "missing_variable") {
+        for (var i = 0; i < queueRows.length; i++) {
+          var q = queueRows[i];
+          var bsrc = (q.blocked_by || {}).source || {};
+          var match = (it.plan && q.plan_basename === it.plan) ||
+            (src.file && bsrc.file === src.file);
+          if (match && q.position != null) {
+            return "#floor-queue-row-" + q.position;
+          }
+        }
+        return "#floor-queue-card";
+      }
+      return "#floor-needs-card";
+    };
+    /* File sources publish only what the redaction law allows: the checkout
+       name, the path relative to it, and the line. */
+    var srcCite = function (it) {
+      var src = it.source || {};
+      if (src.kind === "file" && src.file) {
+        var at = (src.checkout ? src.checkout + ":" : "") + src.file +
+          (src.line ? ":" + src.line : "");
+        return ' <span class="mono faint">' + esc(at) + "</span>";
+      }
+      return "";
+    };
+    box.innerHTML = items.map(function (it) {
+      var act = esc(it.action || "look");
+      var actHtml = '<a class="act" href="' + esc(actHref(it)) + '">' + act + "</a>";
+      return '<li class="nrow' + (it.verified === false ? " unv" : "") + '">' +
+        '<span class="nbody">' +
+        (it.repo ? '<span class="rname">' + esc(it.repo) + "</span> " : "") +
+        esc(it.text || "item without text") +
+        (it.verified === false ? ' <span class="faint">(not verified)</span>' : "") +
+        srcCite(it) +
+        "</span>" + actHtml + "</li>";
     }).join("");
   }
 
-  /* Top line in plain words, from the summary object: how many running, how
-     many up next, how many landed today, when the last event arrived. The age
-     is the liveState age (computed in the browser from last_event_ts), the
-     same clock the rest of the chrome reads, so this line can never disagree
-     with the state note. Off a live stream the line says so in place and the
-     running count is qualified as of the last event. A replay carries no
-     summary, so the line goes away instead of guessing. */
-  function renderSummary(d, st) {
-    var el = $("floor-summary");
-    if (!el) return;
-    var s = d.summary;
-    var parts = [];
-    if (s && typeof s === "object") {
-      var degraded = st && (st.state === "stale" || st.state === "offline");
-      if (typeof s.running === "number") {
-        parts.push(s.running + " running" + (degraded ? " at last event" : ""));
-      }
-      if (typeof s.queued === "number") parts.push(s.queued + " up next");
-      if (typeof s.landed_today === "number") parts.push(s.landed_today + " landed today");
-      if (st && typeof st.age === "number") parts.push("last event " + fmtAgo(st.age));
-      if (degraded) parts.push("stream " + st.state);
-    }
-    if (!parts.length) {
-      el.hidden = true;
-      el.textContent = "";
-      return;
-    }
-    el.hidden = false;
-    el.textContent = parts.join(" · ");
-  }
-
-  /* The LED states explained in place, one short sentence for the state that
-     applies right now. Replay needs none: its watermark already says what it
-     is, and that copy is not touched here. */
-  function renderStateNote(d, st) {
-    var el = $("floor-state-note");
-    if (!el) return;
-    var stale = (d.staleness && d.staleness.stale_after_s) || 120;
-    var offline = (d.staleness && d.staleness.offline_after_s) || 900;
-    var txt = "";
-    if (st.state === "live") {
-      txt = "Live: events are arriving, so this page shows what is happening now.";
-    } else if (st.state === "stale") {
-      txt = "Stale: no new event for over " + fmtMin(stale) +
-        ", so the page shows the last known state and the clocks stay frozen.";
-    } else if (st.state === "offline") {
-      txt = "Offline: no new event for over " + fmtMin(offline) +
-        ", so everything below is history, not the present.";
-    }
-    if (!txt) {
-      el.hidden = true;
-      el.textContent = "";
-      return;
-    }
-    el.hidden = false;
-    el.textContent = txt;
-  }
-
-  function renderCounts(d) {
-    var c = d.counts || {};
-    var ids = { in_flight: "pipe-inflight", blocked: "pipe-blocked", settled: "pipe-settled" };
-    Object.keys(ids).forEach(function (k) {
-      var el = $(ids[k]);
-      if (el) el.textContent = (typeof c[k] === "number" ? c[k] : "\u2014");
-    });
-    /* Queued counts PLANS, not seats: the only real queue is the declared one.
-       With no queue file we fall back to the seat count and say so. */
-    var meta = d.queue_meta || {};
-    var queued = (d.queue || []).length;
-    var cell = $("pipe-queued");
-    if (cell) {
-      cell.textContent = meta.declared
-        ? queued
-        : (typeof c.queued === "number" ? c.queued : "\u2014");
-    }
-    var desc = $("pipe-queued-desc");
-    if (desc) {
-      desc.innerHTML = meta.declared
-        ? "plans armed in <span class=\"mono\">" + esc(meta.source || "logs/fleet-queue.json") + "</span>"
-        : "no queue declared, showing plan seats not started";
-    }
-  }
+  /* ── 4.3 NOW, grouped by repo (seat cards of PR 74, unchanged) ────── */
 
   /* One line of live activity under a seat: phase pill, tool, repo-relative
      path, then the counts the stream reported. Projection facts only: the
@@ -350,15 +414,6 @@
       '<span class="mono faint">' + esc(counts) + "</span></div>";
   }
 
-  /* The now view: one running seat reads as the purpose on its own line,
-     then one short status clause of nouns, built from the seats[].now object
-     the projection folds for exactly this. Every field is independently
-     nullable, so a missing fact drops its clause instead of printing a guess.
-     Ids and schema words (branch, attempt) are demoted to a dim secondary
-     line. The elapsed clock is the clause itself: it ticks in plain minutes
-     while the stream is live and freezes with the rest of the page off it,
-     so one fact never wears two clocks. The quiet badge keeps its rule:
-     quiet wears violet. */
   function nowPurpose(now) {
     var purpose = String(now.purpose || "").replace(/[.\s]+$/, "");
     return purpose ? '<div class="nowpurpose">' + esc(purpose) + ".</div>" : "";
@@ -433,7 +488,16 @@
         parts.push('running <span data-elapsed-from="' + esc(seat.started_at || "") +
           '" data-elapsed-min="1">' + fmtMin(now.elapsed_s) + "</span>");
       }
-      if (typeof now.heartbeat_age_s === "number") {
+      /* The heartbeat age derives from its timestamp and ticks on the same
+         clock the strip's "last event" recomputes from: a frozen projection
+         can never leave a fresh heartbeat under a green LED. The stored
+         heartbeat_age_s is the fallback only when no timestamp arrives. */
+      var hbMs = new Date(seat.last_heartbeat_ts || "").getTime();
+      if (!isNaN(hbMs)) {
+        var hbAge = Math.max(0, Math.round((Date.now() - hbMs) / 1000));
+        parts.push('heartbeat <span data-elapsed-from="' + esc(seat.last_heartbeat_ts) +
+          '" data-elapsed-ago="1">' + fmtAgo(hbAge) + "</span>");
+      } else if (typeof now.heartbeat_age_s === "number") {
         parts.push("heartbeat " + fmtAgo(now.heartbeat_age_s));
       }
     }
@@ -557,7 +621,9 @@
      Off a live stream it does not run at all: a clock still climbing while the
      LED says offline is a liveness claim the projection cannot back. Spans
      marked data-elapsed-min tick in plain minutes (the seat status clause),
-     the rest in the compact timer format. */
+     spans marked data-elapsed-ago tick as floored ages (the heartbeat, the
+     same clock as the strip's "last event"), the rest in the compact timer
+     format. */
   function tickElapsed() {
     if (!elapsedLive) return;
     var nodes = document.querySelectorAll("[data-elapsed-from]");
@@ -565,11 +631,17 @@
       var from = new Date(nodes[i].getAttribute("data-elapsed-from") || "").getTime();
       if (isNaN(from)) continue;
       var secs = Math.max(0, Math.round((Date.now() - from) / 1000));
-      nodes[i].textContent = nodes[i].getAttribute("data-elapsed-min") ? fmtMin(secs) : fmtDur(secs);
+      nodes[i].textContent = nodes[i].getAttribute("data-elapsed-ago")
+        ? fmtAgo(secs)
+        : nodes[i].getAttribute("data-elapsed-min") ? fmtMin(secs) : fmtDur(secs);
     }
   }
 
-  /* Up next: declared intent. Never rendered as motion, never as "running". */
+  /* ── 4.4 UP NEXT ──────────────────────────────────────────────────── */
+
+  /* Up next: declared intent. Never rendered as motion, never as "running".
+     A blocked plan shows its reason in place (Floor v3-A queue[].blocked)
+     instead of pretending it is ready. */
   function renderQueue(d) {
     var box = $("floor-queue-list");
     if (!box) return;
@@ -590,32 +662,152 @@
     }
     box.innerHTML = items.map(function (q) {
       /* Repo is the first word; the issue number follows when the plan
-         header names one (issue 72). */
+         header names one (issue 72). A blocked reason renders in place. */
       var issue = q.issue && typeof q.issue.number === "number"
         ? ' <span class="mono">#' + q.issue.number + "</span>" : "";
-      return '<li class="qrow">' +
+      var blocked = q.blocked
+        ? '<span class="qblocked">blocked: ' + esc(q.blocked) + "</span>" : "";
+      /* The row id lets a NEEDS YOU action jump straight to the plan it
+         blocks. */
+      var rowId = q.position != null
+        ? ' id="floor-queue-row-' + esc(q.position) + '"' : "";
+      return '<li class="qrow' + (q.blocked ? " isblocked" : "") + '"' + rowId + '>' +
         '<span class="qpos mono">' + esc(q.position) + "</span>" +
         '<span class="qbody"><span class="qpurpose"><span class="rname">' +
         esc(q.repo || "repo not declared") + "</span>" + issue + " " +
         esc(q.purpose || "no purpose declared") + "</span>" +
-        '<span class="qmeta"><span class="mono faint">' + esc(q.plan_basename || q.plan || "") + "</span></span></span>" +
+        '<span class="qmeta"><span class="mono faint">' + esc(q.plan_basename || q.plan || "") + "</span>" +
+        blocked + "</span></span>" +
         '<span class="st st-unk">queued</span></li>';
     }).join("");
   }
 
-  /* Landed today: every dispatch whose dispatch_end fell on this local day.
-     The "still live" count is a liveness claim like any other on this page, so
-     off a live stream it is qualified with "at last event" instead of being
-     asserted in the present tense. State comes from renderAll. */
-  function renderToday(d, st) {
-    var box = $("floor-today-list");
+  /* ── 4.5 INITIATIVES ──────────────────────────────────────────────── */
+
+  /* One row per open milestone with recent activity (Floor v3-A
+     initiatives[]): waves landed of planned, open issues, last landed PR,
+     exit sentence. A fallback row (lookup skipped) shows only what the
+     streams and the queue alone prove, and says so. */
+  function initiativeFacts(r) {
+    var bits = [];
+    var w = r.waves || {};
+    if (typeof w.planned === "number") {
+      bits.push("wave " + (w.landed || 0) + " of " + w.planned);
+    }
+    if (typeof r.open_issues === "number") {
+      bits.push(r.open_issues + " open issue" + (r.open_issues === 1 ? "" : "s"));
+    }
+    var ll = r.last_landed;
+    if (ll && typeof ll.number === "number") {
+      bits.push("last landed #" + ll.number + (ll.title ? " " + ll.title : ""));
+    }
+    if (r.exit) bits.push("exit: " + r.exit);
+    return bits;
+  }
+
+  function initiativeRow(r) {
+    var title = r.url
+      ? '<a href="' + esc(r.url) + '">' + esc(r.title || "milestone") + "</a>"
+      : "<strong>" + esc(r.title || "milestone") + "</strong>";
+    var facts = initiativeFacts(r);
+    var tail = "";
+    if (r.lookup === "skipped") {
+      tail = '<span class="ifall">streams and queue alone' +
+        (r.reason ? " · milestone not verified (" + esc(r.reason) + ")" : " · milestone not verified") +
+        "</span>";
+    } else if (r.exit_lookup === "skipped") {
+      tail = '<span class="ifall">exit sentence not verified</span>';
+    }
+    return '<li class="irow"><span class="ibody">' +
+      '<span class="ititle"><span class="rname">' + esc(r.repo || "repo not reported") + "</span> " +
+      title + "</span>" +
+      '<span class="ifacts">' + esc(facts.join(" · ")) +
+      (facts.length && tail ? " · " : "") + tail + "</span>" +
+      "</span></li>";
+  }
+
+  function renderInitiatives(d) {
+    var box = $("floor-initiatives-list");
     if (!box) return;
+    var rows = d.initiatives || [];
+    var note = $("floor-initiatives-note");
+    if (note) {
+      var meta = d.initiatives_meta || {};
+      var days = typeof meta.active_days === "number" ? meta.active_days : 30;
+      note.textContent = rows.length
+        ? "open milestones active in the last " + days + " days"
+        : "";
+      note.hidden = !rows.length;
+    }
+    if (!rows.length) {
+      box.innerHTML = '<li class="muted">No open milestone with recent activity is known to this projection.</li>';
+      return;
+    }
+    box.innerHTML = rows.map(initiativeRow).join("");
+  }
+
+  /* ── 4.6 FAILED and LANDED today ──────────────────────────────────── */
+
+  function todayRow(t) {
+    var word = outcomeWord(t);
+    var cls = outcomeClass(word);
+    var branches = (t.branches || []).map(function (b) {
+      return '<span class="mono faint">' + esc(b) + "</span>";
+    }).join(" ");
+    /* Repo is the first word; the receipt follows (proposal section 4:
+       every number a link to its source). A landed run's PR number links to
+       the PR and carries its title; every run links the replay of its own
+       stream, and its trail when the Almanac join exists. */
+    var pr = "";
+    if (t.pr && typeof t.pr.number === "number") {
+      var label = "PR #" + t.pr.number + (t.pr.title ? " · " + t.pr.title : "");
+      pr = t.pr.url
+        ? ' <a class="mono" href="' + esc(t.pr.url) + '">' + esc(label) + "</a>"
+        : ' <span class="mono">' + esc(label) + "</span>";
+    }
+    var links = almanacLinks();
+    var branch0 = (t.branches || [])[0] || "";
+    var trailId = branch0 && links.by_branch ? links.by_branch[branch0] : null;
+    var receipt = "";
+    if (trailId) {
+      receipt = '<a href="../trail/' + esc(trailId) + '/index.html">trail</a>';
+    }
+    if (t.dispatch_id) {
+      receipt += (receipt ? " " : "") +
+        '<a href="?replay=1&amp;dispatch_id=' +
+        esc(encodeURIComponent(t.dispatch_id)) + '">replay</a>';
+    }
+    return '<li class="trow">' +
+      '<span class="tbody"><span class="tpurpose"><span class="rname">' +
+      esc(t.repo || "repo not reported") + "</span>" + pr + " " +
+      esc(t.purpose || t.plan_basename || t.dispatch_id) + "</span>" +
+      '<span class="tmeta">' +
+      (branches || '<span class="faint">no branch reported</span>') +
+      (receipt ? " " + receipt : "") + "</span></span>" +
+      '<span class="' + cls + ' tout">' + esc(word) + "</span>" +
+      '<span class="timer mono">' + fmtMin(t.duration_s) + "</span></li>";
+  }
+
+  /* Two lists, failed first when non-empty. Aborted runs sit in the failed
+     list with their own word: they did not land. The "still live" count is
+     a liveness claim like any other on this page, so off a live stream it
+     is qualified with "at last event" instead of the present tense. */
+  function renderToday(d, st) {
     var items = d.today || [];
+    var failedRows = [];
+    var landedRows = [];
+    items.forEach(function (t) {
+      var w = outcomeWord(t);
+      if (w === "failed" || w === "aborted") failedRows.push(t);
+      else landedRows.push(t);
+    });
+
+    var fbox = $("floor-failed-list");
+    if (fbox) fbox.innerHTML = failedRows.map(todayRow).join("");
+    var fcard = $("floor-failed-card");
+    if (fcard) fcard.hidden = !failedRows.length;
+
     var meta = d.today_meta || {};
-    /* The note is a variable length, data driven string, so it lives in the
-       muted paragraph UNDER the head (same as #floor-queue-note), never in the
-       .cardhead .more slot: that slot is white-space: nowrap and a live day
-       pushed the whole page sideways at 400px. */
     var note = $("floor-today-note");
     if (note) {
       var state = (st && st.state) || liveState(d).state;
@@ -626,39 +818,118 @@
       note.textContent = "dispatch_end on " + (meta.date || "today") +
         " · " + (meta.streams_read || 0) + " stream(s) read" + liveTxt;
     }
+    var lbox = $("floor-today-list");
+    if (!lbox) return;
+    lbox.innerHTML = landedRows.length
+      ? landedRows.map(todayRow).join("")
+      : '<li class="muted">Nothing has landed today yet.</li>';
+  }
+
+  /* ── 4.7 details: legacy chrome behind one fold ───────────────────── */
+
+  /* Stream facts inside the details fold: status and dispatch id, the
+     stream path, the snapshot time. Hang honesty stays here: a run still
+     marked running but quiet is called out, never left a silent green. */
+  function renderAmbient(d, st) {
+    var msg = $("floor-msg");
+    if (msg) {
+      var extra = "";
+      if (st.state === "replay") extra = " · <strong class=\"wm-inline\">REPLAY</strong>";
+      else if (st.state !== "live") extra = " · stream " + esc(st.state);
+      var quiet = (d.waiting_on || []).some(function (w) { return w.kind === "quiet_stream"; });
+      if (quiet && st.state !== "replay") {
+        extra += ' · <strong class="wm-inline">QUIET</strong> (no new events)';
+      }
+      msg.innerHTML = "<strong>" + esc(d.status || "unknown") + "</strong>, dispatch " +
+        "<span class=\"mono\">" + esc(d.dispatch_id || "—") + "</span>" + extra;
+    }
+    var meta = $("floor-meta");
+    if (meta) {
+      var seqNote = "";
+      if (d.replay && d.replay.as_of_seq != null) {
+        seqNote = " · as_of_seq " + d.replay.as_of_seq + "/" + (d.replay.total_events || "—");
+      }
+      meta.textContent = (d.source || "live.json") +
+        " · last event " + (st.age == null ? "—" : fmtDur(st.age) + " ago") +
+        (st.age != null && st.age >= 90 ? " · follow may be stuck" : "") +
+        " · snapshot " + esc(d.generated_at || "—") + seqNote;
+    }
+  }
+
+  function renderWaiting(d) {
+    var box = $("floor-waiting-items");
+    if (!box) return;
+    var items = d.waiting_on || [];
     if (!items.length) {
-      box.innerHTML = '<li class="muted">Nothing has landed today yet.</li>';
+      box.innerHTML = '<p class="muted flush">Nothing waiting: no open gates, no rate-caps.</p>';
       return;
     }
-    box.innerHTML = items.map(function (t) {
-      /* Outcome in words from the projection's today[].outcome (landed,
-         failed, aborted), which reads the seat exits; status alone cannot
-         tell a failed run from an operator stop. Older projections without
-         outcome fall back to the status map. Failed and aborted wear
-         different pills so a scan of the column tells them apart. */
-      var word = t.outcome ||
-        (t.status === "settled" ? "landed"
-        : t.status === "failed" ? "failed"
-        : t.status === "aborted" ? "aborted" : (t.status || "unknown"));
-      var cls = word === "landed" ? "st st-done"
-        : word === "failed" ? "st st-fail"
-        : word === "aborted" ? "st st-warn" : "st st-unk";
-      var branches = (t.branches || []).map(function (b) {
-        return '<span class="mono faint">' + esc(b) + "</span>";
-      }).join(" ");
-      /* Repo is the first word; the PR number follows when one exists for
-         the landing's branch (issue 72). */
-      var pr = t.pr && typeof t.pr.number === "number"
-        ? ' <span class="mono">PR #' + t.pr.number + "</span>" : "";
-      return '<li class="trow">' +
-        '<span class="tbody"><span class="tpurpose"><span class="rname">' +
-        esc(t.repo || "repo not reported") + "</span>" + pr + " " +
-        esc(t.purpose || t.plan_basename || t.dispatch_id) + "</span>" +
-        '<span class="tmeta">' +
-        (branches || '<span class="faint">no branch reported</span>') + "</span></span>" +
-        '<span class="' + cls + ' tout">' + esc(word) + "</span>" +
-        '<span class="timer mono">' + fmtMin(t.duration_s) + "</span></li>";
+    box.innerHTML = items.map(function (w) {
+      var kind = w.kind || "wait";
+      var pillCls = kind === "quiet_stream" ? "pill warn" : "pill accent";
+      return '<p class="witem flush' + (kind === "quiet_stream" ? " quiet" : "") + '">' +
+        '<span class="' + pillCls + '">' + esc(kind) + "</span> " +
+        esc(w.label || "waiting") +
+        (w.seconds != null ? ' <span class="muted mono">(' + esc(fmtDur(w.seconds)) + ")</span>" : "") +
+        (w.since && kind !== "quiet_stream" ? ' <span class="muted">since ' + esc(timeOf(w.since)) + "</span>" : "") +
+        "</p>";
     }).join("");
+  }
+
+  function renderCounts(d) {
+    var c = d.counts || {};
+    var ids = { in_flight: "pipe-inflight", blocked: "pipe-blocked", settled: "pipe-settled" };
+    Object.keys(ids).forEach(function (k) {
+      var el = $(ids[k]);
+      if (el) el.textContent = (typeof c[k] === "number" ? c[k] : "—");
+    });
+    /* Queued counts PLANS, not seats: the only real queue is the declared one.
+       With no queue file we fall back to the seat count and say so. */
+    var meta = d.queue_meta || {};
+    var queued = (d.queue || []).length;
+    var cell = $("pipe-queued");
+    if (cell) {
+      cell.textContent = meta.declared
+        ? queued
+        : (typeof c.queued === "number" ? c.queued : "—");
+    }
+    var desc = $("pipe-queued-desc");
+    if (desc) {
+      desc.innerHTML = meta.declared
+        ? "plans armed in <span class=\"mono\">" + esc(meta.source || "logs/fleet-queue.json") + "</span>"
+        : "no queue declared, showing plan seats not started";
+    }
+  }
+
+  function seatLane(seat) {
+    var links = almanacLinks();
+    var chips = "";
+    if (seat.ratecapped) chips += '<span class="vendor warn">rate-cap</span>';
+    (seat.failovers || []).forEach(function (f) {
+      chips += '<span class="vendor warn">failover ' + esc(f.from) + " → " + esc(f.to) + "</span>";
+    });
+    var vendor = [seat.provider, seat.model].filter(Boolean).join(" · ");
+    var branch = seat.branch || "";
+    var trailId = branch && links.by_branch ? links.by_branch[branch] : null;
+    var branchHtml = esc(branch || "branch not yet reported");
+    if (trailId) {
+      branchHtml = '<a href="../trail/' + esc(trailId) + '/index.html" class="mono">' +
+        esc(branch) + "</a> <span class=\"faint\">→ trail</span>";
+    }
+    return '<div class="lane' + (seat.status === "running" ? " run" : "") + '">' +
+      '<div class="lane-top"><span class="role">' + esc(seat.agent || seat.task_id) + "</span>" +
+      seatPill(seat) + '<span class="timer">' + seatTimer(seat) + "</span></div>" +
+      '<div class="branch">' + branchHtml + "</div>" +
+      '<span class="vendor">' + esc(vendor || "provider —") + "</span>" + chips +
+      "</div>";
+  }
+
+  function ghostLane() {
+    return '<div class="lane ghost">' +
+      '<div class="lane-top"><span class="role">plan seat</span>' +
+      '<span class="st st-unk">queued</span><span class="timer">—</span></div>' +
+      '<div class="branch">seat planned by the dispatch, not yet started</div>' +
+      '<span class="vendor">provider —</span></div>';
   }
 
   function renderLanes(d) {
@@ -686,9 +957,9 @@
       inner += '<h3 class="wavehead2">Planned, not started</h3><div class="lanes">' + g + "</div>";
     }
     if (!inner) {
-      inner = '<p class="empty">Dispatch reported no seats yet — the stream is the only source of lanes.</p>';
+      inner = '<p class="empty">Dispatch reported no seats yet; the stream is the only source of lanes.</p>';
     }
-    modeBody.innerHTML = '<div class="card"><div class="cardhead"><h2>Wave — parallel seat lanes</h2>' +
+    modeBody.innerHTML = '<div class="card"><div class="cardhead"><h2>Wave, parallel seat lanes</h2>' +
       '<span class="more faint">wave mode</span></div>' +
       '<p class="muted">Ghost lanes are plan seats not yet started. Rate-cap and failover ride the lane as honest chrome.</p>' +
       inner + "</div>";
@@ -711,7 +982,7 @@
       });
       inner = '<div class="spine">' + nodes.join('<span class="spine-link"></span>') + "</div>";
     }
-    modeBody.innerHTML = '<div class="card"><div class="cardhead"><h2>Conductor — serial spine</h2>' +
+    modeBody.innerHTML = '<div class="card"><div class="cardhead"><h2>Conductor, serial spine</h2>' +
       '<span class="more faint">conductor mode</span></div>' +
       '<p class="muted">Settled nodes fill, the hot pin marks the live seat, dashed nodes stay ahead of it.</p>' +
       inner + "</div>";
@@ -748,7 +1019,7 @@
       parts.push('<a href="../mission/' + esc(mslug) + '/index.html">Mission for plan ' + esc(plan) + "</a>");
     } else if (plan) {
       parts.push('<span class="muted">Plan <span class="mono">' + esc(plan) +
-        "</span> — no mission join in this Almanac build</span>");
+        "</span>, no mission join in this Almanac build</span>");
     }
     var seats = d.seats || [];
     var trailLinks = [];
@@ -787,9 +1058,9 @@
 
     if (!isReplay && terminal) {
       panel.innerHTML =
-        '<div class="scrub-head"><strong>Settled run</strong> — open historical scrub</div>' +
+        '<div class="scrub-head"><strong>Settled run</strong>, open historical scrub</div>' +
         '<p class="muted flush">This dispatch is no longer live. Replay shows only events at or ' +
-        "before the scrubber — never a green LIVE LED.</p>" +
+        "before the scrubber, never a green live LED.</p>" +
         '<p><button type="button" class="btn-replay" id="floor-enter-replay">Enter REPLAY</button> ' +
         '<span class="mono muted">' + esc(did) + "</span></p>";
       var btn = $("floor-enter-replay");
@@ -896,22 +1167,48 @@
     if (!d || d.schema !== "live/1") return;
     mode.last = d;
     var st = liveState(d);
-    // Hard honesty: never green LIVE when view says replay.
+    // Hard honesty: never green live when the view says replay.
     if (d.view === "replay" && st.state === "live") st = { state: "replay", age: st.age };
     elapsedLive = st.state === "live";
-    renderSummary(d, st);
+    // Section order of the v3 page (proposal section 4).
     renderWatermark(st, d);
-    renderAmbient(d, st);
-    renderStateNote(d, st);
-    renderWaiting(d);
-    renderCounts(d);
+    renderStrip(d, st);
+    renderNeeds(d);
     renderNow(d, st);
     renderQueue(d);
+    renderInitiatives(d);
     renderToday(d, st);
+    // The details fold.
+    renderAmbient(d, st);
+    renderWaiting(d);
+    renderCounts(d);
     if (d.mode === "conductor") renderSpine(d); else renderLanes(d);
     renderEvents(d);
     renderCrossLinks(d);
     renderScrubber(d);
+  }
+
+  /* A replay receipt opened on a desk with no live server (the documented
+     file:// desk, or the static site with no /api) must become a visible
+     state, never a silent keep of the live snapshot: the watermark says the
+     replay is not available here, the LED goes off, the strip figures hide,
+     the clocks stay frozen, and the reader gets a way back to the Floor. */
+  function replayUnavailable(dispatchId) {
+    elapsedLive = false;
+    var led = $("floor-led");
+    if (led) led.className = "led off";
+    ["strip-running", "strip-queued", "strip-landed", "strip-failed",
+      "strip-needs", "strip-event"].forEach(function (id) { show(id, false); });
+    var wm = $("floor-watermark");
+    if (!wm) return;
+    wm.hidden = false;
+    wm.innerHTML =
+      '<span class="wm-badge" aria-label="Replay unavailable">REPLAY</span>' +
+      '<span class="wm-copy">Replay of <span class="mono">' +
+      esc(dispatchId || "this dispatch") + "</span> is not available on this desk " +
+      "(it needs <code>make desk-live</code> serving the event stream).</span>" +
+      '<a class="btn-replay" href="' + esc(window.location.pathname) +
+      '">Exit to live Floor</a>';
   }
 
   function loadReplay(dispatchId, asOfSeq) {
@@ -923,13 +1220,12 @@
     fetch(url, { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        if (d) {
-          // Server should stamp view=replay; force it if missing.
-          if (d.view !== "replay") d.view = "replay";
-          renderAll(d);
-        }
+        if (!d) { replayUnavailable(dispatchId); return; }
+        // Server should stamp view=replay; force it if missing.
+        if (d.view !== "replay") d.view = "replay";
+        renderAll(d);
       })
-      .catch(function () { elapsedLive = false; /* keep snapshot, frozen */ });
+      .catch(function () { replayUnavailable(dispatchId); });
   }
 
   function stopLivePoll() {
@@ -962,6 +1258,21 @@
     mode.replay = false;
     pollLive();
   }
+
+  /* Every anchor jump on the page must land below the sticky header, whose
+     height changes whenever the nav or the scope chips wrap: no constant
+     tracks it, so measure the header on load and on resize and drive the
+     single scroll-padding rule of site.css. One rule covers every target,
+     queue rows included. */
+  function measureHeader() {
+    var h = document.querySelector("header.site");
+    if (!h) return;
+    document.documentElement.style.setProperty(
+      "--floor-header-h", (Math.ceil(h.getBoundingClientRect().height) + 8) + "px");
+  }
+  window.addEventListener("resize", measureHeader);
+  window.addEventListener("load", measureHeader);
+  measureHeader();
 
   // Boot
   setInterval(tickElapsed, 1000);

@@ -222,6 +222,12 @@ header.site {
   text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint);
 }
 .cardhead .more { font-size: 12px; white-space: nowrap; }
+/* The NEEDS YOU skip note can run long (several check names plus a reason),
+   and a note must never widen the page: it wraps inside its own head. */
+.cardhead .more#floor-needs-note {
+  white-space: normal; text-align: right;
+  min-width: 0; overflow-wrap: anywhere;
+}
 .card h2.sec {
   margin: 14px 0 6px; font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint);
@@ -417,9 +423,38 @@ a.repo-chip:hover { border-color: var(--accent); text-decoration: none; }
 .ambient .state-note { flex-basis: 100%; font-size: 12px; color: var(--muted); }
 .ambient .state-note[hidden] { display: none; }
 
-/* Top line in plain words (issue 69): counts from the summary object only. */
-.floor-summary { margin: -4px 0 14px; font-size: 14px; }
-.floor-summary[hidden] { display: none; }
+/* v3 status strip (proposal section 4.1): the first thing under the title.
+   Every figure is a link to its section. Under stale or offline the state
+   sentence takes the full first row, in words, before any number. */
+.strip {
+  display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: 14px;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius);
+  font-size: 13px;
+}
+.strip .state-note {
+  flex-basis: 100%; font-size: 12.5px; color: var(--warn); line-height: 1.4;
+}
+.strip .state-note[hidden] { display: none; }
+.sfig {
+  color: var(--ink); font-weight: 600;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+a.sfig:hover { color: var(--accent); text-decoration: none; }
+.sfig.dim { color: var(--muted); font-weight: 500; }
+/* needs you is red when non-zero; failed is red when non-zero. */
+.sfig.hot { color: var(--bad); }
+.sfig.bad { color: var(--bad); }
+
+/* Strip figures and the in-page NEEDS YOU actions link to sections and
+   queue rows, and the sticky header must not eat the heading the reader
+   jumped to: one rule covers every anchor target on the page, current and
+   future. The value is the measured header height, which floor.js sets on
+   load and resize, because the nav and scope chips wrap at several widths
+   (measured 129 px at 1280, 237 px at 400) and no constant tracks them. */
+html { scroll-padding-top: var(--floor-header-h, 140px); }
+
+a.btn-replay { display: inline-block; text-decoration: none; }
 
 .waiting {
   display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
@@ -642,6 +677,38 @@ details.floor-legacy[open] > summary { margin-bottom: 10px; }
   padding: 1px 8px; font-size: 10px; font-weight: 700;
   text-transform: uppercase; letter-spacing: 0.04em;
 }
+
+/* ── Ops Floor v3: NEEDS YOU, INITIATIVES, blocked queue rows ───────── */
+/* One row per item, newest first, exactly one action at the right edge. */
+.nlist, .ilist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.nlist > li, .ilist > li {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--bg3); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 9px 12px; font-size: 12.5px;
+}
+.nlist > li.muted, .ilist > li.muted {
+  border-style: dashed; color: var(--muted); font-size: 12px;
+}
+.nrow .nbody { flex: 1 1 220px; min-width: 0; line-height: 1.35; }
+/* An item that could not be verified says so in words and dims; it never
+   reads as confirmed. */
+.nrow.unv { border-style: dashed; }
+.nrow .act {
+  flex: 0 0 auto; font-weight: 650; font-size: 12px; color: var(--accent);
+  white-space: nowrap;
+}
+a.act:hover { text-decoration: underline; }
+
+/* Initiatives: title line, then the facts line (waves, issues, last landed,
+   exit). A fallback row names its limitation in place. */
+.irow .ibody { flex: 1 1 260px; min-width: 0; display: grid; gap: 3px; }
+.irow .ititle { line-height: 1.35; }
+.irow .ifacts { font-size: 12px; color: var(--muted); line-height: 1.4; overflow-wrap: anywhere; }
+.irow .ifall { color: var(--warn); }
+
+/* A blocked queued plan shows its reason in place, on the dim plan line. */
+.qrow.isblocked { border-color: var(--warn); }
+.qblocked { color: var(--warn); font-size: 11px; overflow-wrap: anywhere; }
 
 ol.events {
   margin: 0; padding-left: 0; list-style: none;
