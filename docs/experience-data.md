@@ -1019,6 +1019,47 @@ Rules the projector enforces:
 * the gh rules are unchanged: optional, cached, budgeted (60 calls per
   projection), never fatal, off with `--no-gh` or `FLEET_DESK_NO_GH=1`.
 
+### Yesterday and the push (Floor v3, wave C)
+
+Law: [`docs/proposals/floor-v3-purpose.md`](proposals/floor-v3-purpose.md)
+§ 5. The strip offers today and yesterday; history deeper than that stays in
+the Almanac. Nothing pushes unless the owner turns it on.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `yesterday[]` | array | One entry per dispatch whose `dispatch_end` fell on the **previous** local calendar day, read from the same streams the same way as `today[]`: every key of a `today[]` row, the same `outcome` rule, newest first |
+| `yesterday_meta` | object | `{day: "yesterday", date, streams_read, live, ended}`, the keys of `today_meta`. `live` is always `[]`: a run with no close-out is in motion now and belongs to today. `today_meta` carries `day: "today"`, so the payload says which day a block is, never its position |
+| `summary.landed_yesterday` | int | The row count of `yesterday[]`, next to `landed_today` |
+
+Rules:
+
+* a replay carries `yesterday: []` like `today: []`;
+* on the page the toggle switches only the landed and failed figures and the
+  two lists; running, up next and needs you are the present and do not
+  switch. A projection without `yesterday_meta` (an older watcher) hides the
+  toggle and reads today;
+* the day-stream scan looks back 50 hours by file mtime (yesterday plus a
+  25 hour DST day); nothing older is read here.
+
+**The push.** `scripts/notify.sh needs-you [live.json]` reads the projection
+and sends **one macOS notification per NEEDS YOU item** that has had no
+action for N minutes, with the item's own `text` as the one line. Once per
+item, never twice: sent items are recorded by their `type` and `source` in a
+seen file. `desk_live.py` calls it after every write (`--once`, `--watch`
+and the server's watcher), never fatally, and only when the variable is set.
+
+| Variable | Meaning |
+|----------|---------|
+| `FLEET_NOTIFY_NEEDS_YOU_MIN` | N, in minutes. **Unset or empty: nothing is sent and nothing is written** (the default). `FLEET_NOTIFY_NEEDS_YOU_MIN=10 make desk-follow` turns it on |
+| `FLEET_NOTIFY_NEEDS_YOU_STATE` | The seen file (default `logs/notify-state/needs-you.seen`, gitignored with the rest of `logs/`) |
+| `FLEET_NOTIFY_SILENT=1` | Still gates the toast, as for seat outcomes; the stdout line and the seen record happen either way |
+
+What is pushed, and what never is: only a `view: live` projection (a replay
+is history), only `verified` items, only an item whose `at` proves it has
+waited N minutes (an item with `at: null` cannot prove it and is never
+pushed). An item that leaves the list (the owner acted) is simply never
+pushed; one that comes back with a new source is a new item.
+
 ### Phase C — replay API
 
 | Route / flag | Meaning |
@@ -1041,6 +1082,7 @@ python3 scripts/desk_live.py --once --dispatch-id 20260729-100000-dev-agents --p
 python3 scripts/desk_live.py --once --dispatch-id ID --as-of-seq 4 --replay
 python3 scripts/desk_live.py --once --no-gh    # no gh enrichment (also FLEET_DESK_NO_GH=1)
 python3 scripts/desk_live.py --list-runs
+FLEET_NOTIFY_NEEDS_YOU_MIN=10 make desk-follow   # push: one toast per NEEDS YOU item idle 10 min
 ```
 
 The server binds loopback only, serves `site/experience/`, and adds routes:

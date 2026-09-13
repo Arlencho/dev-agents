@@ -15,6 +15,14 @@ while scrubbing history.
     python3 scripts/desk_live.py --once     write live.json once and exit
     python3 scripts/desk_live.py --once --dispatch-id ID --as-of-seq N --replay
 
+Floor v3-C adds the day before and the push. ``yesterday[]`` and
+``yesterday_meta`` are read the same way as ``today[]``: one row per dispatch
+that ended on the previous local day, same shape, marked ``day: yesterday``.
+History deeper than that stays in the Almanac. After each write the watcher
+calls ``scripts/notify.sh needs-you`` when ``FLEET_NOTIFY_NEEDS_YOU_MIN`` is
+set, so a NEEDS YOU item nobody acted on for that many minutes reaches the
+owner once as a macOS notification. Off by default, never fatal.
+
 Law: docs/proposals/fleet-desk-v2-SYNTHESIS.md §3 Phases B+C
 Schema: docs/experience-data.md § Live event stream
 
@@ -59,7 +67,8 @@ OFFLINE_AFTER = 900   # seconds without an event → OFFLINE chrome
 QUIET_AFTER = 90      # running stream with no new events → waiting_on quiet_stream
 RECENT_EVENTS = 50    # tail kept in the projection (already redaction-safe)
 QUEUE_SCHEMA = "fleet-queue/1"
-DAY_SCAN_WINDOW_S = 48 * 3600   # mtime prefilter when scanning the day streams
+DAY_SCAN_WINDOW_S = 50 * 3600   # mtime prefilter when scanning the day streams:
+                                # today and yesterday, with slack for a 25 h DST day
 
 
 def _env_float(name, default):
@@ -234,7 +243,12 @@ def empty_projection(now=None, reason="no dispatch has emitted events yet"):
                        "total": 0, "queued": 0, "running": 0, "settled": 0},
         # Day view: one entry per dispatch that ENDED on this local calendar day.
         "today": [],
-        "today_meta": {"date": None, "streams_read": 0, "live": [], "ended": 0},
+        "today_meta": {"day": "today", "date": None, "streams_read": 0, "live": [], "ended": 0},
+        # Floor v3-C: the day before, same shape, marked yesterday. Deeper
+        # history stays in the Almanac. [] here so the keys always exist.
+        "yesterday": [],
+        "yesterday_meta": {"day": "yesterday", "date": None, "streams_read": 0,
+                           "live": [], "ended": 0},
         # The one line at the top of the Floor, in plain counts. Filled by
         # build(); zeros here so the key always exists (a replay sets it None).
         "summary": {"running": 0, "queued": 0, "landed_today": 0,
@@ -535,18 +549,22 @@ def day_streams(events_dir, now):
     return out
 
 
-def today_view(events_dir, now, entries):
-    """Every dispatch that ENDED on this local calendar day, plus the live ones.
+def day_view(events_dir, now, entries, days_back=0):
+    """Every dispatch that ENDED on one local calendar day, plus the live ones.
 
-    Live means still in motion: no ``dispatch_end`` yet and started on this
-    local date or the one before, so a run that crossed local midnight is
-    still followed and counted. Reads every stream file of the day, not only
-    the newest, so concurrent dispatches all appear. Purpose and plan path
-    come from the queue when the basename matches; the stream only ever
-    carries a basename.
+    ``days_back`` 0 is today, 1 is yesterday (Floor v3-C); nothing deeper,
+    that history is the Almanac's. Live means still in motion: no
+    ``dispatch_end`` yet and started on this local date or the one before, so
+    a run that crossed local midnight is still followed and counted. Only
+    today carries live runs: a run with no close-out is in motion now, and
+    yesterday's row list claims nothing about the present. Reads every stream
+    file of the day, not only the newest, so concurrent dispatches all appear.
+    Purpose and plan path come from the queue when the basename matches; the
+    stream only ever carries a basename.
     """
     today = local_date(now)
-    live_dates = (today, today - timedelta(days=1))
+    day = today - timedelta(days=days_back)
+    live_dates = (today, today - timedelta(days=1)) if days_back == 0 else ()
     index = queue_purpose_index(entries)
     landed, live = [], []
     summaries = day_streams(events_dir, now)
@@ -554,7 +572,7 @@ def today_view(events_dir, now, entries):
         ended = parse_ts(summary.get("ended_at"))
         started = parse_ts(summary.get("started_at"))
         known = index.get(os.path.basename(summary.get("plan") or "")) or {}
-        if ended is not None and local_date(ended) == today:
+        if ended is not None and local_date(ended) == day:
             landed.append({
                 "dispatch_id": summary["dispatch_id"],
                 "source": summary["source"],
@@ -579,12 +597,18 @@ def today_view(events_dir, now, entries):
     landed.sort(key=lambda r: r.get("ended_at") or "", reverse=True)
     live.sort(key=lambda r: r.get("started_at") or "")
     meta = {
-        "date": today.isoformat(),
+        "day": "today" if days_back == 0 else "yesterday",
+        "date": day.isoformat(),
         "streams_read": len(summaries),
         "live": [s["dispatch_id"] for s in live],
         "ended": len(landed),
     }
     return landed, live, meta
+
+
+def today_view(events_dir, now, entries):
+    """Today's rows, live runs and meta (``day_view`` with ``days_back=0``)."""
+    return day_view(events_dir, now, entries, 0)
 
 
 def merge_live_seats(proj, events_dir, now, live_summaries):
@@ -1481,7 +1505,8 @@ def attach_context(proj, queue_entries, live_summaries, plan_cache, gh):
         plan = cached_plan(plan_cache, entry.get("plan"), queue_entries)
         known = index.get(entry.get("plan_basename"))
         entry["issue"] = issue_context(entry.get("repo"), plan, known, gh)
-    for row in proj.get("today") or []:
+    # Floor v3-C: a landing yesterday gets the same PR join as one today.
+    for row in list(proj.get("today") or []) + list(proj.get("yesterday") or []):
         row["prs"] = [gh.pr(row.get("repo"), b) for b in row.get("branches") or []]
         found = next((p for p in row["prs"] if p.get("number") is not None), None)
         row["pr"] = found or (row["prs"][0] if row["prs"] else gh.pr(row.get("repo"), None))
@@ -2303,6 +2328,7 @@ def attach_now(proj, queue_entries):
         "running": running,
         "queued": (proj.get("queue_meta") or {}).get("queued") or 0,
         "landed_today": len(proj.get("today") or []),
+        "landed_yesterday": len(proj.get("yesterday") or []),
         "needs_you": sum(1 for e in proj.get("needs_you") or [] if e.get("verified")),
         "last_event_ts": proj.get("last_event_ts"),
     }
@@ -2691,6 +2717,8 @@ def attach_queue_and_day(proj, events_dir, queue_file, now, gh=None):
     landed, live, meta = today_view(events_dir, now, entries)
     proj["today"] = landed
     proj["today_meta"] = meta
+    # Floor v3-C: the day before, read the same way, marked yesterday.
+    proj["yesterday"], _, proj["yesterday_meta"] = day_view(events_dir, now, entries, 1)
     for warning in warnings:
         proj.setdefault("warnings", []).append(warning)
     merge_live_seats(proj, events_dir, now, live)
@@ -2755,6 +2783,30 @@ def write_projection(proj, out_path):
     return out_path
 
 
+NOTIFY_SCRIPT = os.path.join(REPO_DIR, "scripts", "notify.sh")
+NOTIFY_TIMEOUT_S = 20
+
+
+def push_needs_you(out_path):
+    """The push (Floor v3-C): hand the written projection to notify.sh.
+
+    Off by default: nothing runs unless ``FLEET_NOTIFY_NEEDS_YOU_MIN`` is set.
+    notify.sh owns the rule (one macOS notification per NEEDS YOU item that
+    has had no action for that many minutes, never twice); this only calls
+    it. Never fatal: a missing or failing script is one stderr line.
+    """
+    if not os.environ.get("FLEET_NOTIFY_NEEDS_YOU_MIN"):
+        return False
+    try:
+        subprocess.run([NOTIFY_SCRIPT, "needs-you", out_path], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=NOTIFY_TIMEOUT_S)
+        return True
+    except (OSError, subprocess.SubprocessError) as exc:
+        print("desk-live: needs-you push failed: %s" % exc, file=sys.stderr)
+        return False
+
+
 # ── server ──────────────────────────────────────────────────────────────────
 
 def serve(args, out_path):
@@ -2772,6 +2824,7 @@ def serve(args, out_path):
             state["json"] = payload
             state["version"] += 1
         write_projection(proj, out_path)
+        push_needs_you(out_path)
         return proj
 
     def watcher():
@@ -2947,17 +3000,18 @@ def main(argv=None):
                      queue_file=args.queue_file,
                      gh_enabled=False if args.no_gh else None)
         write_projection(proj, out_path)
+        push_needs_you(out_path)
         if args.print_json:
             print(json.dumps(proj, indent=2))
         if args.once:
             gh_meta = proj.get("gh_enrichment") or {}
             print("live.json written: %s (status=%s, seats=%d, repos=%d, view=%s, "
-                  "staleness=%s, needs_you=%d, initiatives=%d, gh=%s calls=%s)"
+                  "staleness=%s, needs_you=%d, initiatives=%d, yesterday=%d, gh=%s calls=%s)"
                   % (out_path, proj["status"], len(proj["seats"]),
                      len(proj.get("repos") or []), proj.get("view"),
                      proj["staleness"]["state"], len(proj.get("needs_you") or []),
-                     len(proj.get("initiatives") or []), gh_meta.get("status"),
-                     gh_meta.get("calls")),
+                     len(proj.get("initiatives") or []), len(proj.get("yesterday") or []),
+                     gh_meta.get("status"), gh_meta.get("calls")),
                   file=sys.stderr)
             return 0
         print("desk-live: watching %s → %s (Ctrl-C to stop)" % (args.events_dir, out_path))
@@ -2970,6 +3024,7 @@ def main(argv=None):
                           queue_file=args.queue_file,
                           gh_enabled=False if args.no_gh else None),
                     out_path)
+                push_needs_you(out_path)
         except KeyboardInterrupt:
             print("\ndesk-live: stopped")
         return 0

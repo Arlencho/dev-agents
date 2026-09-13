@@ -445,6 +445,19 @@ a.sfig:hover { color: var(--accent); text-decoration: none; }
 /* needs you is red when non-zero; failed is red when non-zero. */
 .sfig.hot { color: var(--bad); }
 .sfig.bad { color: var(--bad); }
+/* today / yesterday on the strip (Floor v3-C): a pill pair at the end of
+   the row, keyboard focus visible, hidden until the projection carries
+   yesterday. */
+.daytog { display: inline-flex; gap: 2px; margin-left: auto; }
+.daytog[hidden] { display: none; }
+.daybtn {
+  font: inherit; font-size: 12px; font-weight: 600; line-height: 1;
+  padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.daybtn:hover { color: var(--ink); }
+.daybtn.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.daybtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Strip figures and the in-page NEEDS YOU actions link to sections and
    queue rows, and the sticky header must not eat the heading the reader

@@ -114,6 +114,8 @@ make desk-follow       # Ops Floor at http://127.0.0.1:8777/live/ (leave open)
 
 Live polls ~3s (no reload). Settled runs: **REPLAY** scrubber on the Floor. Quiet stream (~90s no events while still “running”) shows **QUIET** hang chrome.
 
+The strip offers **today** and **yesterday** (the day before, read from the same streams the same way; older history is the Almanac's). Push: `FLEET_NOTIFY_NEEDS_YOU_MIN=10 make desk-follow` sends one macOS notification per NEEDS YOU item nobody acted on for 10 minutes, once per item; off when the variable is unset. Details: [`docs/experience-data.md`](docs/experience-data.md) § Yesterday and the push.
+
 ## Operator Quickstart
 
 If you're running agents on owned hardware (local machines or Mac Minis), this section is your starting point.
