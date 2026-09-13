@@ -1,0 +1,9 @@
+# Floor v3-A fix round 3: one finding from CRITIC FLOOR V3A ROUND 2 BLOCK-FIX on PR 77. 2026-09-13
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-13-floor-v3a-fix2.plan --detach --retries 1
+# Why: the round 1 lies are gone; a first line carrying two verdict tokens still invents a merge.
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | devops | On branch feat/floor-v3a (PR 77), fix finding 5 of the comment on PR 77 whose first line reads CRITIC FLOOR V3A ROUND 2 BLOCK-FIX: when the first line of a critic comment carries more than one start-of-token verdict, first_line_verdict returns none, so neither critic_block nor ready_to_merge is produced; use the critic fixtures (two tokens with no colon, with a colon, reversed) as tests, and keep every existing test green. VERIFY: the desk test suite passes with real exit codes in the PR body; update the PR body with a Round 3 section. HOUSE STYLE: no long dash anywhere, no AI tool or vendor name, no Co-Authored-By trailer. Commit and push. | feat/floor-v3a
+
+2 | plan-critic | READ-ONLY REVIEW ROUND 3 of PR 77 on branch feat/floor-v3a. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Re-run the round 2 fixtures for finding 5 and confirm an ambiguous first line yields no item; confirm the four round 1 fixes still hold on this SHA. Post ONE comment on PR 77 whose first line reads CRITIC FLOOR V3A ROUND 3 with SAFE-TO-MERGE or BLOCK-FIX and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/floor-v3a
