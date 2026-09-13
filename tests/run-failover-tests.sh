@@ -25,7 +25,7 @@ check() { if [ "$2" = "$3" ]; then printf '  ok   %-48s (%s)\n' "$1" "$3"; pass=
 # Clean slate
 rm -f "$STATE_DIR"/*.cooldown 2>/dev/null
 
-echo "== row 16: kimi capped -> task fails over to claude =="
+echo "== row 16: kimi capped -> task fails over to grok =="
 # Emulate dispatch_task's per-task provider progression across a rate-cap retry.
 tried=""
 p1=$(resolve_provider web-frontend "$tried")
@@ -38,7 +38,7 @@ echo "$(date -u +%FT%TZ)|$p1|web-frontend|localhost|ratecap" >> "$STATE_DIR/rate
 tried="$tried $p1"   # dispatch appends the capped vendor to the task's tried-set
 
 p2=$(resolve_provider web-frontend "$tried")
-check "retry fails over to next provider" "claude" "$p2"
+check "retry fails over to next provider" "grok" "$p2"
 check "cooldown file was written" "yes" "$([ -f "$STATE_DIR/kimi.cooldown" ] && echo yes || echo no)"
 check "kimi now reads as cooling" "yes" "$(provider_cooling kimi && echo yes || echo no)"
 
@@ -72,8 +72,8 @@ fi
 rm -rf "$SHIM_DIR"
 
 echo "== row 17: all chain vendors cooling -> primary anyway (never deadlock) =="
-date +%s > "$STATE_DIR/claude.cooldown"
-p_all=$(resolve_provider web-frontend "")   # kimi+claude both cooling
+date +%s > "$STATE_DIR/grok.cooldown"
+p_all=$(resolve_provider web-frontend "")   # kimi+grok both cooling
 check "returns primary despite all cooling" "kimi" "$p_all"
 
 # Cleanup

@@ -46,12 +46,60 @@ check "devops-critic failover stays non-Anthropic" "grok kimi" "$(echo $(get_fai
 check "devops-critic effective model (alias ignored)" "vendor-default" "$(effective_model grok "$(get_model devops-critic)")"
 check "plan-critic → grok" "grok" "$(get_provider plan-critic)"
 check "plan-critic never fails over to claude" "grok" "$(echo $(get_failover_chain plan-critic))"
-check "devops producer stays on claude" "claude" "$(get_provider devops)"
+
+echo "== routing trial 2026-09-13: no producer primary is claude =="
+# web-frontend is the kimi seat; every other producer is a grok trial seat.
+check "web-frontend primary" "kimi" "$(get_provider web-frontend)"
+for role in go-backend db-architect api-designer devops test-engineer mobile investigate docs-writer; do
+  check "$role primary" "grok" "$(get_provider "$role")"
+done
+
+echo "== routing trial 2026-09-13: no producer failover chain contains claude =="
+for role in web-frontend go-backend db-architect api-designer devops test-engineer mobile investigate docs-writer; do
+  chain="$(get_failover_chain "$role")"
+  case " $chain " in
+    *" claude "*) got="contains claude: $chain" ;;
+    *)            got="claude-free" ;;
+  esac
+  check "$role failover chain" "claude-free" "$got"
+done
+
+echo "== every discipline critic primary is claude, failover claude then grok =="
+for role in backend-critic frontend-critic database-critic api-critic; do
+  check "$role primary" "claude" "$(get_provider "$role")"
+  check "$role failover chain" "claude grok" "$(echo $(get_failover_chain "$role"))"
+done
+
+echo "== trust seats carry no failover entry (fall through to default) =="
+for role in security-reviewer cto orchestrator; do
+  if sed -n '/^provider_failover:/,/^rate_caps:/p' "$ROUTING_CONFIG" \
+       | grep -q "^[[:space:]]*${role}:"; then
+    got="has entry"
+  else
+    got="no entry"
+  fi
+  check "$role failover entry" "no entry" "$got"
+done
+check "security-reviewer primary stays claude" "claude" "$(get_provider security-reviewer)"
+
+echo "== role charters: model line agrees with workers.yaml + routing.yaml =="
+# grok-primary seats pin model: grok (CLI default, like plan-critic already did).
+# Every other seat's charter frontmatter matches the model_routing column.
+for role_file in "$REPO_DIR"/roles/*.md; do
+  role=$(basename "$role_file" .md)
+  fm=$(grep -m1 '^model:' "$role_file" | sed 's/model: *//')
+  if [ "$(get_provider "$role")" = "grok" ]; then
+    want="grok"
+  else
+    want="$(get_model "$role")"
+  fi
+  check "$role charter model line" "$want" "$fm"
+done
 
 echo "== kimi effective for routed web-frontend =="
 req="$(get_model web-frontend)"
 eff="$(effective_model kimi "$req")"
-check "web-frontend requested sonnet → effective k3 default" "vendor-default-k3" "$eff"
+check "web-frontend requested flagship → effective k3 default" "vendor-default-k3" "$eff"
 
 echo ""
 echo "== $pass passed, $fail failed =="

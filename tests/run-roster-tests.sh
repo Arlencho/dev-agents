@@ -50,21 +50,14 @@ done <<< "$PAIRS"
 # ----------------------------------------------------------------------
 exception_reason() { # <producer>
     case "$1" in
-        db-architect)
-            # docs/org-chart.md § Database exception: irreversibility premium on
-            # migrations buys reasoning depth at the cost of cross-model checking.
-            echo "DOCUMENTED: DB exception, org-chart.md" ;;
-        api-designer)
-            # Not covered by any documented exception. org-chart.md states the DB
-            # exception "applies only to the Database pair. All other
-            # producer-critic pairs MUST cross models."
-            echo "UNRESOLVED: undocumented same-seat pair" ;;
-        go-backend|mobile)
-            # config/routing.yaml header, owner decision 2026-09-12: every seat
-            # in the model column runs the flagship and same-model pairs are
-            # accepted by the owner for now. Recorded here so the pair stays a
-            # visible exception rather than a silent one.
-            echo "OWNER 2026-09-12: same-model pair accepted, routing.yaml header" ;;
+        devops)
+            # Routing trial 2026-09-13: the devops producer sits on the grok
+            # trial seat while devops-critic is pinned grok (non-Anthropic by
+            # design), so this pair is same-vendor for the five-task trial
+            # window. Bounded by the exit rule in README + providers/grok/
+            # README.md: median rounds to SAFE worse than baseline by one and
+            # the producer goes back.
+            echo "TRIAL 2026-09-13: grok x grok pair accepted for the routing trial" ;;
         *) echo "" ;;
     esac
 }

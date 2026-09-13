@@ -21,8 +21,8 @@ Source of truth for:
 
 Every implementation task runs through a producer + critic pair. Heterogeneity is **two-layered**:
 
-1. **Vendor** (CLI) — preferred when configured (e.g. Kimi producer × Claude critic).
-2. **Model tier** — when both seats are Claude, critic still uses a **different** tier than the producer (e.g. sonnet × opus).
+1. **Vendor** (CLI): preferred when configured (Kimi or Grok producer × Claude critic).
+2. **Model tier**: when both seats are Claude, critic still uses a **different** tier than the producer.
 
 Critics report to CTO for independence, but pair with their producer counterpart on every diff. Seats come from `config/workers.yaml` → `provider_preferences` + `config/routing.yaml` → `model_routing` / `provider_failover`.
 
@@ -30,25 +30,25 @@ Critics report to CTO for independence, but pair with their producer counterpart
 
 | Producer role | Vendor (CLI) | Model tier | Critic role | Critic vendor | Critic tier | Discipline |
 |---|---|---|---|---|---|---|
-| Frontend Engineer (`web-frontend`) | **kimi** (failover: claude) | **K3** | Frontend Critic | **claude** | **opus** | Next.js / React / Tailwind / a11y |
-| Backend Engineer (`go-backend`) | claude | **sonnet** | Backend Critic | claude | **opus** | Go / Chi / pgx / sqlc / OpenAPI |
-| Database Engineer (`db-architect`) | claude | **opus** (irreversible) | Database Critic | claude | **opus** | Postgres migrations / sqlc / indexes |
-| API Designer (`api-designer`) | claude | **opus** | API Critic | claude | **opus** | `api.yaml` / generated TS client / envelopes |
-| DevOps Engineer (`devops`) | claude | **opus** | `devops-critic` | **grok** | failover kimi | CI / deploy / infra |
-| Plan review (autoplan Pass 4) | — | — | Plan Critic | **grok** | default | Wave-plan review (`autoplan.sh`) |
+| Frontend Engineer (`web-frontend`) | **kimi** (failover: grok) | **K3** | Frontend Critic | **claude** | **claude-fable-5-1** | Next.js / React / Tailwind / a11y |
+| Backend Engineer (`go-backend`) | **grok** (failover: kimi) | CLI default | Backend Critic | claude | **claude-fable-5-1** | Go / Chi / pgx / sqlc / OpenAPI |
+| Database Engineer (`db-architect`) | **grok** (failover: kimi) | CLI default | Database Critic | claude | **claude-fable-5-1** | Postgres migrations / sqlc / indexes |
+| API Designer (`api-designer`) | **grok** (failover: kimi) | CLI default | API Critic | claude | **claude-fable-5-1** | `api.yaml` / generated TS client / envelopes |
+| DevOps Engineer (`devops`) | **grok** (failover: kimi) | CLI default | `devops-critic` | **grok** | failover kimi | CI / deploy / infra |
+| Plan review (autoplan Pass 4) | n/a | n/a | Plan Critic | **grok** | default | Wave-plan review (`autoplan.sh`) |
 
-> **Config wins:** live vendor + Claude tier = `config/workers.yaml` + `config/routing.yaml`. Quality-first (2026-07-28): judgment / irreversible / contract / test-first / infra seats use **opus**; code producers stay **sonnet** when paired with an **opus** critic (best quality-per-token pair).
+> **Config wins:** live vendor + Claude tier = `config/workers.yaml` + `config/routing.yaml`. **Producer routing trial (owner decision 2026-09-13):** every producer except `web-frontend` runs on the grok seat for **five tasks**; critics, `security-reviewer`, `cto` and `orchestrator` keep the first-party seat. **Metric:** rounds to SAFE per producer task, counted against the Kimi and Claude baselines in [`wave-plans/ab-metrics.csv`](wave-plans/ab-metrics.csv). **Exit rule:** a producer whose median rounds to SAFE exceed the baseline by one goes back to its previous seat.
 
 **Hard rules (charter-level invariants):**
 
-1. **Do not same-seat producer and critic** when a cross-vendor or cross-tier pair is available. Same-model pairs lose ~30% of cross-error detection per Reflexion (Shinn 2023) and Constitutional AI (Bai 2022). Do **not** "correct" any Critic down to Sonnet only to save cost.
-2. **Frontend is the flagship cross-vendor pair:** Kimi produces, Claude Opus critiques. Trust-critical seats (CTO, Security, most critics) stay on Claude unless explicitly re-seated in config.
-3. The Database pair is the documented **same-vendor opus×opus** exception (irreversibility premium on migrations) — see [`docs/org-chart.md`](docs/org-chart.md).
+1. **Do not same-seat producer and critic** when a cross-vendor or cross-tier pair is available. Same-model pairs lose ~30% of cross-error detection per Reflexion (Shinn 2023) and Constitutional AI (Bai 2022). Do **not** downgrade a critic seat to save cost.
+2. **Frontend is the flagship cross-vendor pair:** Kimi produces, Claude critiques. Trust-critical seats (CTO, Security, the discipline critics) keep the first-party primary unless explicitly re-seated in config.
+3. The `devops` × `devops-critic` pair is the trial's one same-vendor (grok × grok) seat, bounded by the exit rule above. The old Database same-vendor exception is retired: `db-architect` now produces on grok against the first-party Database Critic. See [`docs/org-chart.md`](docs/org-chart.md).
 
-**Cross-cutting reviewers** (peers, NOT discipline-paired; Claude unless reconfigured):
-- **QA Engineer** (opus, test-first) — writes failing tests against PRD/contract before producer codes
-- **Security Engineer** (opus, red-team) — active attack attempts on every PR before CTO gate
-- **CTO** (opus) — final architectural gate (APPROVE-MERGE / BLOCK-FIX / BLOCK-ESCALATE)
+**Cross-cutting reviewers** (peers, NOT discipline-paired; first-party unless reconfigured):
+- **QA Engineer** (claude-fable-5-1, test-first): writes failing tests against PRD/contract before producer codes
+- **Security Engineer** (claude-fable-5-1, red-team): active attack attempts on every PR before CTO gate
+- **CTO** (claude-fable-5-1): final architectural gate (APPROVE-MERGE / BLOCK-FIX / BLOCK-ESCALATE)
 
 Full org chart with reporting + pairing edges: [`docs/org-chart.md`](docs/org-chart.md). Live seats always win over this table if `workers.yaml` differs — update both when you re-seat a role.
 
@@ -70,21 +70,20 @@ The heterogeneity invariant extended across vendors — same-vendor different-ti
 
 **Rate-cap sentinel + failover** — a vendor that emits a cap pattern (`config/ratecap-patterns.conf`) exits 75; the vendor is marked cooling (`logs/provider-state/`, `cooldown_minutes` in routing.yaml), the event is logged + notified, and `dispatch.sh` **fails the task over** to the next provider in `routing.yaml provider_failover` — reusing the existing retry loop. `make scorecard` shows cooldown state, cap events, and per-provider task outcomes.
 
-**Seats today**: `web-frontend` → **Kimi K3** primary, `claude` failover (`providers/kimi/README.md`; Frontend Critic stays on Opus → first true cross-vendor producer-critic pair; gated on 5–10 tasks of evidence). **Grok Plan Critic** runs as Pass 4 of `autoplan.sh` via the grok CLI (`providers/grok/README.md`) — the plan was the only unreviewed artifact in the pipeline.
+**Seats today**: `web-frontend` → **Kimi K3** primary, `grok` failover (`providers/kimi/README.md`). Every other producer (`go-backend`, `db-architect`, `api-designer`, `devops`, `test-engineer`, `mobile`, `investigate`, `docs-writer`) → **Grok** primary, `kimi` failover, under the five-task routing trial (owner decision 2026-09-13): rounds to SAFE counted against the Kimi and Claude baselines in `wave-plans/ab-metrics.csv`, and a producer whose median exceeds the baseline by one goes back (`providers/grok/README.md`). The discipline critics keep a first-party primary on **claude-fable-5-1** with grok as the only failover; `security-reviewer`, `cto` and `orchestrator` carry no failover entry. **Grok Plan Critic** runs as Pass 4 of `autoplan.sh` via the grok CLI (`providers/grok/README.md`).
 
-**Non-goals**: no vendor swap on orchestrator, CTO gate, or critics — trust-critical seats stay on harness-proven Claude.
+**Non-goals**: no vendor swap on orchestrator, CTO gate, security, or the critic primaries; trust-critical seats stay on harness-proven Claude.
 
 ### Per-role model routing
 
-`config/routing.yaml → model_routing:` pins each role to a **Claude tier alias** (`opus` / `sonnet` / `haiku`) **or** an explicit model id (e.g. `claude-fable-5` for `docs-writer`). Kimi/Grok launchers **ignore** Claude tier aliases and use the CLI default (Kimi **K3**, Grok default). Live seats: see `workers.yaml` `provider_preferences` + this map.
+`config/routing.yaml → model_routing:` pins each role to a **Claude model id** (`claude-fable-5-1` for every first-party seat). Kimi/Grok launchers **ignore** the Claude model column and use the CLI default (Kimi **K3**, Grok default). Live seats: see `workers.yaml` `provider_preferences` + this map.
 
 | Example seat | Provider | Model (today) |
 |---|---|---|
 | `web-frontend` | kimi | **K3** (CLI default) |
-| `docs-writer` | claude | **claude-fable-5** |
-| `plan-critic` | grok | CLI default |
-| critics / cto / security / DB / API design / devops / test | claude | **opus** |
-| `go-backend` / `mobile` (code producers + opus critic) | claude | **sonnet** |
+| trial producers (`go-backend`, `db-architect`, `api-designer`, `devops`, `test-engineer`, `mobile`, `investigate`, `docs-writer`) | grok | CLI default |
+| `plan-critic` / `devops-critic` | grok | CLI default |
+| critics / cto / security / retro / orchestrator | claude | **claude-fable-5-1** |
 
 ### L2 skills + experience evolution (Phase 0 live)
 
@@ -314,12 +313,12 @@ one plan and not a second while the first runs.
 **Edit `config/workers.yaml`** to assign which CLI each agent prefers:
 ```yaml
 provider_preferences:
-  go-backend: claude
-  web-frontend: kimi       # Primary: Kimi K3; will fail over to claude if capped
-  db-architect: claude
-  api-designer: claude
-  devops: claude
-  test-engineer: claude
+  go-backend: grok
+  web-frontend: kimi       # Primary: Kimi K3; fails over to grok if capped
+  db-architect: grok
+  api-designer: grok
+  devops: grok
+  test-engineer: grok
   security-reviewer: claude
   cto: claude              # Trust-critical; always Claude
   orchestrator: claude     # Trust-critical; always Claude
@@ -329,8 +328,9 @@ provider_preferences:
 **Edit `config/routing.yaml`** to define failover chains:
 ```yaml
 provider_failover:
-  web-frontend: [kimi, claude]    # Try kimi first; if capped, use claude
-  default: [claude, kimi]         # Default chain: claude first
+  web-frontend: [kimi, grok]    # Try kimi first; if capped, use grok
+  go-backend: [grok, kimi]      # Trial producers: grok first, never claude
+  default: [claude, kimi]       # Default chain: claude first
 ```
 
 How it works:
@@ -341,7 +341,7 @@ How it works:
 
 **Provider README references:**
 - Kimi (K3 producer): [`providers/kimi/README.md`](providers/kimi/README.md)
-- Grok (plan-critic + judgment seats): [`providers/grok/README.md`](providers/grok/README.md)
+- Grok (trial producer seats + plan-critic): [`providers/grok/README.md`](providers/grok/README.md)
 - Claude (default, trust-critical roles): `providers/claude/agents/` (copied from roles/ via `scripts/sync-providers.sh` (roles/ is upstream))
 
 ### make scorecard
@@ -432,7 +432,7 @@ dev-agents/
 │   │   ├── README.md         # Kimi K3 producer setup + rate-cap behavior
 │   │   └── launch.sh
 │   ├── grok/
-│   │   ├── README.md         # Grok plan-critic + judgment-seat launcher
+│   │   ├── README.md         # Grok trial producer + plan-critic launcher
 │   │   └── launch.sh
 │   └── openai/  cursor/      # Placeholder stubs
 └── scripts/
@@ -457,22 +457,22 @@ Two execution paths — pick based on task scope:
 You file a task in Paperclip UI (or via API)
         │
         ▼
-CEO (Orchestrator, opus) receives → decomposes
+CEO (Orchestrator, claude-fable-5-1) receives → decomposes
         │
         ▼
-CTO (opus) routes → triages → spawns child sub-tasks
+CTO (claude-fable-5-1) routes → triages → spawns child sub-tasks
         │
         ▼
-QA Engineer (opus, test-first) writes failing tests against PRD
+QA Engineer (test-first) writes failing tests against PRD
         │
         ▼
-Producer (Sonnet, or Opus for DB) implements
+Producer (kimi or grok seat) implements
         │
         ▼
-Critic (Opus, paired) reviews diff — hard 2-loop ceiling, executable output only
+Critic (claude-fable-5-1, paired) reviews diff; hard 2-loop ceiling, executable output only
         │
         ▼
-Security Engineer (opus, red-team) attacks the PR
+Security Engineer (claude-fable-5-1, red-team) attacks the PR
         │
         ▼
 CTO architectural gate — APPROVE-MERGE / BLOCK-FIX / BLOCK-ESCALATE
@@ -582,39 +582,39 @@ The sync script resolves agent → provider file via a 3-level lookup:
 
 | Agent | Vendor (CLI) | Model tier | Scope |
 |---|---|---|---|
-| `go-backend` | claude | **sonnet** | Handlers, services, providers, middleware |
-| `web-frontend` | **kimi** (failover claude) | **K3** | Pages, components, styling, API integration |
-| `mobile` | claude | **sonnet** | Screens, navigation, native features |
-| `db-architect` | claude | **opus** | Migrations, sqlc queries, index strategy |
-| `api-designer` | claude | **opus** | OpenAPI spec, type generation, response envelopes |
-| `devops` | claude | **opus** | Docker, CI/CD, deployment, scripts |
+| `go-backend` | **grok** (failover kimi) | CLI default | Handlers, services, providers, middleware |
+| `web-frontend` | **kimi** (failover grok) | **K3** | Pages, components, styling, API integration |
+| `mobile` | **grok** (failover kimi) | CLI default | Screens, navigation, native features |
+| `db-architect` | **grok** (failover kimi) | CLI default | Migrations, sqlc queries, index strategy |
+| `api-designer` | **grok** (failover kimi) | CLI default | OpenAPI spec, type generation, response envelopes |
+| `devops` | **grok** (failover kimi) | CLI default | Docker, CI/CD, deployment, scripts |
 
 ### Critics (prefer cross-tier / cross-vendor vs producer)
 
 | Agent | Vendor / tier | Pairs with | Output rule |
 |---|---|---|---|
-| `backend-critic` | claude **opus** | `go-backend` | Failing test diff + `file:line` only |
-| `frontend-critic` | claude **opus** | `web-frontend` (**kimi**) | Flagship **cross-vendor** pair |
-| `database-critic` | claude **opus** | `db-architect` | Migration / index / query critique |
-| `api-critic` | claude **opus** | `api-designer` | Contract / envelope violations |
+| `backend-critic` | claude **claude-fable-5-1** (failover grok) | `go-backend` (**grok**) | Failing test diff + `file:line` only |
+| `frontend-critic` | claude **claude-fable-5-1** (failover grok) | `web-frontend` (**kimi**) | Flagship **cross-vendor** pair |
+| `database-critic` | claude **claude-fable-5-1** (failover grok) | `db-architect` (**grok**) | Migration / index / query critique |
+| `api-critic` | claude **claude-fable-5-1** (failover grok) | `api-designer` (**grok**) | Contract / envelope violations |
 | `plan-critic` | **grok** | autoplan Pass 4 | Wave-plan review (non-blocking if missing) |
 
 ### Cross-cutting
 
 | Agent | Model | Cadence |
 |---|---|---|
-| `test-engineer` | **opus** (test-first) | Before producer codes |
-| `security-reviewer` | **opus** (red-team) | Per PR after critic |
-| `retro` | **opus** | Per-wave post-merge |
-| `docs-writer` | **claude-fable-5** | Docs / design proposals |
-| `investigate` | **opus** | Bugs / incidents |
-| `orchestrator` / `cto` | **opus** | Plan / architectural gate |
+| `test-engineer` | **grok** (trial producer seat, test-first) | Before producer codes |
+| `security-reviewer` | **claude-fable-5-1** (red-team) | Per PR after critic |
+| `retro` | **claude-fable-5-1** | Per-wave post-merge |
+| `docs-writer` | **grok** (trial producer seat) | Docs / design proposals |
+| `investigate` | **grok** (trial producer seat) | Bugs / incidents |
+| `orchestrator` / `cto` | **claude-fable-5-1** | Plan / architectural gate |
 
 ### Routine discovery
 
 | Agent | Model | Purpose |
 |---|---|---|
-| `pr-sentinel` | **sonnet** | PR queue triage (Paperclip and/or local launchd — see `docs/local-pr-sentinel.md`) |
+| `pr-sentinel` | **claude-fable-5-1** | PR queue triage (Paperclip and/or local launchd; see `docs/local-pr-sentinel.md`) |
 
 ### Archived (not active)
 
@@ -677,7 +677,7 @@ Specialty / niche roles live in [`roles/_archived/`](roles/_archived/README.md) 
 | [`docs/proposals/session-modes-SYNTHESIS.md`](docs/proposals/session-modes-SYNTHESIS.md) | Session modes freeze (Phase 0) |
 | [`config/role-skills.yaml`](config/role-skills.yaml) | Role → skill map |
 | [`providers/kimi/README.md`](providers/kimi/README.md) | Kimi launcher |
-| [`providers/grok/README.md`](providers/grok/README.md) | Grok plan-critic and judgment-seat launcher |
+| [`providers/grok/README.md`](providers/grok/README.md) | Grok trial producer seats + plan-critic launcher |
 | [`learnings/paperclip-changelog.md`](learnings/paperclip-changelog.md) | Weekly Paperclip release scan log |
 
 **Ops:** `make test` · `make experience` / `make experience-open` (Almanac) · **`make desk-follow`** (live Ops Floor + browser) · `./scripts/fleet-session.sh run --label X -- <cmd>` (long shell on Floor) · `make evidence` · `make scorecard` · `make fleet-status` (when configured).
