@@ -306,10 +306,62 @@ The tick's own output goes to `~/Library/Logs/queue-runner.log`; the runs it sta
 `logs/dispatch-runs/`. The plist sets `AbandonProcessGroup` as a second guard, but the run
 does not need it: it is a session of its own before the tick ends.
 
+**The loop.** A tick also moves work between waves, so the hop no longer waits for someone to
+notice. The judgment lives in `scripts/queue_loop.py`, which the runner calls three times per
+tick (`settle`, `guard`, `candidates`); the verdict parser is imported from
+`scripts/desk_live.py` (`first_line_verdict`, `critic_record`, `latest_round`), the same one
+the Floor uses, never a second copy.
+
+- *Memory guard.* Before any start the tick reads free memory and swap (`vm_stat` and
+  `sysctl vm.swapusage`; free is free + inactive + speculative + purgeable pages against
+  `hw.memsize`, since the bare "Pages free" figure means nothing on macOS). Under the thresholds
+  in `config/queue-runner.yaml` (defaults 50 percent free, 3.5 GB swap in use; override for one
+  run with `QUEUE_RUNNER_MIN_FREE_PCT`, `QUEUE_RUNNER_MAX_SWAP_GB`) it starts nothing, logs the
+  reason once per change of state, writes it into the queue as `hold:` (shown by
+  `make queue-list` and the Floor) and into the stops file, and resumes by itself when the
+  numbers recover. It never kills anything; a running dispatch is not its business.
+- *AFTER.* A plan whose header carries `# AFTER: <plan>` waits until the named plan has a
+  `dispatch_end` with outcome landed (every seat success). The reason is written into the
+  queue entry as `waiting:` and cleared by the runner itself; a named plan whose last run
+  failed keeps the waiter waiting and says so. Format: `docs/plan-file-format.md` § Header lines.
+- *One fix round.* When a detached run has ended and a critic seat's PR comment carries
+  `BLOCK-FIX` on its first line, the runner writes `<plan>-fix1.plan` next to the original:
+  one producer seat of the same role and branch whose task is the critic comment quoted in
+  full plus "fix every finding and add a test per finding", then the same critic seat for
+  round 2, with `# AFTER:` the original, and queues it first. A `BLOCK-FIX` on the fix plan
+  itself queues nothing and becomes a stop. `BLOCK-ESCALATE`, `BLOCK-CLOSE`, a bare `BLOCK`, a
+  `BLOCK-FIX` whose body also carries an escalation word, a verdict only quoted mid-sentence,
+  or a critic that posted nothing since the run started: nothing queued, a stop each.
+- *Landing.* When every critic seat of the run posted `SAFE-TO-MERGE` or `APPROVE-MERGE` since
+  the run started (one thread per critic seat; fewer is a silent critic and a stop), the PR's
+  checks on its head are green (zero checks is not green) and its merge state is `CLEAN`, the
+  runner calls `scripts/land.sh <PR>` (`LAND_REPO` names the slug), which merges with read-back
+  and sweeps worktrees. A draft is marked ready first, after the checks were read. Pending
+  checks are looked at again next tick. Red checks, `BEHIND`, `DIRTY`, `BLOCKED`, a refused
+  merge: a stop, never a merge.
+- *Stops.* Every stop is one line in `logs/fleet-stops.jsonl` (gitignored): key, kind, the
+  critic sentence (the first line of the comment, never the body), the PR, the plan basename
+  and one action. `make stops-list` prints the open ones; `desk_live.py` folds them into
+  `live.json` as `stops[]` for the Floor's NEEDS YOU section. A stop clears itself when its PR
+  merges or closes or its plan leaves the queue; the guard's clears when memory recovers.
+
+Ended runs the runner looks at are the detached ones (a pid file under `logs/dispatch-runs/`);
+each is decided once and marked `<id>.loop`. `--dry-run` reads everything and writes nothing:
+it says what it would settle, hold, write and land.
+
+```bash
+make stops-list                # what needs a person, one action each
+make queue-runner-install-dry  # lint the plist, say what install would do
+```
+
 Ground Truth: `tests/run-detached-dispatch-tests.sh` starts a detached run from a shell in
 its own process group, kills that group, and shows the run finishing with its events, queue
 marks and lock release intact; then the status and wait exit codes, and the runner starting
-one plan and not a second while the first runs.
+one plan and not a second while the first runs. `tests/run-queue-loop-tests.sh` covers the
+loop against fixtures (`tests/fixtures/loop/`): a fake `vm_stat` under and over the
+thresholds, a plan with `AFTER` against a failed and a landed run, a `BLOCK-FIX` comment and
+the fix plan it produces, a second `BLOCK-FIX`, escalations, all-safe-and-green with a draft, a
+silent critic, a stale comment, a red check, a refused merge, and the stops file the desk reads.
 
 ### workers.yaml provider_preferences + routing.yaml provider_failover
 

@@ -1,0 +1,7 @@
+{"schema":"fleet-events/1","seq":1,"ts":"2026-09-13T10:00:00Z","dispatch_id":"fixture","event":"dispatch_start","mode":"wave","repo":"product","plan":"alpha.plan"}
+{"schema":"fleet-events/1","seq":2,"ts":"2026-09-13T10:00:00Z","dispatch_id":"fixture","event":"dispatch_plan","waves":2,"seats":2,"format":"wave"}
+{"schema":"fleet-events/1","seq":3,"ts":"2026-09-13T10:00:01Z","dispatch_id":"fixture","event":"seat_dispatch","task_id":"0","agent":"devops","branch":"feat/alpha","wave":1,"provider":"p","model":"m","worker":"w","attempt":1}
+{"schema":"fleet-events/1","seq":4,"ts":"2026-09-13T10:10:00Z","dispatch_id":"fixture","event":"seat_exit","task_id":"0","agent":"devops","branch":"feat/alpha","wave":1,"status":"failed","exit":0,"duration_s":599,"attempt":1}
+{"schema":"fleet-events/1","seq":5,"ts":"2026-09-13T10:10:01Z","dispatch_id":"fixture","event":"seat_dispatch","task_id":"1","agent":"devops-critic","branch":"feat/alpha","wave":2,"provider":"q","model":"m","worker":"w","attempt":1}
+{"schema":"fleet-events/1","seq":6,"ts":"2026-09-13T10:20:00Z","dispatch_id":"fixture","event":"seat_exit","task_id":"1","agent":"devops-critic","branch":"feat/alpha","wave":2,"status":"success","exit":0,"duration_s":599,"attempt":1}
+{"schema":"fleet-events/1","seq":9,"ts":"2026-09-13T10:21:01Z","dispatch_id":"fixture","event":"dispatch_end","status":"completed","total":2,"succeeded":1,"failed":1,"duration_s":1261}

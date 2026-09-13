@@ -18,6 +18,13 @@ reading the repo URL and the flags from the plan's own "# DISPATCH:" header
 line. At most one start per tick, one running dispatch per repo. What it
 started is written to logs/dispatch-runs/queue-runner.log in dev-agents.
 
+Each tick also settles the detached runs that ended (one automatic fix round
+on a critic BLOCK-FIX, a landing through scripts/land.sh when every critic said
+SAFE-TO-MERGE and the PR is green and clean, a stop in logs/fleet-stops.jsonl
+for anything else), honours "# AFTER: <plan>" headers, and holds every start
+while free memory or swap is past the thresholds in config/queue-runner.yaml
+(it never kills a run). See README.md, "The loop".
+
 Off by default: nothing runs until this file is installed. RunAtLoad is false
 so installing it never starts a plan at that same moment; the first tick is
 one minute later.

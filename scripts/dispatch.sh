@@ -210,7 +210,9 @@ fi
 # event stream is opened under the id the parent already printed.
 #
 #   logs/dispatch-runs/<id>.log    everything the run prints
-#   logs/dispatch-runs/<id>.pid    pid, repo slug, plan, start time (one per line)
+#   logs/dispatch-runs/<id>.pid    pid, repo slug, plan, start time, repo url
+#                                  (one per line; the url is what the queue
+#                                  runner asks gh about once the run has ended)
 #   logs/dispatch-runs/<id>.exit   the run's exit code, written on its way out
 #
 # ---- dispatch-detach:begin (tests/run-detached-dispatch-tests.sh reads this block) ----
@@ -266,7 +268,7 @@ if [ "$DETACH" = true ] && [ -z "${DISPATCH_DETACHED:-}" ]; then
         echo -e "${RED}ERROR: could not fork the detached dispatch${NC}" >&2
         exit 1
     fi
-    printf '%s\n%s\n%s\n%s\n' "$DETACH_PID" "${detach_slug:-fleet}" "$PLAN_SOURCE" "$(date -u +%FT%TZ)" > "$DETACH_PIDFILE"
+    printf '%s\n%s\n%s\n%s\n%s\n' "$DETACH_PID" "${detach_slug:-fleet}" "$PLAN_SOURCE" "$(date -u +%FT%TZ)" "$REPO_URL" > "$DETACH_PIDFILE"
 
     echo "dispatch id: $DETACH_ID"
     echo "pid:         $DETACH_PID (session leader)"

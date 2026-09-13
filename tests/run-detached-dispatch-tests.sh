@@ -58,6 +58,13 @@ FLEET="$SANDBOX/fleet"; mkdir -p "$FLEET/logs" "$FLEET/wave-plans" "$FLEET/bin"
 for d in scripts providers config roles skills; do cp -R "$REPO_DIR/$d" "$FLEET/$d"; done
 export FLEET_NOTIFY_SILENT=1 DISPATCH_LOCK_POLL_S=1 FLEET_HEARTBEAT_S=1 DISPATCH_WAIT_POLL_S=1
 unset FLEET_EVENTS_FILE FLEET_EVENTS_DIR FLEET_QUEUE_FILE DISPATCH_RUNS_DIR QUEUE_RUNNER_PAUSE
+# This suite may itself run inside a dispatched seat. A detached child carries
+# its id in DISPATCH_DETACHED (dispatch.sh then runs the attached path and never
+# forks) and every seat carries FLEET_DISPATCH_ID; neither may leak in here.
+unset DISPATCH_DETACHED DISPATCH_RUN_LOG FLEET_DISPATCH_ID
+# The runner's memory guard is the loop suite's business (run-queue-loop-tests.sh);
+# here the machine's own memory must not decide whether a start happens.
+export QUEUE_RUNNER_MIN_FREE_PCT=0 QUEUE_RUNNER_MAX_SWAP_GB=100000 FLEET_STOPS_FILE="$FLEET/logs/fleet-stops.jsonl"
 
 # The stub seat: what run-remote.sh looks like from the dispatcher's side.
 cat > "$FLEET/scripts/run-remote.sh" <<'STUB'

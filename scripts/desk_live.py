@@ -61,6 +61,11 @@ REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_EVENTS_DIR = os.path.join(REPO_DIR, "logs", "fleet-events")
 DEFAULT_QUEUE_FILE = os.environ.get(
     "FLEET_QUEUE_FILE", os.path.join(REPO_DIR, "logs", "fleet-queue.json"))
+# The runner's stops (logs/fleet-stops.jsonl): one line per stop it produced,
+# one per clearance. Read here so the Floor can show what needs a person.
+DEFAULT_STOPS_FILE = os.environ.get(
+    "FLEET_STOPS_FILE", os.path.join(REPO_DIR, "logs", "fleet-stops.jsonl"))
+STOPS_SCHEMA = "fleet-stops/1"
 DEFAULT_SITE_DIR = os.path.join(REPO_DIR, "site", "experience")
 DEFAULT_PORT = 8777
 DEFAULT_INTERVAL = 2.0
@@ -242,7 +247,13 @@ def empty_projection(now=None, reason="no dispatch has emitted events yet"):
         # running. Filled by build(); [] here so the key always exists.
         "queue": [],
         "queue_meta": {"source": None, "declared": False, "declared_at": None,
-                       "total": 0, "queued": 0, "running": 0, "settled": 0},
+                       "total": 0, "queued": 0, "running": 0, "settled": 0,
+                       "hold": None},
+        # The runner's open stops (logs/fleet-stops.jsonl): what the queue
+        # runner refused to do by itself and why. [] here so the key always
+        # exists; filled by build() for a live view, kept [] on a replay.
+        "stops": [],
+        "stops_meta": {"source": None, "open": 0, "total": 0},
         # Day view: one entry per dispatch that ENDED on this local calendar day.
         "today": [],
         "today_meta": {"day": "today", "date": None, "streams_read": 0, "live": [], "ended": 0},
@@ -386,6 +397,12 @@ def queue_view(entries):
             "purpose": entry.get("purpose") or None,
             "added_at": entry.get("added_at") or None,
             "status": "queued",
+            # Why the runner is not starting it, in the runner's own words.
+            # blocked: set by queue.sh block or by the runner on a failed start,
+            # cleared by a person. waiting: the AFTER header, cleared by the
+            # runner itself once the named plan has landed.
+            "blocked": (entry.get("blocked") or "").strip() or None,
+            "waiting": (entry.get("waiting") or "").strip() or None,
         })
     return out
 
@@ -408,7 +425,91 @@ def queue_meta(entries, path):
         "queued": tally.get("queued", 0),
         "running": tally.get("running", 0),
         "settled": tally.get("settled", 0),
+        "hold": None,
     }
+
+
+def read_queue_hold(path):
+    """The queue-wide hold the runner wrote (memory guard), else None."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    hold = data.get("hold") if isinstance(data, dict) else None
+    return scrub_text(hold) or None if isinstance(hold, str) else None
+
+
+# ── the runner's stops (logs/fleet-stops.jsonl) ─────────────────────────────
+#
+# scripts/queue-runner.sh appends one JSON line per stop it produces (memory
+# guard active, a second BLOCK-FIX, an escalation, red checks, a refused
+# merge) and one per clearance, keyed. The Floor folds the file by key, last
+# state wins, and shows the open ones with the critic sentence and one action.
+# The file never carries a prompt, a task body or an absolute path: plans are
+# basenames, the sentence is the first line of the critic comment, scrubbed.
+
+STOP_PUBLIC_KEYS = ("key", "kind", "at", "repo", "plan", "dispatch_id", "pr",
+                    "pr_url", "branch", "verdict", "sentence", "action")
+
+
+def read_stops(path):
+    """Open stops from the runner's stops file. Returns (stops, meta, warnings).
+
+    Never raises: a missing file is no stops, a malformed line is skipped and
+    counted in a warning. Folded by key: the newest line per key decides, and
+    only keys whose newest state is ``open`` are returned, newest first.
+    """
+    meta = {"source": rel_safe(path), "open": 0, "total": 0}
+    if not path or not os.path.isfile(path):
+        return [], meta, []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = fh.read().splitlines()
+    except OSError:
+        return [], meta, ["stops file %s is unreadable" % rel_safe(path)]
+    latest = {}
+    order = []
+    malformed = 0
+    for line in raw:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            malformed += 1
+            continue
+        if not isinstance(rec, dict) or not isinstance(rec.get("key"), str):
+            malformed += 1
+            continue
+        key = rec["key"]
+        if key not in latest:
+            order.append(key)
+        latest[key] = rec
+    meta["total"] = len(latest)
+    out = []
+    for key in order:
+        rec = latest[key]
+        if rec.get("state") != "open":
+            continue
+        row = {k: rec.get(k) for k in STOP_PUBLIC_KEYS}
+        row["at"] = rec.get("ts") if isinstance(rec.get("ts"), str) else None
+        for text_key in ("sentence", "action", "plan", "repo", "branch", "kind", "verdict"):
+            if isinstance(row.get(text_key), str):
+                row[text_key] = scrub_text(row[text_key]) or None
+        if isinstance(row.get("plan"), str):
+            row["plan"] = os.path.basename(row["plan"])
+        out.append(row)
+    out.sort(key=lambda r: r.get("at") or "", reverse=True)
+    meta["open"] = len(out)
+    warnings = []
+    if malformed:
+        warnings.append("stops file %s: %d malformed line%s skipped"
+                        % (rel_safe(path), malformed, "" if malformed == 1 else "s"))
+    return out, meta, warnings
 
 
 def queue_purpose_index(entries):
@@ -856,7 +957,8 @@ def parse_issue(text):
 # (is_machine_header), so the queue and the Floor never disagree about why a
 # run exists.
 MACHINE_HEADER_RE = re.compile(
-    r"^(dispatch|law|schema|protocol|usage|ref|refs|generated by)\b[: ]", re.IGNORECASE)
+    r"^(dispatch|after|fix-round|law|schema|protocol|usage|ref|refs|generated by)\b[: ]",
+    re.IGNORECASE)
 
 
 def is_machine_header(body):
@@ -888,11 +990,15 @@ def resolve_plan_path(plan_name, queue_entries):
     return None
 
 
-def parse_plan(path):
+def parse_plan(path, full_task=False):
     """Fold a plan file into {purpose, waves, seats[]}. Mirrors dispatch.sh.
 
     ``purpose`` is the first PROSE comment line of the header (see
     is_machine_header): the same line scripts/queue.sh would have stored.
+
+    ``full_task`` adds ``task_text`` (the whole task field) to every seat. Off
+    for the Floor, which publishes the first sentence only; the queue runner
+    turns it on in-process to write a fix plan, and nothing publishes it.
 
     Plan line: ``[wave] | agent | task | [branch]``. The branch is only the last
     field and only when it looks like a branch slug, exactly as dispatch.sh
@@ -951,13 +1057,16 @@ def parse_plan(path):
             desc = " | ".join(fields[start:])
         if wave is not None and wave not in waves:
             waves.append(wave)
-        seats.append({
+        seat = {
             "index": str(index),
             "wave": wave,
             "agent": agent,
             "branch": branch,
             "task": first_sentence(desc),
-        })
+        }
+        if full_task:
+            seat["task_text"] = desc
+        seats.append(seat)
     return {"plan": rel_safe(path), "purpose": purpose, "issue": issue,
             "waves": len(waves) or 1, "seats": seats, "refs": refs}
 
@@ -2761,6 +2870,147 @@ def project(events, now=None, source=None, malformed=0, replay=False):
     return out
 
 
+
+# ── critic verdicts ──────────────────────────────────────────────────────────
+#
+# The critic first-line convention, read by the Floor (NEEDS YOU) and by the
+# queue runner (scripts/queue-runner.sh, one fix round and landing). One parser
+# for both: the runner imports these functions, it never re-implements them.
+# This block is the same text as on the floor-v3a branch of this file; when
+# both land, keep one copy.
+
+STEM_MAX = 80
+
+# The critic first-line convention: the first line of the comment carries the
+# word CRITIC, the verdict opens the text after a colon on that line or closes
+# it (else it opens a later line of its own), and a re-review says ROUND n.
+# "CRITIC TILE CONNECT GUIDE ROUND 2: SAFE-TO-MERGE". See first_line_verdict.
+CRITIC_LINE_RE = re.compile(r"\bCRITIC\b")
+VERDICT_WORDS = "BLOCK-ESCALATE|BLOCK-FIX|BLOCK-CLOSE|SAFE-TO-MERGE|APPROVE-MERGE|BLOCK|SAFE"
+VERDICT_RE = re.compile(r"\b(%s)\b" % VERDICT_WORDS)
+# A verdict that closes the first line ("CRITIC FLOOR V3A BLOCK-FIX").
+VERDICT_TAIL_RE = re.compile(r"(?:^|\s)(%s)$" % VERDICT_WORDS)
+# A verdict standing as a token of its own, markdown and closing punctuation
+# allowed around it ("**BLOCK-FIX**", "(BLOCK-FIX)"). A heading word followed
+# by a colon ("BLOCK:") is not one. See first_line_verdict.
+VERDICT_TOKEN_RE = re.compile(r"(?<!\S)[*_`(]*(%s)[*_`).!,]*(?!\S)" % VERDICT_WORDS)
+ROUND_RE = re.compile(r"\bROUND\s+(\d{1,3})\b", re.IGNORECASE)
+BLOCK_VERDICTS = frozenset(("BLOCK-ESCALATE", "BLOCK-FIX", "BLOCK-CLOSE", "BLOCK"))
+SAFE_VERDICTS = frozenset(("SAFE-TO-MERGE", "APPROVE-MERGE", "SAFE"))
+PR_REF_RE = re.compile(r"\bPR #?(\d{1,7})\b", re.IGNORECASE)
+
+
+def first_line_verdict(first_line):
+    """The verdict the first line of a critic comment carries, else None.
+
+    Same start-of-token rule as a body line: the verdict opens the text after
+    a colon ("CRITIC K ROUND 2: BLOCK-FIX on two items") or closes the line
+    ("CRITIC FLOOR V3A BLOCK-FIX"). A verdict quoted mid-sentence ("the last
+    review said BLOCK-FIX but this is not a verdict") never counts, and a
+    heading word BLOCK or SAFE before the colon never steals BLOCK-FIX or
+    SAFE-TO-MERGE after it ("CRITIC V3A BLOCK: BLOCK-FIX" reads BLOCK-FIX).
+
+    Two different verdict words standing as tokens of their own where the
+    verdict is read (after the first colon, else anywhere on a line with no
+    colon) make the line ambiguous, and it carries no verdict: "CRITIC FLOOR
+    V3A BLOCK-FIX SAFE-TO-MERGE", with or without a colon, in either order,
+    invents neither a block nor a ready item. The same word twice ("BLOCK-FIX
+    (round 1 BLOCK-FIX stands)") is one verdict. A heading that itself holds
+    a verdict word wants the colon form: only what follows the colon is read.
+    """
+    text = str(first_line or "")
+    scope = text.split(":", 1)[1] if ":" in text else text
+    if len(set(VERDICT_TOKEN_RE.findall(scope))) > 1:
+        return None
+    for segment in text.split(":")[1:]:
+        match = VERDICT_RE.match(segment.strip(" \t*_`"))
+        if match:
+            return match.group(1)
+    tail = text.rstrip(" \t.!*_`)")
+    match = VERDICT_TAIL_RE.search(tail)
+    if match:
+        return match.group(1)
+    return None
+
+
+def critic_verdict(first_line, body):
+    """The verdict a critic comment carries, from its first line else a line
+    of its own in the body ("BLOCK-FIX on two items", "Verdict: SAFE-TO-MERGE").
+    A verdict quoted mid-sentence ("SAFE-TO-MERGE or BLOCK-FIX") never counts."""
+    verdict = first_line_verdict(first_line)
+    if verdict:
+        return verdict
+    for line in str(body or "").splitlines()[1:]:
+        clean = re.sub(r"^[\s*#>_`-]+", "", line).strip()
+        clean = re.sub(r"^verdict\s*[:.]\s*", "", clean, flags=re.IGNORECASE)
+        match = VERDICT_RE.match(clean)
+        if match:
+            return match.group(1)
+    return None
+
+
+def critic_record(comment_id, url, created_at, body, kind="comment"):
+    """A critic comment reduced to what the Floor may know, else None.
+
+    Kept: id, url, time, verdict, round, the heading of the first line (its
+    verdict and round token removed, capped). Dropped: the body. The PR
+    numbers ("PR 2829") and slash tokens (branch names) the body mentions are
+    kept as numbers and slugs only, in-process, so a findings-issue comment
+    can be attributed to the PR it grades. A bare "#N" is an issue reference
+    by convention and is not used for attribution.
+    """
+    text = str(body or "")
+    lines = text.strip().splitlines()
+    first = lines[0].strip() if lines else ""
+    if not CRITIC_LINE_RE.search(first):
+        return None
+    verdict = critic_verdict(first, text)
+    if verdict is None:
+        return None
+    round_match = ROUND_RE.search(first)
+    stem = ROUND_RE.sub(" ", VERDICT_RE.sub(" ", first))
+    stem = re.sub(r"[^A-Za-z0-9 ]+", " ", stem)
+    # The heading is the leading run of upper-case words: a critic who wrote a
+    # sentence on the first line still keys one thread, not one per round.
+    words = []
+    for token in stem.split():
+        if token.upper() != token:
+            break
+        words.append(token)
+    stem = " ".join(words) or stem
+    return {
+        "id": comment_id,
+        "url": scrub_text(url, 200) or None,
+        "at": created_at if isinstance(created_at, str) else None,
+        "kind": kind,
+        "verdict": verdict,
+        "round": int(round_match.group(1)) if round_match else 1,
+        "stem": scrub_text(stem, STEM_MAX) or "CRITIC",
+        "_prs": {int(n) for n in PR_REF_RE.findall(text)},
+        "_slugs": {tok.strip(".,;:()'\"`") for tok in text.split() if "/" in tok},
+    }
+
+
+def latest_round(records):
+    """The newest comment of every critic thread (thread = first-line heading).
+
+    A re-review replaces its own earlier round, never another critic's, so a
+    PR is only clean when every thread's newest verdict is safe.
+    """
+    threads = {}
+    for rec in records:
+        key = rec["stem"].upper()
+        current = threads.get(key)
+        if current is None or (rec["round"], rec["at"] or "") > (current["round"], current["at"] or ""):
+            threads[key] = rec
+    return sorted(threads.values(), key=lambda r: r["at"] or "", reverse=True)
+
+
+def public_comment(rec):
+    """The published shape of a critic comment: no body, no names from it."""
+    return {k: v for k, v in rec.items() if not k.startswith("_")}
+
+
 def attach_queue_and_day(proj, events_dir, queue_file, now, gh=None):
     """Fold declared intent (queue) and the local day into a projection.
 
@@ -2772,6 +3022,11 @@ def attach_queue_and_day(proj, events_dir, queue_file, now, gh=None):
     entries, warnings = read_queue(queue_file)
     proj["queue"] = queue_view(entries)
     proj["queue_meta"] = queue_meta(entries, queue_file)
+    proj["queue_meta"]["hold"] = read_queue_hold(queue_file)
+    stops, stops_meta, stop_warnings = read_stops(DEFAULT_STOPS_FILE)
+    proj["stops"] = stops
+    proj["stops_meta"] = stops_meta
+    warnings = list(warnings) + stop_warnings
     landed, live, meta = today_view(events_dir, now, entries)
     proj["today"] = landed
     proj["today_meta"] = meta

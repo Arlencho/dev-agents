@@ -31,8 +31,11 @@
 
 set -uo pipefail
 
-REPO="Arlencho/olympus-platform"
-ROOT="/Users/arlenrios/Desktop/dev-projects/AI-Orchestration/olympus-platform"
+# The queue runner (scripts/queue-runner.sh) lands PRs of other repos through
+# this script too: LAND_REPO names the GitHub slug, LAND_ROOT the checkout the
+# fetch and the worktree sweep run in. Defaults stay the product repo.
+REPO="${LAND_REPO:-Arlencho/olympus-platform}"
+ROOT="${LAND_ROOT:-/Users/arlenrios/Desktop/dev-projects/AI-Orchestration/olympus-platform}"
 API_URL=""
 
 cd "$ROOT" || exit 1
@@ -249,7 +252,13 @@ sweep_worktrees() {
 
 for pr in "$@"; do land_one "$pr" || { fail "stopping at #$pr"; exit 1; }; done
 main_green
-verify_prod
+# The prod probe knows one service set: the product's. Another repo gets the
+# merge, the main CI read-back and the sweep, and is told plainly what it did
+# not get.
+case "$REPO" in
+  */olympus-platform) verify_prod ;;
+  *) say "prod verification"; echo "  none configured for $REPO (only the product repo is probed)" ;;
+esac
 sweep_worktrees
 
 say "still yours to do by hand"
