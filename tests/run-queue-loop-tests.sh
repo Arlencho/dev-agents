@@ -14,9 +14,10 @@
 #      escalation, a close, a bare word, a quoted verdict and a silent critic
 #      queue nothing and are stops
 #   4. landing: every critic SAFE-TO-MERGE or APPROVE-MERGE plus green checks
-#      plus CLEAN calls land.sh (a draft is marked ready first); one silent
-#      critic of two, a stale comment from before the run, a pending check or
-#      a BEHIND merge state never merge
+#      plus CLEAN calls land.sh (a draft is marked ready first, and the pass
+#      that marked ready never lands: the next tick re-reads the head); one
+#      silent critic of two, a stale comment from before the run, a pending
+#      check or a BEHIND merge state never merge
 #   5. stops: a red check and a refused merge are one line each in the stops
 #      file with the critic sentence and one action; the desk reads them; a
 #      merged PR clears its stop; no absolute path and no comment body ever
@@ -38,6 +39,12 @@
 #      bound to the head and never counts; a check suite still open is not
 #      green whatever its completed jobs say; a draft marked ready has the
 #      checks and the merge state re-read on the head before any landing
+#  10. round 6 gates, one test each: landing sits behind QUEUE_LOOP_LAND,
+#      default off; off, a fully green PR is a ready_to_merge stop with the
+#      action merge and no gh write and no land.sh ever runs; the pass that
+#      marks a draft ready never lands, not on pending, not on the pre-ready
+#      named SUCCESS, not on an unnamed SUCCESS; an empty headRefOid never
+#      lands and binds no SAFE
 #
 # Also: --dry-run writes nothing, and the verdict parser is imported from
 # scripts/desk_live.py, never re-implemented.
@@ -70,6 +77,9 @@ FLEET="$SANDBOX/fleet"; mkdir -p "$FLEET/logs" "$FLEET/wave-plans" "$FLEET/bin"
 for d in scripts config; do cp -R "$REPO_DIR/$d" "$FLEET/$d"; done
 unset FLEET_EVENTS_FILE FLEET_EVENTS_DIR FLEET_QUEUE_FILE DISPATCH_RUNS_DIR QUEUE_RUNNER_PAUSE FLEET_STOPS_FILE
 unset QUEUE_RUNNER_MIN_FREE_PCT QUEUE_RUNNER_MAX_SWAP_GB DISPATCH_DETACHED DISPATCH_RUN_LOG FLEET_DISPATCH_ID
+unset QUEUE_LOOP_LAND
+# The landing tests (parts 4-9) run with the switch on; part 10 turns it off.
+export QUEUE_LOOP_LAND=1
 export LOCK_DIR="$SANDBOX/locks"; mkdir -p "$LOCK_DIR"
 # The checkout land.sh would stand in: a landing needs one on this machine.
 export FLEET_HOME="$SANDBOX/fleet-home"; mkdir -p "$FLEET_HOME/product/.git"
@@ -297,6 +307,14 @@ echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefOid":"a
 out=$(tick); check "tick exit" "0" "$?"
 check "draft marked ready first" "1" "$(count 'pr ready 42 -R acme/product' "$GH_LOG")"
 check "checks and merge state re-read on the head after ready" "1" "$(count 'pr view 42 .*statusCheckRollup' "$GH_LOG")"
+check "the pass that marked ready never lands" "0" "$(count '^42 ' "$LAND_LOG")"
+check "not marked yet (the head is re-read next tick)" "unmarked" "$(cut -f1 "$RUNS/run-eps-1.loop" 2>/dev/null || echo unmarked)"
+printf '%s\n' "$out" | grep -q "marked PR #42 ready; the landing re-reads the head on the next tick"; check "the wait is said" "0" "$?"
+# Next tick the PR reads non-draft; the named rollup on the head decides.
+sed 's/"isDraft":true/"isDraft":false/' "$FIX/pr-all-safe-green-draft.json" > "$GH_DIR/pr-42-ready.json"
+echo pr-42-ready > "$GH_SCENARIO"
+out=$(tick); check "tick exit on the re-read tick" "0" "$?"
+check "no second pr ready once the PR reads non-draft" "1" "$(count 'pr ready 42 -R acme/product' "$GH_LOG")"
 check "land.sh called for the PR with the repo slug" "1" "$(count '^42 LAND_REPO=acme/product' "$LAND_LOG")"
 check "run marked landed" "landed" "$(cut -f1 "$RUNS/run-eps-1.loop")"
 check "a landing is not a stop" "(none)" "$(stop_field run-eps-1 kind)"
@@ -688,7 +706,7 @@ block = {"stem": "CRITIC X", "verdict": "BLOCK-FIX", "_body": "CRITIC X: BLOCK-F
 assert q.safes_on_head([stale, fresh, plain, block], head) == [fresh, block]
 assert q.safes_on_head([short], head) == []
 assert q.safes_on_head([review_old, review_new], head) == [review_new]
-assert q.safes_on_head([stale], "") == [stale]
+assert q.safes_on_head([stale, plain, block], "") == [block]   # an empty head binds no SAFE
 assert q.unbound_safes([stale, fresh], [fresh], head) == []
 assert q.unbound_safes([plain], [], head) == ["CRITIC X"]
 assert q.unbound_safes([review_old], [], head) == ["CRITIC X"]
@@ -736,7 +754,10 @@ check "9b the sentence names the open suite" "CRITIC INPROG: SAFE-TO-MERGE; chec
 check "9b land.sh not called" "$before_land" "$(count . "$LAND_LOG")"
 
 # 9c. a draft marked ready has the checks and the merge state re-read on the
-# head before any landing: new runs started by ready are waited out
+# head before any landing, and the pass that marked ready never lands: the
+# re-read cannot tell the pre-ready green from the runs ready just started,
+# so pending waits, the pre-ready named SUCCESS waits, an unnamed SUCCESS
+# waits; the next tick, the PR non-draft, judges the named rollup on the head
 plan draftrecheck "one branch." feat/alpha
 ended_run run-draftrecheck draftrecheck stream-alpha-landed.jsonl
 echo pr-draft-recheck > "$GH_SCENARIO"
@@ -748,10 +769,75 @@ check "9c the draft was marked ready" "$((before_ready + 1))" "$(count 'pr ready
 check "9c the head was re-read after ready" "1" "$(count 'pr view 136 .*statusCheckRollup' "$GH_LOG")"
 check "9c post-ready checks pending: not decided, looked at again next tick" "unmarked" "$(cut -f1 "$RUNS/run-draftrecheck.loop" 2>/dev/null || echo unmarked)"
 check "9c land.sh not called on the pre-ready rollup" "$before_land" "$(count . "$LAND_LOG")"
+echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefOid":"c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1","statusCheckRollup":[{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"SUCCESS","commit":{"oid":"c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1"},"checkSuite":{"status":"COMPLETED","conclusion":"SUCCESS"}},{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","commit":{"oid":"c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1"},"checkSuite":{"status":"COMPLETED","conclusion":"SUCCESS"}}]}' > "$GH_DIR/view-136.json"
+tick >/dev/null
+check "9c the pre-ready named SUCCESS on the first re-read does not land" "$before_land" "$(count . "$LAND_LOG")"
+check "9c still not marked" "unmarked" "$(cut -f1 "$RUNS/run-draftrecheck.loop" 2>/dev/null || echo unmarked)"
 echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","headRefOid":"c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1","statusCheckRollup":[{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}]}' > "$GH_DIR/view-136.json"
 tick >/dev/null
-check "9c the post-ready re-read green: landed" "landed" "$(cut -f1 "$RUNS/run-draftrecheck.loop")"
+check "9c an unnamed SUCCESS after ready does not land" "$before_land" "$(count . "$LAND_LOG")"
+check "9c still not marked either" "unmarked" "$(cut -f1 "$RUNS/run-draftrecheck.loop" 2>/dev/null || echo unmarked)"
+check "9c one pr ready per tick that still saw a draft" "$((before_ready + 3))" "$(count 'pr ready 136' "$GH_LOG")"
+sed 's/"isDraft":true/"isDraft":false/' "$FIX/pr-draft-recheck.json" > "$GH_DIR/pr-136-ready.json"
+echo pr-136-ready > "$GH_SCENARIO"
+tick >/dev/null
+check "9c the next tick, non-draft, the named rollup green on the head: landed" "landed" "$(cut -f1 "$RUNS/run-draftrecheck.loop")"
 check "9c land.sh called for 136" "1" "$(count '^136 LAND_REPO=acme/product' "$LAND_LOG")"
+
+echo ""
+echo "== 10. round 6: landing behind QUEUE_LOOP_LAND, default off =="
+
+# 10a. the switch reads the env: unset, empty and 0 are off; 1, on, true, yes are on
+check "10a land_switch_on parses QUEUE_LOOP_LAND, default off" "off,off,off,on,on,on,on" "$(python3 -c '
+import sys, os; sys.path.insert(0, sys.argv[1]); import queue_loop as q
+out = []
+for v in (None, "", "0", "1", "on", "true", "yes"):
+    if v is None: os.environ.pop("QUEUE_LOOP_LAND", None)
+    else: os.environ["QUEUE_LOOP_LAND"] = v
+    out.append("on" if q.land_switch_on() else "off")
+print(",".join(out))' "$PYLIB")"
+
+# 10b. switch off: a fully green PR is a ready_to_merge stop, no gh write, no land.sh
+ended_run run-theta-off theta stream-alpha-landed.jsonl
+echo pr-all-safe-green > "$GH_SCENARIO"
+echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN"}' > "$GH_DIR/view-77.json"
+before_ready_all=$(count 'pr ready' "$GH_LOG"); before_land=$(count . "$LAND_LOG")
+out=$(export QUEUE_LOOP_LAND=0; tick)
+check "10b tick exit with the switch off" "0" "$?"
+check "10b stop kind ready_to_merge" "ready_to_merge" "$(stop_field run-theta-off kind)"
+check "10b the action is merge" "merge" "$(stop_field run-theta-off action)"
+check "10b its sentence is the critic line and the green head" "CRITIC THETA: APPROVE-MERGE; checks green (3)" "$(stop_field run-theta-off sentence)"
+check "10b marked as the stop, not landed" "stop:ready_to_merge" "$(cut -f1 "$RUNS/run-theta-off.loop")"
+check "10b no gh write at all (no pr ready)" "$before_ready_all" "$(count 'pr ready' "$GH_LOG")"
+check "10b land.sh not called" "$before_land" "$(count . "$LAND_LOG")"
+
+# 10c. the default is off: unset, a draft is never marked ready, the stop says draft
+ended_run run-eps-off epsilon stream-alpha-landed.jsonl
+echo pr-all-safe-green-draft > "$GH_SCENARIO"
+before_ready42=$(count 'pr ready 42' "$GH_LOG")
+out=$(unset QUEUE_LOOP_LAND; tick)
+check "10c tick exit with the switch unset" "0" "$?"
+check "10c a draft is never marked ready with the switch off" "$before_ready42" "$(count 'pr ready 42' "$GH_LOG")"
+check "10c stop kind ready_to_merge" "ready_to_merge" "$(stop_field run-eps-off kind)"
+check "10c the sentence says the PR is still a draft" "CRITIC EPSILON: SAFE-TO-MERGE; checks green (3); the PR is still a draft" "$(stop_field run-eps-off sentence)"
+check "10c land.sh not called" "$before_land" "$(count . "$LAND_LOG")"
+
+# 10d. the Floor reads the row: NEEDS YOU shows kind ready_to_merge, action merge
+(cd "$FLEET" && FLEET_STOPS_FILE="$STOPS" python3 scripts/desk_live.py --once --no-gh --events-dir "$EVENTS" --queue-file "$QUEUE_FILE" --out "$LIVE" >/dev/null 2>&1); check "10d desk_live --once" "0" "$?"
+check "10d NEEDS YOU carries ready_to_merge with the action merge" "ok" "$(python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+hits=[s for s in d["stops"] if s["kind"]=="ready_to_merge" and s["action"]=="merge"]
+print("ok" if len(hits)==2 else "missing")' "$LIVE")"
+
+# 10e. the off runs did not leak: the harness switch is still on and lands
+check "10e the harness switch is still on" "1" "$QUEUE_LOOP_LAND"
+ended_run run-theta-on theta stream-alpha-landed.jsonl
+echo pr-all-safe-green > "$GH_SCENARIO"
+before_land77=$(count '^77 LAND_REPO=acme/product' "$LAND_LOG")
+tick >/dev/null
+check "10e switch on: the same green PR lands" "landed" "$(cut -f1 "$RUNS/run-theta-on.loop")"
+check "10e land.sh called for 77" "$((before_land77 + 1))" "$(count '^77 LAND_REPO=acme/product' "$LAND_LOG")"
 
 echo ""
 echo "== $pass passed, $fail failed =="

@@ -345,20 +345,29 @@ the Floor uses, never a second copy.
   for a person, never a landing on the old `SAFE`. The vocabulary itself, and when a critic
   picks each word, is the rule block in `docs/org-chart.md` § Verdict; the same block sits in
   every critic charter and in `CLAUDE.md`.
-- *Landing.* In this order, each gate a stop when it fails: the head is green (a run that
+- *Landing.* Landing sits behind `QUEUE_LOOP_LAND` and is off by default, until the
+  landing gate is proven: off, the runner makes no write call at all (no `gh pr ready`,
+  no `gh pr merge`, no land.sh) and a PR that passes every gate below becomes a stop of
+  kind `ready_to_merge` with the action `merge`, so the Floor's NEEDS YOU shows it. The
+  gates, in this order, each a stop when it fails: the head is green (a run that
   names another commit is stale, a run whose workflow was cancelled is not green, zero checks
-  is not green); every assigned critic seat posted `SAFE-TO-MERGE` or `APPROVE-MERGE` since
+  is not green, and a PR GitHub gives no `headRefOid` has no head a check or a SAFE can
+  bind to and never lands); every assigned critic seat posted `SAFE-TO-MERGE` or `APPROVE-MERGE` since
   the run started under its own heading, on the head that is about to merge (the seat's plan
   line names it, "first line reads CRITIC ZETA"; a seat the plan does not name takes a heading
   that shares a word with a heading the run did name, never a word of the plan filename; any
   other stem covers nobody, so a second `SAFE` under a strange heading never stands in for a
   silent seat; and a `SAFE` that names an earlier head stops counting the moment the head
   moves, so a push after `SAFE` returns the PR to waiting for critics); the merge state is
-  `CLEAN`; this machine holds a checkout of the repo
-  (`$FLEET_HOME/<repo>` or this repo itself; without one the landing is refused and stopped,
-  land.sh never stands in another repo's tree). Then, because `gh pr list`'s rollup names no
+  `CLEAN`. Then, because `gh pr list`'s rollup names no
   commit per run, the runner reads the head commit's own checks once more (one GraphQL call,
-  bound to the head oid) and judges them the same way; only then a draft is marked ready and
+  bound to the head oid) and judges them the same way. With landing on, this machine must
+  also hold a checkout of the repo
+  (`$FLEET_HOME/<repo>` or this repo itself; without one the landing is refused and stopped,
+  land.sh never stands in another repo's tree), a draft is marked ready, and the checks and
+  the merge state are re-read on the head: the pass that marked ready never lands, because
+  marking ready starts new runs and the re-read cannot tell the pre-ready green from them,
+  so the next tick re-reads the PR and re-runs the named rollup on the head; only then
   `scripts/land.sh <PR>` runs with `LAND_REPO` and `LAND_ROOT` (land.sh refuses one without
   the other). Pending checks and an unreachable GitHub are looked at again next tick. Red or
   stale checks, `BEHIND`, `DIRTY`, `BLOCKED`, a refused merge: a stop, never a merge.

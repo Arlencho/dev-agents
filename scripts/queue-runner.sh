@@ -10,8 +10,12 @@
 #      dispatch that has ended since the last tick, reads the critic verdicts
 #      on its PR (the first-line convention, parsed by scripts/desk_live.py):
 #        - every critic seat posted SAFE-TO-MERGE or APPROVE-MERGE, the checks
-#          are green and the merge state is CLEAN: lands the PR through
-#          scripts/land.sh (a draft is marked ready first);
+#          are green and the merge state is CLEAN: with QUEUE_LOOP_LAND on
+#          (default off, until the landing gate is proven) lands the PR through
+#          scripts/land.sh (a draft is marked ready first, and the pass that
+#          marked ready never lands: the next tick re-reads the head); off, the
+#          runner makes no write call at all and the PR becomes a stop of kind
+#          ready_to_merge with the action merge;
 #        - a critic posted BLOCK-FIX and the plan is not itself a fix plan:
 #          writes <plan>-fix1.plan next to the original (one producer seat of
 #          the same role and branch with the comment quoted in full plus "fix

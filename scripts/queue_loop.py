@@ -17,8 +17,17 @@ the bookkeeping around it, in four subcommands the runner calls in order:
               its own heading, bound to the current head (a verdict word on a
               body line is no verdict, a SAFE recorded on an earlier head does
               not count, and a SAFE that records no head does not count);
-              then the PR must be CLEAN and this machine must hold a
-              checkout of the repo; then a landing through scripts/land.sh.
+              then the PR must be CLEAN; then, with landing on, this machine
+              must hold a checkout of the repo and a landing runs through
+              scripts/land.sh. Landing sits behind QUEUE_LOOP_LAND and is off
+              by default, until the landing gate is proven: off, the runner
+              makes no write call at all (no gh pr ready, no gh pr merge, no
+              land.sh) and a PR past every gate becomes a stop of kind
+              ready_to_merge with the action merge, so the Floor's NEEDS YOU
+              shows it. A PR GitHub gives no headRefOid never lands and binds
+              no SAFE. A draft is marked ready only with landing on, and the
+              pass that marked ready never lands: the next tick re-reads the
+              PR and re-runs the named rollup on the head.
               Also clears stops whose PR has since merged or closed.
   guard       read free memory and swap; say once per change of state whether
               starts are held, and write that into the queue (hold) and the
@@ -45,8 +54,9 @@ Files (all under logs/, per machine, gitignored except the queue):
   logs/fleet-stops.jsonl           one line per stop, one per clearance
   logs/fleet-queue.json            hold and waiting reasons (queue.sh writes)
 
-Stdlib only. The one network dependency is gh, read-mostly: the two writes it
-ever does are `gh pr ready` before a landing and the merge inside land.sh.
+Stdlib only. The one network dependency is gh, read-mostly: the only writes it
+ever does are `gh pr ready` before a landing and the merge inside land.sh, and
+those only when QUEUE_LOOP_LAND switches landing on (default off).
 --dry-run makes every subcommand read-only: nothing marked, nothing queued,
 nothing written, nothing landed.
 """
@@ -98,6 +108,7 @@ MAX_STOP_CHECKS_PER_TICK = 10
 # One action per stop kind: the words the Floor's NEEDS YOU row ends with.
 STOP_ACTIONS = {
     "guard": "free memory or wait; the runner resumes by itself",
+    "ready_to_merge": "merge",
     "second_block": "open the comment; the runner fired its one fix round",
     "escalate": "decide: open the comment",
     "close": "close the PR or say why not",
@@ -129,6 +140,12 @@ def note(text):
 
 def say(text):
     emit("say", text)
+
+
+def land_switch_on():
+    """QUEUE_LOOP_LAND: landing is off unless the variable says on, exactly.
+    Off is the default while the landing gate is unproven."""
+    return os.environ.get("QUEUE_LOOP_LAND", "").strip().lower() in ("1", "true", "on", "yes")
 
 
 def is_critic(agent):
@@ -574,10 +591,10 @@ def safes_on_head(threads, head):
     recorded on the head (commit.oid). A SAFE that names an earlier head, a
     short SHA, or no commit at all is not bound to the head and never counts:
     a push after SAFE, or a critic that did not record the head, returns the
-    PR to waiting for critics."""
+    PR to waiting for critics. An empty head binds no SAFE at all."""
     head = str(head or "")
     if not head:
-        return list(threads)
+        return [t for t in threads if t.get("verdict") not in LANDING_VERDICTS]
     out = []
     for thread in threads:
         if thread.get("verdict") in LANDING_VERDICTS:
@@ -970,8 +987,16 @@ def settle_one(args, gh, pid_path, info, stream_path):
         #    names another commit, or a cancelled workflow, is red here, and a
         #    check suite still open is not green whatever its jobs say. Jobs
         #    still running are looked at again next tick; jobs done under a
-        #    suite that will not close is a stop for a person.
+        #    suite that will not close is a stop for a person. A PR GitHub
+        #    gives no headRefOid has no head a check or a SAFE can bind to:
+        #    it never lands.
         head = str(pr.get("headRefOid") or "")
+        if not head:
+            open_stop(args.stops, dispatch_id, "red_checks", dry,
+                      verdict=verdicts[0] if verdicts else None,
+                      sentence="%s; GitHub names no head commit for this PR" % sentence, **common)
+            mark = "stop:red_checks"
+            continue
         rollup = pr.get("statusCheckRollup")
         checks, check_sentence = head_checks_state(rollup, head)
         if checks == "pending" and checks_running(rollup):
@@ -1015,18 +1040,9 @@ def settle_one(args, gh, pid_path, info, stream_path):
             mark = "stop:not_clean"
             continue
 
-        # 5. A landing needs a checkout of this repo on this machine: land.sh
-        #    fetches and sweeps in it, and must never stand in another repo's.
-        root = land_root(url)
-        if root is None:
-            open_stop(args.stops, dispatch_id, "merge_refused", dry, verdict=verdicts[0],
-                      sentence="%s; no local checkout of %s on this machine for land.sh"
-                      % (sentence, repo), **common)
-            mark = "stop:merge_refused"
-            continue
-
-        # 6. gh pr list's rollup names no commit per run: before the first
-        #    write, ask the head commit itself and judge that rollup the same way.
+        # 5. gh pr list's rollup names no commit per run: before any landing
+        #    decision, ask the head commit itself and judge that rollup the
+        #    same way. This gate is read-only and runs with landing on or off.
         if not rollup_named(rollup):
             fresh, why = gh.head_checks(slug, head)
             if fresh is None:
@@ -1043,13 +1059,37 @@ def settle_one(args, gh, pid_path, info, stream_path):
                 mark = "stop:red_checks"
                 continue
 
-        # 7. The landing: a draft is marked ready first, then the checks and
-        #    the merge state are re-read on the head (marking ready starts new
-        #    runs; the pre-ready rollup is stale the moment ready returns),
-        #    then land.sh.
+        # 6. Landing sits behind QUEUE_LOOP_LAND and is off by default, until
+        #    the landing gate is proven. Off, the runner makes no write call
+        #    (no gh pr ready, no gh pr merge, no land.sh): a PR past every
+        #    gate is a stop row for a person, action merge.
+        if not args.land_enabled:
+            draft_note = "; the PR is still a draft" if pr.get("isDraft") else ""
+            open_stop(args.stops, dispatch_id, "ready_to_merge", dry, verdict=verdicts[0],
+                      sentence="%s; %s%s" % (sentence, check_sentence, draft_note), **common)
+            mark = "stop:ready_to_merge"
+            continue
+
+        # 7. A landing needs a checkout of this repo on this machine: land.sh
+        #    fetches and sweeps in it, and must never stand in another repo's.
+        root = land_root(url)
+        if root is None:
+            open_stop(args.stops, dispatch_id, "merge_refused", dry, verdict=verdicts[0],
+                      sentence="%s; no local checkout of %s on this machine for land.sh"
+                      % (sentence, repo), **common)
+            mark = "stop:merge_refused"
+            continue
+
+        # 8. The landing: a draft is marked ready first, then the checks and
+        #    the merge state are re-read on the head. Marking ready starts new
+        #    runs and the re-read cannot tell the pre-ready green from them,
+        #    so the pass that marked ready never lands: the next tick re-reads
+        #    the PR from pr list and re-runs the named rollup on the head
+        #    (gate 5) before land.sh.
         if pr.get("isDraft"):
             if dry:
-                note("would mark PR #%s ready (draft) before landing" % number)
+                note("would mark PR #%s ready (draft); the pass that marks ready never lands"
+                     % number)
             else:
                 err = gh.pr_ready(slug, number)
                 if err:
@@ -1061,7 +1101,13 @@ def settle_one(args, gh, pid_path, info, stream_path):
                 if fresh is None:
                     say("%s: %s; will look again next tick" % (dispatch_id, why))
                     return None
-                post_head = str(fresh.get("headRefOid") or head)
+                post_head = str(fresh.get("headRefOid") or "")
+                if not post_head:
+                    open_stop(args.stops, dispatch_id, "red_checks", dry, verdict=verdicts[0],
+                              sentence="%s; after ready: GitHub names no head commit" % sentence,
+                              **common)
+                    mark = "stop:red_checks"
+                    continue
                 post_rollup = fresh.get("statusCheckRollup")
                 post_checks, post_sentence = head_checks_state(post_rollup, post_head)
                 if post_checks == "pending" and checks_running(post_rollup):
@@ -1084,6 +1130,8 @@ def settle_one(args, gh, pid_path, info, stream_path):
                               **common)
                     mark = "stop:not_clean"
                     continue
+                note("marked PR #%s ready; the landing re-reads the head on the next tick" % number)
+                return None
         if dry:
             note("would land PR #%s of %s via land.sh (%s; %s; merge state clean)"
                  % (number, slug, sentence, check_sentence))
@@ -1366,6 +1414,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.state_file is None:
         args.state_file = os.path.join(args.runs_dir, "queue-runner-guard.state")
+    args.land_enabled = land_switch_on()
     return {"settle": cmd_settle, "guard": cmd_guard, "candidates": cmd_candidates}[args.command](args)
 
 
