@@ -1188,6 +1188,29 @@
     renderScrubber(d);
   }
 
+  /* A replay receipt opened on a desk with no live server (the documented
+     file:// desk, or the static site with no /api) must become a visible
+     state, never a silent keep of the live snapshot: the watermark says the
+     replay is not available here, the LED goes off, the strip figures hide,
+     the clocks stay frozen, and the reader gets a way back to the Floor. */
+  function replayUnavailable(dispatchId) {
+    elapsedLive = false;
+    var led = $("floor-led");
+    if (led) led.className = "led off";
+    ["strip-running", "strip-queued", "strip-landed", "strip-failed",
+      "strip-needs", "strip-event"].forEach(function (id) { show(id, false); });
+    var wm = $("floor-watermark");
+    if (!wm) return;
+    wm.hidden = false;
+    wm.innerHTML =
+      '<span class="wm-badge" aria-label="Replay unavailable">REPLAY</span>' +
+      '<span class="wm-copy">Replay of <span class="mono">' +
+      esc(dispatchId || "this dispatch") + "</span> is not available on this desk " +
+      "(it needs <code>make desk-live</code> serving the event stream).</span>" +
+      '<a class="btn-replay" href="' + esc(window.location.pathname) +
+      '">Exit to live Floor</a>';
+  }
+
   function loadReplay(dispatchId, asOfSeq) {
     stopLivePoll();
     var q = [];
@@ -1197,13 +1220,12 @@
     fetch(url, { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        if (d) {
-          // Server should stamp view=replay; force it if missing.
-          if (d.view !== "replay") d.view = "replay";
-          renderAll(d);
-        }
+        if (!d) { replayUnavailable(dispatchId); return; }
+        // Server should stamp view=replay; force it if missing.
+        if (d.view !== "replay") d.view = "replay";
+        renderAll(d);
       })
-      .catch(function () { elapsedLive = false; /* keep snapshot, frozen */ });
+      .catch(function () { replayUnavailable(dispatchId); });
   }
 
   function stopLivePoll() {
@@ -1236,6 +1258,21 @@
     mode.replay = false;
     pollLive();
   }
+
+  /* Every anchor jump on the page must land below the sticky header, whose
+     height changes whenever the nav or the scope chips wrap: no constant
+     tracks it, so measure the header on load and on resize and drive the
+     single scroll-padding rule of site.css. One rule covers every target,
+     queue rows included. */
+  function measureHeader() {
+    var h = document.querySelector("header.site");
+    if (!h) return;
+    document.documentElement.style.setProperty(
+      "--floor-header-h", (Math.ceil(h.getBoundingClientRect().height) + 8) + "px");
+  }
+  window.addEventListener("resize", measureHeader);
+  window.addEventListener("load", measureHeader);
+  measureHeader();
 
   // Boot
   setInterval(tickElapsed, 1000);

@@ -975,13 +975,52 @@ grep -q 'id="floor-queue-row-1"' "$FL" \
   && ok "B2: queue rows carry the ids a NEEDS YOU action jumps to" \
   || bad "B2: queue rows carry the ids a NEEDS YOU action jumps to"
 
-# B3: strip anchors offset by the sticky header height at both widths
-# (129 px at 1280, 237 px at 400), so a figure never lands its heading
-# behind the header.
-grep -q 'scroll-margin-top: 140px' "$FIXOUT/assets/site.css" \
-  && grep -q 'scroll-margin-top: 250px' "$FIXOUT/assets/site.css" \
-  && ok "B3: floor anchor targets offset by the sticky header at both widths" \
-  || bad "B3: floor anchor targets offset by the sticky header at both widths"
+# R2-2 (replaces the B3 constants): one rule, html scroll-padding driven by
+# the measured sticky-header height, offsets every anchor target on the page
+# including queue rows. The round-1 per-card pixel constants could not track
+# the header wrap points (237 px at 400, 164 at 700, 129 at 1280).
+grep -q 'scroll-padding-top: var(--floor-header-h' "$FIXOUT/assets/site.css" \
+  && ok "R2-2: html scroll-padding drives every anchor offset from the header height" \
+  || bad "R2-2: html scroll-padding drives every anchor offset from the header height"
+if grep -q 'scroll-margin-top' "$FIXOUT/assets/site.css"; then
+  bad "R2-2: no per-target pixel offsets remain in site.css"
+else
+  ok "R2-2: no per-target pixel offsets remain in site.css"
+fi
+grep -q 'function measureHeader(' "$FIXOUT/assets/floor.js" \
+  && grep -q 'addEventListener("resize", measureHeader)' "$FIXOUT/assets/floor.js" \
+  && grep -q -- '"--floor-header-h"' "$FIXOUT/assets/floor.js" \
+  && ok "R2-2: floor.js measures the sticky header on load and resize" \
+  || bad "R2-2: floor.js measures the sticky header on load and resize"
+
+# R2-1: a replay receipt opened on a static desk (no live server) must be a
+# visible state, never a silent keep of the live LED. The grep half pins the
+# failure branch of loadReplay; the browser probe below runs the repro.
+grep -q 'function replayUnavailable(' "$FIXOUT/assets/floor.js" \
+  && grep -q 'not available on this desk' "$FIXOUT/assets/floor.js" \
+  && grep -q 'Exit to live Floor' "$FIXOUT/assets/floor.js" \
+  && grep -q 'if (!d) { replayUnavailable(dispatchId); return; }' "$FIXOUT/assets/floor.js" \
+  && grep -q '.catch(function () { replayUnavailable(dispatchId); })' "$FIXOUT/assets/floor.js" \
+  && ok "R2-1: the replay failure branch paints a visible state" \
+  || bad "R2-1: the replay failure branch paints a visible state"
+
+# Browser probes (real layout, real clicks, file:// desk). A machine without
+# a headless browser skips them with a pass note, like the optional gh path.
+probe() { # <name> <mode> <width> <height> [query]
+  local name="$1" pmode="$2" w="$3" h="$4" q="${5:-}"
+  local logf="$TMP/probe-$pmode-$w.log" rc=0
+  python3 "$SCRIPT_DIR/floor-browser-probe.py" --site "$FIXOUT" --mode "$pmode" \
+    --width "$w" --height "$h" --query "$q" >"$logf" 2>&1 || rc=$?
+  sed 's/^/    | /' "$logf"
+  if [ "$rc" -eq 0 ]; then ok "$name"
+  elif [ "$rc" -eq 77 ]; then ok "$name (skipped: no headless browser)"
+  else bad "$name"; fi
+}
+probe "R2-2: strip figures and in-page actions land below the header at 400" anchors 400 844
+probe "R2-2: strip figures and in-page actions land below the header at 768" anchors 768 1024
+probe "R2-2: strip figures and in-page actions land below the header at 1280" anchors 1280 800
+probe "R2-1: replay receipt on a static desk leaves no live LED (critic repro)" \
+  replay-unavailable 1280 800 "?replay=1&dispatch_id=v3-failed"
 
 # B5: the failed figure equals the failed list it links to.
 grep -q 'id="strip-failed" href="#floor-failed-card">1 failed · 1 aborted' "$FL" \
