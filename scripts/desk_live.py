@@ -745,23 +745,40 @@ def seat_activity(ev, ts):
     return activity
 
 
+# Where a path outside the worktree may begin inside one token: a slash, a
+# home or a variable, a parent escape, any of them after an optional file:
+# scheme, at the start of the token or right after a character that cannot be
+# part of a relative path (fix:/Users/x, path=/Users/x, x=$HOME/y, see:../z).
+# A slash after a path character (scripts/notify.sh, feat/x) is not a start.
+PATH_START = re.compile(r"(?i)(?<![\w.~$/+@%-])(?:file:)?(?:[/~$]|\.\.(?=/|$))")
+# A URL is left to the whole-token rule: its :// is not a path start.
+URL_SCHEME = re.compile(r"(?i)^(?!file:)[a-z][a-z0-9+.-]*://")
+WRAPPERS = "(\"'`"
+
+
 def task_path(token):
     """One slash token of a task line, as the Floor may print it.
 
     Same law as activity_path: an operator path never reaches the page. A
     path inside this worktree is kept, repo-relative; anything else that
     reads as a path (absolute, home, variable, parent escape) becomes the
-    marker. Punctuation around the token stays where it was.
+    marker, whether the token is the path or the path sits inside it after
+    a colon, an equals sign or a backtick. Punctuation and wrappers around
+    the token stay where they were.
     """
-    core = token.rstrip(".,;:!?)'\"")
+    core = token.rstrip(".,;:!?)'\"`")
     tail = token[len(core):]
     lead = ""
-    if core[:1] in "(\"'":
-        lead, core = core[:1], core[1:]
-    if core.lower().startswith("file:"):
-        core = core[5:]
+    while core and core[0] in WRAPPERS:
+        lead, core = lead + core[0], core[1:]
     if not core or "/" not in core:
         return token
+    if not URL_SCHEME.match(core):
+        start = PATH_START.search(core)
+        if start:
+            lead, core = lead + core[:start.start()], core[start.start():]
+    if core.lower().startswith("file:"):
+        core = core[5:]
     if os.path.isabs(core):
         relative = os.path.relpath(core, REPO_DIR)
         if relative.startswith(os.pardir):

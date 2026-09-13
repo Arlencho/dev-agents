@@ -2355,6 +2355,17 @@ assert_fn "mark_paths keeps a branch, a repo-relative path and a URL" \
   'mod.mark_paths("PR 7 ready: feat/x merges scripts/notify.sh https://example.invalid/pr/7")=="PR 7 ready: feat/x merges scripts/notify.sh https://example.invalid/pr/7"'
 assert_fn "mark_paths flattens a tab or a newline before a path" \
   'mod.mark_paths("fix\t/Users/x/y\nnow")=="fix outside-repo now"'
+# Round 3: a path glued to other characters is still a path. The critic's
+# title (a colon before the slash), a markdown backtick wrapper, an equals
+# sign, a variable and a parent escape inside the token.
+assert_fn "round 3: mark_paths marks the critic's colon-glued title" \
+  'mod.mark_paths("fix:/Users/arlenrios/.ssh/id_rsa rotate keys")=="fix:outside-repo rotate keys"'
+assert_fn "round 3: mark_paths strips backticks like quotes and marks what they wrap" \
+  'mod.mark_paths("fix `/Users/arlenrios/.ssh/id_rsa` and `~/.ssh` now")=="fix `outside-repo` and `outside-repo` now"'
+assert_fn "round 3: mark_paths marks a path after an equals sign, a glued variable, a glued parent escape and a glued file:" \
+  'mod.mark_paths("path=/Users/arlenrios/.ssh/id_rsa home=$HOME/x up=../y see:file:/etc/passwd")=="path=outside-repo home=outside-repo up=outside-repo see:outside-repo"'
+assert_fn "round 3: mark_paths keeps a glued repo-relative path, a branch and a URL" \
+  'mod.mark_paths("fix:scripts/notify.sh on feat/x key:value/w https://example.invalid/pr/7")=="fix:scripts/notify.sh on feat/x key:value/w https://example.invalid/pr/7"'
 assert_fn "first_sentence is the same rule (the failed dispatch line)" \
   'mod.first_sentence("Fix /Users/arlenrios/.ssh/id_rsa and $HOME now. Then sk-abcdefghijklmnopqrstuvwxyz", 80)=="Fix outside-repo and $HOME now."'
 
@@ -2411,9 +2422,58 @@ if [ "$on_mac" = "1" ]; then
     && bad "macOS: no osascript argv carries a path or a token" || ok "macOS: no osascript argv carries a path or a token"
 fi
 
+# Round 3, the product path: PR 102 served under the critic's colon-glued
+# title through the same wrapper; the projection and the push carry the
+# marker, not the path.
+cat > "$L2_BIN/gh" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$1 $2 $3" = "pr view 102" ]; then
+  echo "$*" >> "${GH_SHIM_LOG:?}"
+  NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"number":102,"title":"fix:/Users/arlenrios/.ssh/id_rsa rotate keys","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","url":"https://example.invalid/pr/102","headRefName":"feat/k-ready","comments":[{"id":"IC_102_1","url":"https://example.invalid/pr/102#c1","createdAt":"%s","body":"CRITIC K READY: SAFE-TO-MERGE"}],"reviews":[]}\n' "$NOW"
+  exit 0
+fi
+exec "${L2_INNER_GH:?}" "$@"
+SHIM
+chmod +x "$L2_BIN/gh"
+L3_ON="$TMP/out/live-l3.json"
+PATH="$L2_BIN:$PATH" GH_SHIM_LOG="$L2_LOG" L2_INNER_GH="$K_BIN/gh" FLEET_GH_OWNER=testowner FLEET_CHECKOUTS="$K_CO" \
+  python3 "$DESK_LIVE" --once --events-dir "$K_DIR" --queue-file "$K_Q" --out "$L3_ON" >/dev/null 2>&1 \
+  && ok "round 3: --once exits 0 with the colon-glued title" || bad "round 3: --once exits 0 with the colon-glued title"
+assert_py "round 3: the ready_to_merge line marks the colon-glued path" "$L3_ON" \
+  '[e["text"] for e in d["needs_you"] if e["type"]=="ready_to_merge"]==["PR 102 ready to merge: fix:outside-repo rotate keys"]'
+grep -q 'id_rsa\|/Users/' "$L3_ON" \
+  && bad "round 3: no operator path anywhere in the projection" \
+  || ok "round 3: no operator path anywhere in the projection"
+python3 - "$L3_ON" "$L2_DIR/aged-r3.json" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+d = json.load(open(sys.argv[1]))
+at = (datetime.now(timezone.utc) - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+for e in d["needs_you"]:
+    e["at"] = at
+json.dump(d, open(sys.argv[2], "w"))
+PY
+out=$(PATH="$N_SHIM:$PATH" env -u FLEET_NOTIFY_SILENT -u NOTIFY_SILENT FLEET_NOTIFY_NEEDS_YOU_STATE="$L2_DIR/seen-product-r3" \
+  FLEET_NOTIFY_NEEDS_YOU_MIN=1 "$NOTIFY" needs-you "$L2_DIR/aged-r3.json" 2>"$L2_DIR/aged-r3.err")
+case "$out" in
+  *'Needs you: PR 102 ready to merge: fix:outside-repo rotate keys'*) ok "round 3: the push carries the marked colon-glued line" ;;
+  *) bad "round 3: the push carries the marked colon-glued line ($out)" ;;
+esac
+case "$out" in
+  *"id_rsa"*|*"/Users/"*) bad "round 3: the push carries no path" ;;
+  *) ok "round 3: the push carries no path" ;;
+esac
+[ ! -s "$L2_DIR/aged-r3.err" ] && ok "round 3: the marked line is not refused" || bad "round 3: the marked line is not refused ($(cat "$L2_DIR/aged-r3.err"))"
+if [ "$on_mac" = "1" ]; then
+  grep -q 'id_rsa\|/Users/' "$OSASCRIPT_CALLS" \
+    && bad "round 3: no osascript argv carries a path" || ok "round 3: no osascript argv carries a path"
+fi
+
 # A hand-written live.json cannot bypass the projector: notify.sh refuses an
 # item whose text still carries an operator path, sends nothing for it and
-# does not record it as seen; the clean item next to it goes through.
+# does not record it as seen; the clean item next to it goes through. Round 3:
+# the colon-glued and the backticked path (PR 105, 106) are refused too.
 python3 - "$L2_DIR" <<'PY'
 import json, os, sys
 from datetime import datetime, timedelta, timezone
@@ -2428,6 +2488,8 @@ paths = [
     item("prd_proposed", "S11 awaits sign-off in docs/../../etc/passwd", {"kind": "file", "checkout": "c", "file": "x", "line": 1}),
     item("critic_block", "PR 103 round 1 blocked by critic (file:/etc/passwd)", {"kind": "comment", "repo": "r", "comment_id": 7}),
     item("ready_to_merge", "PR 104 ready to merge: fix outside-repo in scripts/notify.sh on feat/x", {"kind": "pr", "repo": "r", "pr": 104}),
+    item("ready_to_merge", "PR 105 ready to merge: fix:/Users/arlenrios/.ssh/id_rsa rotate keys", {"kind": "pr", "repo": "r", "pr": 105}),
+    item("ready_to_merge", "PR 106 ready to merge: fix `/Users/arlenrios/.ssh/id_rsa` rotate keys", {"kind": "pr", "repo": "r", "pr": 106}),
 ]
 json.dump({"schema": "live/1", "view": "live", "needs_you": paths}, open(os.path.join(out, "paths.json"), "w"))
 # the same file after the projector marked the first item
@@ -2448,7 +2510,7 @@ case "$out" in
   *"/Users/"*|*"~/"*|*'$HOME'*|*"/etc/passwd"*|*"/../"*) bad "no absolute, home, variable, file: or parent path is pushed" ;;
   *) ok "no absolute, home, variable, file: or parent path is pushed" ;;
 esac
-[ "$(grep -c 'WARNING: needs-you item .* refused' "$L2_DIR/paths.err")" = "5" ] \
+[ "$(grep -c 'WARNING: needs-you item .* refused' "$L2_DIR/paths.err")" = "7" ] \
   && ok "each refused item is one stderr line" || bad "each refused item is one stderr line ($(cat "$L2_DIR/paths.err"))"
 grep -q 'id_rsa\|/Users/\|passwd' "$L2_DIR/paths.err" \
   && bad "the stderr line does not repeat the path" || ok "the stderr line does not repeat the path"

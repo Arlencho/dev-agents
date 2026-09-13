@@ -53,7 +53,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Prints "<key>\t<text>" for every item due and not yet seen. Reads only.
 needs_you_due() {
     python3 - "$1" "$2" "$3" <<'PY'
-import hashlib, json, sys
+import hashlib, json, re, sys
 from datetime import datetime, timezone
 
 live_path, state_path, after_min = sys.argv[1], sys.argv[2], int(sys.argv[3])
@@ -91,17 +91,30 @@ def identity(item):
     return "%s|%s|%s" % (item.get("type"), kind, json.dumps(named, sort_keys=True))
 
 
+# The same path start as PATH_START in scripts/desk_live.py: a slash, home,
+# variable or parent escape after an optional file:, at the start of the
+# token or right after a character that cannot be part of a relative path.
+PATH_START = re.compile(r"(?i)(?<![\w.~$/+@%-])(?:file:)?(?:[/~$]|\.\.(?=/|$))")
+URL_SCHEME = re.compile(r"(?i)^(?!file:)[a-z][a-z0-9+.-]*://")
+
+
 def has_operator_path(text):
     """True when a slash token of the line reads as a path outside the
-    worktree: absolute, home, a variable, or a parent escape. The law of
-    task_path in scripts/desk_live.py; the projector already marks these, so
-    a token that still reads so came from a hand-written file."""
+    worktree: absolute, home, a variable, or a parent escape, whether the
+    token is the path or the path sits inside it (fix:/Users/x, `~/.ssh`).
+    The law of task_path in scripts/desk_live.py; the projector already
+    marks these, so a token that still reads so came from a hand-written
+    file."""
     for tok in text.split(" "):
         if "/" not in tok:
             continue
-        core = tok.rstrip(".,;:!?)'\"")
-        if core[:1] in "(\"'":
+        core = tok.rstrip(".,;:!?)'\"`")
+        while core and core[0] in "(\"'`":
             core = core[1:]
+        if not URL_SCHEME.match(core):
+            start = PATH_START.search(core)
+            if start:
+                core = core[start.start():]
         if core.lower().startswith("file:"):
             core = core[5:]
         if core.startswith(("/", "~", "$")) or ".." in core.split("/"):
