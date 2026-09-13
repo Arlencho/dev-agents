@@ -2071,7 +2071,7 @@ assert_py "a variable gh could not check is no item: the skipped check row is th
 assert_py "summary.needs_you counts verified items only" "$K_OFF" \
   'd["summary"]["needs_you"]==3 and d["summary"]["needs_you"]==sum(1 for e in d["needs_you"] if e["verified"])'
 assert_py "the gh checks are marked skipped with the reason" "$K_OFF" \
-  '{c["check"]: c["status"] for c in d["needs_you_meta"]["checks"]}=={"critic_block":"skipped","ready_to_merge":"skipped","quiet_seat":"ok","failed_dispatch":"ok","prd_proposed":"ok","missing_variable":"skipped"} and all(c["reason"] for c in d["needs_you_meta"]["checks"] if c["status"]=="skipped")'
+  '{c["check"]: c["status"] for c in d["needs_you_meta"]["checks"]}=={"critic_block":"skipped","ready_to_merge":"skipped","quiet_seat":"ok","failed_dispatch":"ok","prd_proposed":"ok","missing_variable":"skipped","merged_branch":"skipped"} and all(c["reason"] for c in d["needs_you_meta"]["checks"] if c["status"]=="skipped")'
 assert_py "the fallback initiative row comes from streams and queue alone and says so" "$K_OFF" \
   '(lambda r: r["lookup"]=="skipped" and r["reason"] and r["number"] is None and r["open_issues"] is None and r["exit"] is None and r["waves"]["planned"]==4 and r["waves"]["landed"]==2 and r["waves"]["landed_ids"]==["W1-A","W1-B"] and r["source"]["landed"]=="streams of the day")({r["title"]: r for r in d["initiatives"]}["Track K"]) and d["initiatives_meta"]["repos"][0]["lookup"]=="skipped"'
 assert_py "the fallback row carries epic_title and exit_lookup as the schema says" "$K_OFF" \
@@ -2677,6 +2677,209 @@ grep -q 'fixed phrases and identifiers only' "$REPO_DIR/docs/experience-data.md"
   || bad "the fixed-phrase toast rule is documented in the live schema"
 grep -q 'FLEET_NOTIFY_NEEDS_YOU_MIN' "$REPO_DIR/README.md" \
   && ok "FLEET_NOTIFY_NEEDS_YOU_MIN is in the README" || bad "FLEET_NOTIFY_NEEDS_YOU_MIN is in the README"
+# ── Part M: superseded failed dispatches leave NEEDS YOU (issue 86) ─────────
+echo "== Part M: superseded failed dispatches (issue 86) =="
+
+# The eleven failed or aborted rows of 2026-09-13, rebuilt from the real plan
+# files of the day (wave-plans/dev-agents/2026-09-1*-*.plan, on disk in this
+# repo, so the fix-round header rule reads the real headers): memory kills and
+# spend-limit kills, each replaced by a later dispatch of the same plan, a fix
+# round naming it, a later landing on its branch, or a still-running
+# re-dispatch. Plus one failed dispatch nothing replaced (stays open), one
+# live two-wave run whose producer and critic share a branch (the task_line
+# join is by seat, never by branch alone), and the streams are stamped
+# relative to now so every landing falls on today.
+L_PLANS="$TMP/plans-l"; mkdir -p "$L_PLANS"
+cat > "$L_PLANS/l-seat-match.plan" <<'PLAN'
+# L: producer and critic share one branch. Issue 86.
+1 | web-frontend | Build the floor change. | feat/l-seat
+2 | plan-critic | Review the floor change. | feat/l-seat
+PLAN
+
+L_Q="$TMP/queue-l.json"
+python3 - "$L_Q" "$L_PLANS" <<'LQ'
+import json, sys
+out, plans = sys.argv[1], sys.argv[2]
+json.dump({"schema": "fleet-queue/1", "updated_at": "2026-09-13T00:00:00Z", "entries": [
+    {"plan": plans + "/l-seat-match.plan", "repo": "dev-agents",
+     "purpose": "L: producer and critic share one branch. Issue 86.", "issue": 86,
+     "added_at": "2026-09-13T00:00:00Z", "status": "running",
+     "dispatch_id": "l-seats", "settled_at": None, "settled_status": None},
+]}, open(out, "w"), indent=2)
+LQ
+
+L_DIR="$TMP/events-l"; mkdir -p "$L_DIR"
+python3 - "$L_DIR" <<'LFIX'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+out = sys.argv[1]
+now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+midnight = midnight.astimezone(timezone.utc).replace(tzinfo=None)
+# All offsets are seconds-ago from a base of 7200: either every stamp is
+# now - d (room enough before midnight) or the whole day shifts to start at
+# local midnight with the same pairwise gaps, so ordering never depends on
+# the wall clock the suite runs on.
+def ts(d):
+    return max(now - timedelta(seconds=d),
+               midnight + timedelta(seconds=7200 - d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+def write(name, rows):
+    with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+        for i, row in enumerate(rows, 1):
+            row.update({"schema": "fleet-events/1", "seq": i, "dispatch_id": name[:-6]})
+            fh.write(json.dumps(row) + "\n")
+def settled(name, plan, branch, start, end, ok):
+    rows = [
+        {"ts": ts(start), "event": "dispatch_start", "mode": "wave", "repo": "dev-agents", "plan": plan},
+        {"ts": ts(start - 5), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+         "branch": branch, "wave": 1, "provider": "local"},
+    ]
+    if ok:
+        rows += [
+            {"ts": ts(end + 5), "event": "seat_exit", "task_id": "0", "agent": "devops",
+             "branch": branch, "wave": 1, "status": "success", "exit": 0, "duration_s": start - end},
+            {"ts": ts(end), "event": "dispatch_end", "status": "completed",
+             "total": 1, "succeeded": 1, "failed": 0, "duration_s": start - end},
+        ]
+    else:
+        rows += [
+            {"ts": ts(end + 5), "event": "seat_exit", "task_id": "0", "agent": "devops",
+             "branch": branch, "wave": 1, "status": "failed", "exit": 1, "duration_s": start - end},
+            {"ts": ts(end), "event": "dispatch_end", "status": "completed",
+             "total": 1, "succeeded": 0, "failed": 1, "duration_s": start - end},
+        ]
+    write(name, rows)
+def aborted(name, plan, branch, start, end):
+    write(name, [
+        {"ts": ts(start), "event": "dispatch_start", "mode": "wave", "repo": "dev-agents", "plan": plan},
+        {"ts": ts(start - 5), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+         "branch": branch, "wave": 1, "provider": "local"},
+        {"ts": ts(end), "event": "dispatch_end", "status": "aborted",
+         "total": 1, "succeeded": 0, "failed": 0, "duration_s": start - end},
+    ])
+# The eleven, oldest first: failed or aborted, each replaced later.
+settled("l-f01.jsonl", "2026-09-12-floor-v3a-needs-you.plan", "feat/floor-v3a", 7200, 6900, False)
+settled("l-f02.jsonl", "2026-09-13-floor-v3a-fix.plan", "feat/floor-v3a", 6600, 6300, False)
+settled("l-f01r.jsonl", "2026-09-13-floor-v3a-fix2.plan", "feat/floor-v3a", 6280, 6200, True)
+aborted("l-f03.jsonl", "2026-09-13-floor-v3b-page.plan", "feat/floor-v3b", 6000, 5700)
+settled("l-f04.jsonl", "2026-09-13-floor-v3b-fix1.plan", "feat/floor-v3b", 5400, 5100, False)
+settled("l-f03r.jsonl", "2026-09-13-floor-v3b-fix2.plan", "feat/floor-v3b", 5050, 4980, True)
+settled("l-f05.jsonl", "2026-09-13-floor-v3c-yesterday-notify.plan", "feat/floor-v3c", 4800, 4500, False)
+settled("l-f06.jsonl", "2026-09-13-floor-v3c-fix1.plan", "feat/floor-v3c", 4200, 3900, False)
+settled("l-f07.jsonl", "2026-09-13-floor-v3c-fix3.plan", "feat/floor-v3c", 3600, 3300, False)
+settled("l-f05r.jsonl", "2026-09-13-floor-v3c-fix5.plan", "feat/floor-v3c", 3250, 3200, True)
+settled("l-f08.jsonl", "2026-09-13-orchestrator-loop.plan", "feat/orchestrator-loop", 3000, 2700, False)
+settled("l-f09.jsonl", "2026-09-13-orchestrator-loop-fix1.plan", "feat/orchestrator-loop", 2400, 2100, False)
+settled("l-f08r.jsonl", "2026-09-13-orchestrator-loop-fix3.plan", "feat/orchestrator-loop", 2050, 1980, True)
+settled("l-f10.jsonl", "2026-09-13-floor-terminal-view.plan", "feat/floor-terminal", 1800, 1500, False)
+settled("l-f10r.jsonl", "2026-09-13-floor-terminal-rebase.plan", "feat/floor-terminal", 1450, 1400, True)
+aborted("l-f11.jsonl", "2026-09-13-routing-grok-producers.plan", "feat/routing-grok-producers", 1200, 900)
+# The twelfth: failed, nothing replaced it. Stays open.
+settled("l-orphan.jsonl", "l-orphan.plan", "feat/l-orphan", 600, 300, False)
+# Still running: the re-dispatch of the routing plan (supersedes l-f11 while
+# itself in flight) and the two-wave run whose critic shares the producer's
+# branch. Fresh heartbeats: no quiet seat.
+write("l-routing-live.jsonl", [
+    {"ts": ts(120), "event": "dispatch_start", "mode": "wave", "repo": "dev-agents",
+     "plan": "2026-09-13-routing-grok-producers.plan"},
+    {"ts": ts(110), "event": "seat_dispatch", "task_id": "8", "agent": "devops",
+     "branch": "feat/routing-grok-producers", "wave": 1, "provider": "local", "attempt": 2},
+    {"ts": ts(10), "event": "seat_heartbeat", "task_id": "8", "agent": "devops",
+     "branch": "feat/routing-grok-producers", "wave": 1, "elapsed_s": 100},
+])
+write("l-seats.jsonl", [
+    {"ts": ts(400), "event": "dispatch_start", "mode": "wave", "repo": "dev-agents",
+     "plan": "l-seat-match.plan"},
+    {"ts": ts(390), "event": "seat_dispatch", "task_id": "0", "agent": "web-frontend",
+     "branch": "feat/l-seat", "wave": 1, "provider": "local", "attempt": 1},
+    {"ts": ts(200), "event": "seat_exit", "task_id": "0", "agent": "web-frontend",
+     "branch": "feat/l-seat", "wave": 1, "status": "success", "exit": 0, "duration_s": 190},
+    {"ts": ts(190), "event": "seat_dispatch", "task_id": "1", "agent": "plan-critic",
+     "branch": "feat/l-seat", "wave": 2, "provider": "local", "attempt": 1},
+    {"ts": ts(8), "event": "seat_heartbeat", "task_id": "1", "agent": "plan-critic",
+     "branch": "feat/l-seat", "wave": 2, "elapsed_s": 182},
+])
+LFIX
+printf 'l-seats.jsonl\n' > "$L_DIR/latest"
+
+L_ON="$TMP/out/live-l-on.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --events-dir "$L_DIR" --queue-file "$L_Q" --out "$L_ON" >/dev/null 2>&1 \
+  && ok "--once exits 0 on the 2026-09-13 fixture" || bad "--once exits 0 on the 2026-09-13 fixture"
+assert_py "the eleven superseded rows leave zero open failed dispatches" "$L_ON" \
+  '[e["plan"] for e in d["needs_you"] if e["type"]=="failed_dispatch"]==["l-orphan.plan"] and d["needs_you_meta"]["count"]==1'
+assert_py "eleven superseded entries in the fold, newest first" "$L_ON" \
+  'len(d["needs_you_meta"]["superseded"])==11 '\
+'and [e["at"] for e in d["needs_you_meta"]["superseded"]]==sorted([e["at"] for e in d["needs_you_meta"]["superseded"]], reverse=True)'
+assert_py "every superseded entry keeps its source and names what replaced it" "$L_ON" \
+  'all(e["source"]["kind"]=="stream" and e["source"]["event"]=="dispatch_end" and e["superseded_by"].get("kind") in ("plan","landed","merge") for e in d["needs_you_meta"]["superseded"])'
+assert_py "the immediate next round names the supersession" "$L_ON" \
+  '(lambda s: s["2026-09-12-floor-v3a-needs-you.plan"]["plan"]=="2026-09-13-floor-v3a-fix.plan" '\
+'and s["2026-09-13-floor-v3a-fix.plan"]["plan"]=="2026-09-13-floor-v3a-fix2.plan" '\
+'and s["2026-09-13-floor-v3b-page.plan"]["plan"]=="2026-09-13-floor-v3b-fix1.plan" '\
+'and s["2026-09-13-floor-v3b-fix1.plan"]["plan"]=="2026-09-13-floor-v3b-fix2.plan" '\
+'and s["2026-09-13-floor-v3c-yesterday-notify.plan"]["plan"]=="2026-09-13-floor-v3c-fix1.plan" '\
+'and s["2026-09-13-floor-v3c-fix1.plan"]["plan"]=="2026-09-13-floor-v3c-fix3.plan" '\
+'and s["2026-09-13-floor-v3c-fix3.plan"]["plan"]=="2026-09-13-floor-v3c-fix5.plan" '\
+'and s["2026-09-13-orchestrator-loop.plan"]["plan"]=="2026-09-13-orchestrator-loop-fix1.plan" '\
+'and s["2026-09-13-orchestrator-loop-fix1.plan"]["plan"]=="2026-09-13-orchestrator-loop-fix3.plan")'\
+'({e["plan"]: e["superseded_by"] for e in d["needs_you_meta"]["superseded"]})'
+assert_py "a still-running re-dispatch of the same plan supersedes the failure it answers" "$L_ON" \
+  '(lambda by: by["kind"]=="plan" and by["plan"]=="2026-09-13-routing-grok-producers.plan" and by["dispatch_id"]=="l-routing-live")'\
+'({e["plan"]: e["superseded_by"] for e in d["needs_you_meta"]["superseded"]}["2026-09-13-routing-grok-producers.plan"])'
+assert_py "a later landing on the same branch supersedes, named by branch" "$L_ON" \
+  '(lambda by: by["kind"]=="landed" and by["branch"]=="feat/floor-terminal" and by["plan"]=="2026-09-13-floor-terminal-rebase.plan")'\
+'({e["plan"]: e["superseded_by"] for e in d["needs_you_meta"]["superseded"]}["2026-09-13-floor-terminal-view.plan"])'
+assert_py "the strip still counts what happened: 10 failed, 2 aborted, 5 landed today" "$L_ON" \
+  'len(d["today"])==17 and sum(1 for t in d["today"] if t["outcome"]=="failed")==10 '\
+'and sum(1 for t in d["today"] if t["outcome"]=="aborted")==2 and sum(1 for t in d["today"] if t["outcome"]=="landed")==5'
+assert_py "needs you counts only what is still open" "$L_ON" \
+  'd["summary"]["needs_you"]==1 and d["needs_you_meta"]["count"]==1'
+assert_py "gh absent: the merge rule is skipped and says so, the other rules still apply" "$L_ON" \
+  '(lambda c: c["merged_branch"]["status"]=="skipped" and c["merged_branch"]["reason"] and c["merged_branch"]["looked_at"]==12 and c["failed_dispatch"]["status"]=="ok" and c["failed_dispatch"]["looked_at"]==17)({c["check"]: c for c in d["needs_you_meta"]["checks"]})'
+assert_py "a failed dispatch nothing replaced stays open, cited by dispatch_end" "$L_ON" \
+  '(lambda e: e["branch"]=="feat/l-orphan" and "failed after" in e["text"] and e["action"]=="see the output" and e["source"]["dispatch_id"]=="l-orphan" and "superseded_by" not in e)(d["needs_you"][0])'
+assert_py "the row text starts at the plan purpose, the repo is not repeated" "$L_ON" \
+  'all(not e["text"].startswith(str(e["repo"])) and "dev-agents" not in e["text"] for e in d["needs_you"] if e["type"]=="failed_dispatch") '\
+'and all("dev-agents" not in e["text"] for e in d["needs_you_meta"]["superseded"])'
+assert_py "the critic seat carries its own task line, not the wave 1 line" "$L_ON" \
+  'S["1"]["task_line"]=="Review the floor change." and S["0"]["task_line"]=="Build the floor change."'
+assert_py "the critic seat's sentence says wave 2 of its own plan" "$L_ON" \
+  '[s for s in d["seats"] if s.get("dispatch_id")=="l-seats" and s["task_id"]=="1"][0]["now"]["wave"]==2'
+
+# The merge rule with gh answering: a failed dispatch whose branch merged is
+# superseded by the merge, the PR named.
+L2_BIN="$TMP/bin-l"; mkdir -p "$L2_BIN"; L2_LOG="$TMP/gh-l.log"
+cat > "$L2_BIN/gh" <<'SHIM'
+#!/usr/bin/env bash
+echo "$*" >> "${GH_SHIM_LOG:?}"
+case "$1 $2" in
+  "auth status") exit 0 ;;
+  "pr list")
+    printf '[{"number":77,"title":"feat: the orphan fix","headRefName":"feat/l-orphan","mergedAt":"2026-09-13T20:00:00Z","milestone":null}]\n' ;;
+  *) exit 1 ;;
+esac
+SHIM
+chmod +x "$L2_BIN/gh"
+L2_DIR="$TMP/events-l2"; mkdir -p "$L2_DIR"
+cp "$L_DIR/l-orphan.jsonl" "$L2_DIR/l-orphan.jsonl"
+printf 'l-orphan.jsonl\n' > "$L2_DIR/latest"
+L2_ON="$TMP/out/live-l2-on.json"
+: > "$L2_LOG"
+PATH="$L2_BIN:$PATH" GH_SHIM_LOG="$L2_LOG" FLEET_GH_OWNER=testowner \
+  python3 "$DESK_LIVE" --once --events-dir "$L2_DIR" --queue-file "$L_Q" --out "$L2_ON" >/dev/null 2>&1 \
+  && ok "--once exits 0 with the merge-rule fixture and gh answering" || bad "--once exits 0 with the merge-rule fixture and gh answering"
+assert_py "a merged branch supersedes the failed dispatch, the merge named" "$L2_ON" \
+  'd["needs_you"]==[] and len(d["needs_you_meta"]["superseded"])==1 '\
+'and (lambda by: by["kind"]=="merge" and by["branch"]=="feat/l-orphan" and by["pr"]==77)(d["needs_you_meta"]["superseded"][0]["superseded_by"])'
+assert_py "the merge check ran and was verified" "$L2_ON" \
+  '(lambda c: c["status"]=="ok" and c["looked_at"]==1)({c["check"]: c for c in d["needs_you_meta"]["checks"]}["merged_branch"])'
+grep -q 'pr list -R testowner/dev-agents --state merged' "$L2_LOG" \
+  && ok "the merge check lists merged PRs only" || bad "the merge check lists merged PRs only"
+
+for key in 'superseded\[\]' 'merged_branch' 'superseded_by'; do
+  grep -q "$key" "$REPO_DIR/docs/experience-data.md" \
+    && ok "$key is documented in the live schema" || bad "$key is documented in the live schema"
+done
 
 echo ""
 echo "----------------------------------------"

@@ -854,7 +854,7 @@ for its branch. Only the milestone title and the PR number plus title come from
 |-----|------|---------|
 | `seats[].repo` | string | Repo of the dispatch the seat belongs to (`dispatch_start.repo`), on followed and `foreign` seats alike. Present on replay seats too |
 | `seats[].issue` | object | The issue this seat's plan serves (shape below). Always present, on replay seats too |
-| `seats[].task_line` | string\|null | **First sentence** of that seat's line in the plan file: cut at the first sentence end whatever its length, else at 120 chars. Passed through the same secret scrub as `now.program` plus the path law of `activity.path`: a slash token that is not a path inside this worktree (absolute, home, variable, parent escape, `file:` URL) reads `outside-repo`, and a path inside it is printed repo-relative. Never more of the task body. `null` when the plan is not on this machine. Present on replay seats too. (`seats[].task` keeps the same value for older readers) |
+| `seats[].task_line` | string\|null | **First sentence** of that seat's line in the plan file: cut at the first sentence end whatever its length, else at 120 chars. Passed through the same secret scrub as `now.program` plus the path law of `activity.path`: a slash token that is not a path inside this worktree (absolute, home, variable, parent escape, `file:` URL) reads `outside-repo`, and a path inside it is printed repo-relative. Never more of the task body. `null` when the plan is not on this machine. Present on replay seats too. (`seats[].task` keeps the same value for older readers). The seat's own line is found by seat, not by branch alone (issue 86): the stream's `task_id` is the plan line index (used when the branch agrees), then branch and wave together (a critic seat shares its producer's branch but sits in a later wave), then branch, then agent |
 | `seats[].pr` | object | The open, else merged, PR for the seat's branch (shape below). Always present, on replay seats too |
 | `queue[].repo` | string | Already first-class since #68; the first word of an UP NEXT row |
 | `queue[].issue` | object | Same shape as `seats[].issue`. When the plan file is gone, the number comes from the `issue` field `scripts/queue.sh` stored at `add`/`start`, else from the stored header line (`purpose`) |
@@ -964,7 +964,7 @@ with its reason, so the page can say "critic verdicts unverified" instead of
 | Key | Type | Meaning |
 |-----|------|---------|
 | `needs_you[]` | array | One entry per item, **newest first** by `at`. Shape below |
-| `needs_you_meta` | object | `{count, unverified, checks[], comment_lookback_days, quiet_after_s}`. `checks[]` has one `{check, status, reason, looked_at}` per type: `status` is `ok` or `skipped`, `looked_at` how many candidates the check inspected |
+| `needs_you_meta` | object | `{count, unverified, checks[], superseded[], comment_lookback_days, quiet_after_s}`. `checks[]` has one `{check, status, reason, looked_at}` per type: `status` is `ok` or `skipped`, `looked_at` how many candidates the check inspected. `superseded[]` holds the failed dispatches a later round replaced (issue 86, rule below), newest first, each the entry it would have been plus `superseded_by` |
 | `summary.needs_you` | int | The count of **verified** entries, for the status strip |
 | `queue[].blocked` | string\|null | Why a queued plan is not ready, in place: the reason `scripts/queue.sh block` stored, else the text of the NEEDS YOU item that names the plan (a PRD row awaiting sign-off, a variable unset) or `PR N awaits merge` when a ready PR sits on one of the plan's branches. `null` when nothing names it |
 | `queue[].blocked_by` | object\|null | `{type, source}`: the item type (`queue` for a stored reason) and the same `source` object the item carries |
@@ -990,7 +990,7 @@ Types, their rule and their source:
 | `critic_block` | The newest comment of a critic thread on an open PR, or on the findings issue a plan's critic seat posts to, is `BLOCK-FIX`, `BLOCK-ESCALATE`, `BLOCK-CLOSE` or `BLOCK`, and no fix wave is running or queued for that branch or PR (a running seat on the branch, or a queued or running plan whose file lists the branch or whose header names the PR). Through gh | `{kind: comment, repo, comment_id, url, pr, issue, verdict, round, stem}` |
 | `ready_to_merge` | The PR is open, not a draft, every critic thread's newest verdict is `SAFE-TO-MERGE`, `SAFE` or `APPROVE-MERGE`, and `mergeStateStatus` is `CLEAN` (`UNKNOWN`, `BEHIND`, `DIRTY`, `BLOCKED` are not ready). Through gh | `{kind: pr, repo, pr, url, merge_state, comments[]}` (the verdict comments, reduced as below) |
 | `quiet_seat` | A running seat with `quiet: true` (no heartbeat for `quiet_after_s`, 90 s). Never when the seat's own stream is `offline` (no event for `offline_after_s`, 900 s): that stream has stopped, its seats with no close-out read `unknown`, and a crashed wave is not a quiet seat. From the stream | `{kind: stream, dispatch_id, event: seat_heartbeat or seat_dispatch, task_id, ts}` |
-| `failed_dispatch` | A `today[]` row whose `outcome` is `failed` or `aborted`. From the stream | `{kind: stream, dispatch_id, stream (basename), event: dispatch_end, ts}` |
+| `failed_dispatch` | A `today[]` row whose `outcome` is `failed` or `aborted`, unless a later round superseded it (below). The text starts at the plan purpose; the repo rides the entry's `repo` field and the page renders it once, as the row's chip. From the stream | `{kind: stream, dispatch_id, stream (basename), event: dispatch_end, ts}` |
 | `prd_proposed` | A queued plan names `S<n>` and a table row whose first cell is `S<n>` under `docs/prd/` of the target checkout carries `PROPOSED` and not `ACCEPTED`. Grep of the checkout | `{kind: file, checkout (repo name), file (relative to it), line, named_by (plan basename)}` |
 | `missing_variable` | A queued plan names an `UPPER_SNAKE` name, a row of `docs/operations/env-vars-*.md` in the target checkout says it comes from a repository variable (or secret), and `gh variable list` (or `gh secret list`, names only) does not have it. When gh could not answer there is no entry: the `missing_variable` check reads `skipped` with the reason in `needs_you_meta.checks`, because an item with action `set it` would ask the owner to set a value nobody checked | `{kind: file, checkout, file, line, named_by, lookup, reason}` |
 
@@ -1018,6 +1018,31 @@ read from `gh pr view`; findings-issue comments from
 comment is `{id, url, at, kind, verdict, round, stem}`: **never the body**.
 Bodies are read in-process to find the verdict and the attribution, and
 dropped.
+
+**Superseded failed dispatches (issue 86).** A `failed_dispatch` row leaves
+`needs_you[]` when a later round replaced it; it is not deleted, it moves to
+`needs_you_meta.superseded[]` with a `superseded_by` note, and the page shows
+the fold under the NEEDS YOU list, closed by default. The status strip's
+failed and aborted figures still count these rows (they happened); only
+`needs_you` counts what is still open. Same repo and later than the row
+(`ended_at` for settled dispatches, `started_at` for one still running), a
+row is superseded when:
+
+1. another dispatch of the same plan file ran today (any outcome: the newest
+   failure of a chain is itself the open row, the ones before it are replaced);
+2. a dispatch ran a fix round for it: the plan file is the same stem with a
+   fix suffix (`x.plan` → `x-fix.plan`, `x-fix2.plan`), or the plan header
+   carries fix-round wording (`fix round`, `fix wave`, any case) and names the
+   row, by one of its branches or by every significant word of its plan title
+   (the header before the colon);
+3. a dispatch on one of its branches ended `landed`;
+4. gh says the branch has merged (`gh pr list --state merged`): optional, so
+   when gh cannot answer the rule does not fire and the `merged_branch` check
+   reads `skipped` with the reason.
+
+`superseded_by` is `{kind, plan, dispatch_id, branch, pr}`: `kind` is `plan`
+(later dispatch of the same or a fix-round plan), `landed` (same branch landed
+later) or `merge` (branch merged, `pr` its number).
 
 The target checkout for the file checks is `FLEET_CHECKOUTS` (colon-separated
 roots holding `<repo>/`), else the fetch point `scripts/run-remote.sh` keeps at

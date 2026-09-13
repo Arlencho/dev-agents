@@ -1004,6 +1004,86 @@ grep -q 'function replayUnavailable(' "$FIXOUT/assets/floor.js" \
   && ok "R2-1: the replay failure branch paints a visible state" \
   || bad "R2-1: the replay failure branch paints a visible state"
 
+# ── Issue 86: superseded fold, repo once per row, the critic's own line ──
+# The round-2 fixture plus: two superseded failures in needs_you_meta (one
+# replaced by a later fix round, one by a merge) and a plan-critic seat in
+# wave 2 sharing the producer's branch with its own task line.
+python3 - "$TMP/live-v3-fix.json" "$TMP/live-v3-sup.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+at = d["last_event_ts"]
+d["needs_you_meta"]["superseded"] = [
+    {"type": "failed_dispatch",
+     "text": "Floor v3-B fix round failed after 7 min",
+     "action": "see the output",
+     "source": {"kind": "stream", "dispatch_id": "v3-sup-1",
+                "stream": "v3-sup-1.jsonl", "event": "dispatch_end", "ts": at},
+     "verified": True, "at": at, "repo": "dev-agents",
+     "branch": "feat/k-w0b", "pr": None, "plan": "k-w0b-fix.plan",
+     "superseded_by": {"kind": "plan", "plan": "k-w0b-fix2.plan",
+                       "dispatch_id": "v3-sup-2", "branch": None, "pr": None}},
+    {"type": "failed_dispatch",
+     "text": "Track K W9 halted after 2 min",
+     "action": "see the output",
+     "source": {"kind": "stream", "dispatch_id": "v3-sup-9",
+                "stream": "v3-sup-9.jsonl", "event": "dispatch_end", "ts": at},
+     "verified": True, "at": at, "repo": "olympus-platform",
+     "branch": "feat/k-w9", "pr": None, "plan": "k-w9.plan",
+     "superseded_by": {"kind": "merge", "plan": None, "dispatch_id": None,
+                       "branch": "feat/k-w9", "pr": 88}},
+]
+critic = dict(d["seats"][0])
+critic.update({"task_id": "3", "agent": "plan-critic", "wave": 2,
+               "task_line": "Review the k-a change.", "task": "Review the k-a change.",
+               "dispatch_id": "v3-run"})
+critic["now"] = dict(critic["now"], role="plan-critic", wave=2)
+d["seats"].append(critic)
+json.dump(d, open(sys.argv[2], "w"), indent=2)
+PY
+cp "$TMP/live-v3-sup.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with the superseded fixture" || bad "renderer succeeds with the superseded fixture"
+grep -q '<details class="supfold" id="floor-superseded"><summary>2 superseded dispatches today</summary>' "$FL" \
+  && ok "the superseded fold renders, closed by default, with the count" \
+  || bad "the superseded fold renders, closed by default, with the count"
+grep -q '· superseded by k-w0b-fix2.plan' "$FL" \
+  && grep -q '· superseded by the merge of feat/k-w9 (PR 88)' "$FL" \
+  && ok "each superseded row names what replaced it" \
+  || bad "each superseded row names what replaced it"
+grep -q '<a class="act" href="?replay=1&amp;dispatch_id=v3-sup-1">see the output</a>' "$FL" \
+  && ok "a superseded row keeps its action reachable" \
+  || bad "a superseded row keeps its action reachable"
+python3 - "$FL" <<'PY' \
+  && ok "a NEEDS YOU row renders the repo once: the chip, then the plan purpose" \
+  || bad "a NEEDS YOU row renders the repo once: the chip, then the plan purpose"
+import re, sys
+html = open(sys.argv[1]).read()
+m = re.search(r'id="floor-needs-list">(.*?)</ol>', html, re.S)
+rows = re.findall(r'<li class="nrow.*?</li>', m.group(1), re.S)
+failed = [r for r in rows if "fix wave failed after" in r]
+ok_rows = all(r.count('class="rname"') <= 1 for r in rows)
+one = len(failed) == 1 and failed[0].count("dev-agents") == 1 \
+    and '<span class="rname">dev-agents</span> Track K W0-B fix wave failed' in failed[0]
+sys.exit(0 if ok_rows and one else 1)
+PY
+grep -q '<div class="nowtask">Review the k-a change.</div>' "$FL" \
+  && ok "the critic seat card shows its own task line" \
+  || bad "the critic seat card shows its own task line"
+python3 - "$FL" <<'PY' \
+  && ok "the wave 1 line never lands on the critic card" \
+  || bad "the wave 1 line never lands on the critic card"
+import re, sys
+html = open(sys.argv[1]).read()
+cards = re.findall(r'<li class="nowrow.*?</li>', html, re.S)
+critic = [c for c in cards if "Review the k-a change." in c]
+sys.exit(0 if len(critic) == 1 and "Do the go-backend part" not in critic[0] else 1)
+PY
+grep -q 'floor-superseded' "$FIXOUT/assets/floor.js" \
+  && grep -q 'superseded by ' "$FIXOUT/assets/floor.js" \
+  && grep -q 'merged_branch' "$FIXOUT/assets/floor.js" \
+  && ok "floor.js mirrors the superseded fold and the merge check word" \
+  || bad "floor.js mirrors the superseded fold and the merge check word"
+
 # Browser probes (real layout, real clicks, file:// desk). A machine without
 # a headless browser skips them with a pass note, like the optional gh path.
 probe() { # <name> <mode> <width> <height> [query]

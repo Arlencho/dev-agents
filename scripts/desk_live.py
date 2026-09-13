@@ -1082,9 +1082,10 @@ def cached_plan(cache, name, queue_entries):
 def attach_plan_context(proj, queue_entries, plan_cache=None):
     """Give every seat the purpose of its plan and its one-line task.
 
-    Joined by branch first (the stream and the plan agree on it), then by seat
-    index, then by agent. A seat the plan cannot explain keeps its stream facts
-    and says nothing more: no guessed task ever reaches the page.
+    Joined by seat: the stream's task_id (the plan line index, branch must
+    agree), then branch and wave together, then branch, then agent. A seat the
+    plan cannot explain keeps its stream facts and says nothing more: no
+    guessed task ever reaches the page.
     """
     cache = {} if plan_cache is None else plan_cache
 
@@ -1101,11 +1102,23 @@ def attach_plan_context(proj, queue_entries, plan_cache=None):
         plan = plan_for(seat.get("plan") or proj.get("plan"))
         if not plan:
             continue
+        # Keyed by seat, never by branch alone: the stream's task_id is the
+        # plan line index at dispatch time (usable when the branch agrees, so
+        # a plan edited after dispatch cannot mis-point it); then branch and
+        # wave together, because a critic seat shares its producer's branch
+        # but sits in a later wave (branch alone would hand it the wave 1
+        # line, issue 86); then branch; then agent.
         match = None
-        if seat.get("branch"):
-            match = next((s for s in plan["seats"] if s["branch"] == seat["branch"]), None)
-        if match is None:
-            match = next((s for s in plan["seats"] if s["index"] == str(seat.get("task_id"))), None)
+        by_index = next((s for s in plan["seats"] if s["index"] == str(seat.get("task_id"))), None)
+        if by_index is not None and (not seat.get("branch") or not by_index.get("branch")
+                                     or by_index["branch"] == seat["branch"]):
+            match = by_index
+        if match is None and seat.get("branch"):
+            same_branch = [s for s in plan["seats"] if s["branch"] == seat["branch"]]
+            if isinstance(seat.get("wave"), int):
+                match = next((s for s in same_branch if s["wave"] == seat["wave"]), None)
+            if match is None and same_branch:
+                match = same_branch[0]
         if match is None and seat.get("agent"):
             match = next((s for s in plan["seats"] if s["agent"] == seat["agent"]), None)
         seat["plan_purpose"] = plan["purpose"] or None
@@ -1704,7 +1717,8 @@ NEEDS_YOU_ACTIONS = {
     "missing_variable": "set it",
 }
 NEEDS_YOU_CHECKS = ("critic_block", "ready_to_merge", "quiet_seat",
-                    "failed_dispatch", "prd_proposed", "missing_variable")
+                    "failed_dispatch", "prd_proposed", "missing_variable",
+                    "merged_branch")
 INITIATIVE_ACTIVE_DAYS = 30
 COMMENT_LOOKBACK_DAYS = 7
 STEM_MAX = 80
@@ -2028,7 +2042,117 @@ def _minutes(seconds):
     return "%d min" % (seconds // 60)
 
 
-def needs_you_view(proj, queue_entries, plan_cache, gh, now):
+# ── superseded failed dispatches (issue 86) ─────────────────────────────────
+#
+# A failed or aborted dispatch that a later round replaced is history, not an
+# ask: NEEDS YOU holds only what is still open. A row leaves the list (and
+# lands in needs_you_meta.superseded, so nothing is hidden) when, same repo
+# and later than the row:
+#
+#   1. another dispatch of the same plan file exists today (any outcome: a
+#      later failure is itself the open row, the older one is replaced), or
+#   2. a dispatch ran a fix round for it: the plan file is the same stem with
+#      a fix suffix (x.plan -> x-fix.plan, x-fix2.plan), or the plan header
+#      carries fix-round wording ("fix round", "fix wave") and names the row
+#      (its branch, or every significant word of the row's plan title), or
+#   3. a dispatch on one of its branches ended landed, or
+#   4. gh says the branch has merged (optional: when gh cannot answer the
+#      rule does not fire and the merged_branch check reads skipped).
+#
+# "Later" is ended_at for settled dispatches, started_at for live ones (a
+# re-dispatch already running replaces the failure it answers).
+
+FIX_ROUND_RE = re.compile(r"\bfix[\s-]*(?:round|wave)\b", re.IGNORECASE)
+FIX_SUFFIX_RE = re.compile(r"^(?:fix|critic|rebase|resume)\d*$")
+_TITLE_STOP = frozenset(("the", "an", "in", "of", "for", "on", "and", "to",
+                         "after", "with", "is", "it"))
+
+
+def _title_tokens(purpose):
+    """Significant words of a plan title (the header before its colon)."""
+    title = str(purpose or "").split(":", 1)[0]
+    return {t for t in re.findall(r"[a-z0-9]+", title.lower())
+            if len(t) >= 2 and t not in _TITLE_STOP}
+
+
+def superseded_dispatch(row, today, live, plan_cache, queue_entries, gh, skip):
+    """The later dispatch or merge that supersedes a failed today-row, else None.
+
+    The answer is what the fold prints: {kind, plan, dispatch_id, branch, pr}.
+    """
+    r_plan = row.get("plan_basename")
+    r_stem = r_plan[:-5] if r_plan and r_plan.endswith(".plan") else r_plan
+    r_repo = row.get("repo")
+    r_end = row.get("ended_at") or ""
+    r_start = row.get("started_at") or ""
+    r_branches = row.get("branches") or []
+
+    def base_of(d):
+        return os.path.basename(str(d.get("plan_basename") or d.get("plan") or ""))
+
+    # Settled dispatches that ended after this one, live ones started after
+    # this one started. The row itself never supersedes itself. Nearest first:
+    # the fold names the immediate next round, not the last one of the day.
+    later = [d for d in today
+             if d.get("dispatch_id") != row.get("dispatch_id")
+             and (d.get("ended_at") or "") > r_end]
+    later += [s for s in live or []
+              if s.get("dispatch_id") != row.get("dispatch_id")
+              and (s.get("started_at") or "") > r_start]
+    later.sort(key=lambda d: d.get("ended_at") or d.get("started_at") or "")
+
+    def plan_of(d):
+        return cached_plan(plan_cache, base_of(d), queue_entries)
+
+    def names_row(d, purpose):
+        """The candidate's fix-round header names this row: its branch, or
+        every significant word of its plan title."""
+        if any(b and b in purpose for b in r_branches):
+            return True
+        plan = plan_of(row)
+        tokens = _title_tokens((plan or {}).get("purpose") or row.get("purpose"))
+        return bool(tokens) and tokens <= _title_tokens(purpose)
+
+    for d in later:
+        if r_plan and base_of(d) == r_plan:
+            return {"kind": "plan", "plan": r_plan, "dispatch_id": d.get("dispatch_id"),
+                    "branch": None, "pr": None}
+    for d in later:
+        d_base = base_of(d)
+        if not d_base or d_base == r_plan:
+            continue
+        d_stem = d_base[:-5] if d_base.endswith(".plan") else d_base
+        purpose = str((plan_of(d) or {}).get("purpose") or "")
+        if r_stem and d_stem.startswith(r_stem + "-") \
+                and FIX_SUFFIX_RE.match(d_stem[len(r_stem) + 1:]):
+            return {"kind": "plan", "plan": d_base, "dispatch_id": d.get("dispatch_id"),
+                    "branch": None, "pr": None}
+        if FIX_ROUND_RE.search(purpose) and names_row(d, purpose):
+            return {"kind": "plan", "plan": d_base, "dispatch_id": d.get("dispatch_id"),
+                    "branch": None, "pr": None}
+    for d in later:
+        if d.get("outcome") != "landed":
+            continue
+        if r_repo and d.get("repo") and d.get("repo") != r_repo:
+            continue
+        shared = [b for b in r_branches if b in (d.get("branches") or [])]
+        if shared:
+            return {"kind": "landed", "plan": base_of(d) or None,
+                    "dispatch_id": d.get("dispatch_id"), "branch": shared[0], "pr": None}
+    if r_branches and r_repo:
+        merged = gh.merged_prs(r_repo)
+        if merged.get("lookup") != "verified":
+            skip("merged_branch", merged.get("reason"))
+        else:
+            heads = {p.get("branch"): p for p in merged.get("prs") or [] if p.get("branch")}
+            for branch in r_branches:
+                if branch in heads:
+                    return {"kind": "merge", "plan": None, "dispatch_id": None,
+                            "branch": branch, "pr": heads[branch].get("number")}
+    return None
+
+
+def needs_you_view(proj, queue_entries, plan_cache, gh, now, live_summaries=None):
     """needs_you[] and needs_you_meta for a live projection. Never raises past
     a gh failure: every check reports ok or skipped with a reason."""
     entries = []
@@ -2056,20 +2180,32 @@ def needs_you_view(proj, queue_entries, plan_cache, gh, now):
     today = proj.get("today") or []
     index = queue_purpose_index(queue_entries)
 
-    # 4: a dispatch that ended failed or aborted today (from the stream).
+    # 4: a dispatch that ended failed or aborted today (from the stream). A
+    # row a later round replaced leaves the list for needs_you_meta.superseded
+    # (issue 86): the strip still counts it (it happened), NEEDS YOU counts
+    # only what is still open. The text starts at the plan purpose; the repo
+    # is the row's chip, rendered once by the page.
+    superseded = []
     for row in today:
         checks["failed_dispatch"]["looked_at"] += 1
         if row.get("outcome") not in ("failed", "aborted"):
             continue
         what = row.get("purpose") or row.get("plan_basename") or row.get("dispatch_id")
-        text = "%s %s %s after %s" % (row.get("repo") or "run", first_sentence(what, 80),
-                                      row["outcome"], _minutes(row.get("duration_s")))
-        add("failed_dispatch", text,
-            {"kind": "stream", "dispatch_id": row.get("dispatch_id"),
-             "stream": os.path.basename(str(row.get("source") or "")) or None,
-             "event": "dispatch_end", "ts": row.get("ended_at")},
-            at=row.get("ended_at"), repo=row.get("repo"), plan=row.get("plan_basename"),
-            branch=(row.get("branches") or [None])[0])
+        text = "%s %s after %s" % (first_sentence(what, 80),
+                                   row["outcome"], _minutes(row.get("duration_s")))
+        entry = add("failed_dispatch", text,
+                    {"kind": "stream", "dispatch_id": row.get("dispatch_id"),
+                     "stream": os.path.basename(str(row.get("source") or "")) or None,
+                     "event": "dispatch_end", "ts": row.get("ended_at")},
+                    at=row.get("ended_at"), repo=row.get("repo"), plan=row.get("plan_basename"),
+                    branch=(row.get("branches") or [None])[0])
+        if row.get("branches"):
+            checks["merged_branch"]["looked_at"] += 1
+        by = superseded_dispatch(row, today, live_summaries, plan_cache, queue_entries, gh, skip)
+        if by:
+            entry["superseded_by"] = by
+            entries.remove(entry)
+            superseded.append(entry)
 
     # 3: a live seat quiet past the threshold (from the stream). A stream
     # whose own age is at or past offline_after_s has no quiet seat: it has
@@ -2256,9 +2392,11 @@ def needs_you_view(proj, queue_entries, plan_cache, gh, now):
                 repo=repo, branch=view.get("branch"), pr=number, plan=view.get("_plan"))
 
     entries.sort(key=lambda e: e.get("at") or "", reverse=True)
+    superseded.sort(key=lambda e: e.get("at") or "", reverse=True)
     meta = {"count": len(entries),
             "unverified": sum(1 for e in entries if not e["verified"]),
             "checks": [checks[name] for name in NEEDS_YOU_CHECKS],
+            "superseded": superseded,
             "comment_lookback_days": COMMENT_LOOKBACK_DAYS,
             "quiet_after_s": QUIET_AFTER}
     return entries, meta
@@ -2441,9 +2579,10 @@ def initiatives_view(proj, queue_entries, plan_cache, gh, now):
     return rows, meta
 
 
-def attach_v3(proj, queue_entries, plan_cache, gh, now):
+def attach_v3(proj, queue_entries, plan_cache, gh, now, live_summaries=None):
     """NEEDS YOU, INITIATIVES and the blocked reasons on queue entries."""
-    proj["needs_you"], proj["needs_you_meta"] = needs_you_view(proj, queue_entries, plan_cache, gh, now)
+    proj["needs_you"], proj["needs_you_meta"] = needs_you_view(
+        proj, queue_entries, plan_cache, gh, now, live_summaries)
     block_queue(proj, queue_entries, plan_cache)
     proj["initiatives"], proj["initiatives_meta"] = initiatives_view(proj, queue_entries, plan_cache, gh, now)
     proj["gh_enrichment"] = gh.meta()
@@ -2916,7 +3055,7 @@ def attach_queue_and_day(proj, events_dir, queue_file, now, gh=None):
     gh = gh or GhEnricher(enabled=False)
     attach_context(proj, entries, live, plan_cache, gh)
     # Floor v3: NEEDS YOU, the blocked reasons on the queue, INITIATIVES.
-    attach_v3(proj, entries, plan_cache, gh, now)
+    attach_v3(proj, entries, plan_cache, gh, now, live)
     # Last: the sentence needs the queue, the plan context and every live seat.
     attach_now(proj, entries)
     return proj

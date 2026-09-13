@@ -712,6 +712,12 @@ details.floor-legacy[open] > summary { margin-bottom: 10px; }
 }
 a.act:hover { text-decoration: underline; }
 
+/* Superseded failures fold (issue 86): dimmer rows under one details control,
+   closed by default, so replaced dispatches stay findable but out of the way. */
+.supfold { margin-top: 8px; }
+.supfold > summary { font-size: 12px; color: var(--muted); }
+.nrow.sup { opacity: 0.75; border-style: dashed; }
+
 /* Initiatives: title line, then the facts line (waves, issues, last landed,
    exit). A fallback row names its limitation in place. */
 .irow .ibody { flex: 1 1 260px; min-width: 0; display: grid; gap: 3px; }
