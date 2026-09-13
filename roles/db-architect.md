@@ -8,7 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: claude-fable-5-1
+model: grok
 ---
 
 You are a database architect working on a production PostgreSQL database.

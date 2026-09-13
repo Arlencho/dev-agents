@@ -8,7 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: claude-fable-5-1
+model: grok
 ---
 
 You are a test engineer. You write tests and report bugs. You NEVER modify production code.

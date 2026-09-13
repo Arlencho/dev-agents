@@ -8,21 +8,23 @@
 # rate-capped (exit 75) or unavailable (exit 69).
 #
 # Owner multi-vendor seats (pair with routing.yaml model_routing):
-#   docs-writer   → claude + claude-fable-5
-#   web-frontend  → kimi   + K3 (CLI default)
-#   plan-critic   → grok   + CLI default
-#   devops-critic → grok   + CLI default (failover kimi, stays non-Anthropic)
+#   producers     → grok + CLI default (routing trial 2026-09-13, failover kimi)
+#   web-frontend  → kimi + K3 (CLI default, failover grok)
+#   critics       → claude + claude-fable-5-1 (failover grok)
+#   plan-critic   → grok + CLI default
+#   devops-critic → grok + CLI default (failover kimi, stays non-Anthropic)
+#   trust seats (security-reviewer, cto, orchestrator, retro) → claude
 # Quality-first Claude tiers live in routing.yaml (2026-07-28).
 # NOTE: YAML parsers here don't strip inline comments — keep values bare.
 provider_preferences:
-  # Producers
-  go-backend: claude
+  # Producers (grok trial seats; web-frontend stays on kimi)
+  go-backend: grok
   web-frontend: kimi
-  db-architect: claude
-  api-designer: claude
-  devops: claude
-  test-engineer: claude
-  mobile: claude
+  db-architect: grok
+  api-designer: grok
+  devops: grok
+  test-engineer: grok
+  mobile: grok
   # Critics + gate
   backend-critic: claude
   frontend-critic: claude
@@ -34,8 +36,8 @@ provider_preferences:
   cto: claude
   # Meta / ops
   orchestrator: claude
-  investigate: claude
-  docs-writer: claude
+  investigate: grok
+  docs-writer: grok
   retro: claude
   default: claude
 
