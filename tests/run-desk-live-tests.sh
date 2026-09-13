@@ -2341,6 +2341,197 @@ out=$(PATH="$N_SHIM:$PATH" FLEET_NOTIFY_SILENT=1 FLEET_NOTIFY_NEEDS_YOU_STATE="$
   && ok "silenced: the stdout line still prints" || bad "silenced: the stdout line still prints ($out)"
 [ "$(toasts)" = "$before" ] && ok "silenced: osascript not invoked" || bad "silenced: osascript not invoked"
 
+# ── round 2 (the v3-C critic, two findings, the critic's own fixtures) ──────
+echo "== Part L, round 2: a path in the toast; one PR notified twice =="
+
+# ONE: an operator path reached the toast through a PR title. The projector
+# now marks every slash token of a PR title (pr_view) and of every NEEDS YOU
+# line (add) as it marks a task line; notify.sh refuses what still carries one.
+assert_fn "mark_paths marks the critic's PR title like a task line and redacts the token" \
+  'mod.scrub_text(mod.mark_paths("fix /Users/arlenrios/.ssh/id_rsa rotate $HOME ghp_abcdefghijklmnopqrstuvwxyz0123456789"), 120)=="fix outside-repo rotate $HOME [redacted]"'
+assert_fn "mark_paths marks a home path, a variable path, a file: path and a parent escape" \
+  'mod.mark_paths("see ~/.ssh/id_rsa and $HOME/x and file:/etc/passwd, (a/../b)")=="see outside-repo and outside-repo and outside-repo, (outside-repo)"'
+assert_fn "mark_paths keeps a branch, a repo-relative path and a URL" \
+  'mod.mark_paths("PR 7 ready: feat/x merges scripts/notify.sh https://example.invalid/pr/7")=="PR 7 ready: feat/x merges scripts/notify.sh https://example.invalid/pr/7"'
+assert_fn "mark_paths flattens a tab or a newline before a path" \
+  'mod.mark_paths("fix\t/Users/x/y\nnow")=="fix outside-repo now"'
+assert_fn "first_sentence is the same rule (the failed dispatch line)" \
+  'mod.first_sentence("Fix /Users/arlenrios/.ssh/id_rsa and $HOME now. Then sk-abcdefghijklmnopqrstuvwxyz", 80)=="Fix outside-repo and $HOME now."'
+
+# The product path: the Part K fixture, PR 102 titled as the critic wrote it,
+# its SAFE comment body carrying a token and a path. gh answers through a
+# wrapper that serves that one view and hands everything else to the K shim.
+L2_BIN="$TMP/bin-l2"; mkdir -p "$L2_BIN"; L2_LOG="$TMP/gh-l2.log"
+cat > "$L2_BIN/gh" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$1 $2 $3" = "pr view 102" ]; then
+  echo "$*" >> "${GH_SHIM_LOG:?}"
+  NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"number":102,"title":"fix /Users/arlenrios/.ssh/id_rsa rotate $HOME ghp_abcdefghijklmnopqrstuvwxyz0123456789","state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN","url":"https://example.invalid/pr/102","headRefName":"feat/k-ready","comments":[{"id":"IC_102_1","url":"https://example.invalid/pr/102#c1","createdAt":"%s","body":"CRITIC K READY: SAFE-TO-MERGE\\nsk-abcdefghijklmnopqrstuvwxyz0123456789 in /tmp/secret"}],"reviews":[]}\n' "$NOW"
+  exit 0
+fi
+exec "${L2_INNER_GH:?}" "$@"
+SHIM
+chmod +x "$L2_BIN/gh"
+L2_ON="$TMP/out/live-l2.json"; : > "$L2_LOG"
+PATH="$L2_BIN:$PATH" GH_SHIM_LOG="$L2_LOG" L2_INNER_GH="$K_BIN/gh" FLEET_GH_OWNER=testowner FLEET_CHECKOUTS="$K_CO" \
+  python3 "$DESK_LIVE" --once --events-dir "$K_DIR" --queue-file "$K_Q" --out "$L2_ON" >/dev/null 2>&1 \
+  && ok "round 2: --once exits 0 with the critic's PR title" || bad "round 2: --once exits 0 with the critic's PR title"
+grep -q '^pr view 102' "$L2_LOG" && ok "round 2: the wrapper served pr view 102" || bad "round 2: the wrapper served pr view 102"
+assert_py "the ready_to_merge line marks the path and redacts the token" "$L2_ON" \
+  '[e["text"] for e in d["needs_you"] if e["type"]=="ready_to_merge"]==["PR 102 ready to merge: fix outside-repo rotate $HOME [redacted]"]'
+grep -q 'id_rsa\|/Users/\|ghp_abc\|sk-abc\|/tmp/secret' "$L2_ON" \
+  && bad "no operator path, token or comment body anywhere in the projection" \
+  || ok "no operator path, token or comment body anywhere in the projection"
+# The push on that projection, the item aged past N as the critic did.
+L2_DIR="$N_DIR/round2"; mkdir -p "$L2_DIR"
+python3 - "$L2_ON" "$L2_DIR/aged.json" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+d = json.load(open(sys.argv[1]))
+at = (datetime.now(timezone.utc) - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+for e in d["needs_you"]:
+    e["at"] = at
+json.dump(d, open(sys.argv[2], "w"))
+PY
+before=$(toasts)
+out=$(PATH="$N_SHIM:$PATH" env -u FLEET_NOTIFY_SILENT -u NOTIFY_SILENT FLEET_NOTIFY_NEEDS_YOU_STATE="$L2_DIR/seen-product" \
+  FLEET_NOTIFY_NEEDS_YOU_MIN=1 "$NOTIFY" needs-you "$L2_DIR/aged.json" 2>/dev/null)
+case "$out" in
+  *'Needs you: PR 102 ready to merge: fix outside-repo rotate $HOME [redacted]'*) ok "the push carries the marked line" ;;
+  *) bad "the push carries the marked line ($out)" ;;
+esac
+case "$out" in
+  *"id_rsa"*|*"/Users/"*|*"ghp_abc"*|*"sk-abc"*|*"/tmp/secret"*) bad "the push carries no path, token or comment body" ;;
+  *) ok "the push carries no path, token or comment body" ;;
+esac
+if [ "$on_mac" = "1" ]; then
+  [ "$(toasts)" -gt "$before" ] && ok "macOS: the product path toasts" || bad "macOS: the product path toasts"
+  grep -q 'id_rsa\|/Users/\|ghp_abc\|sk-abc' "$OSASCRIPT_CALLS" \
+    && bad "macOS: no osascript argv carries a path or a token" || ok "macOS: no osascript argv carries a path or a token"
+fi
+
+# A hand-written live.json cannot bypass the projector: notify.sh refuses an
+# item whose text still carries an operator path, sends nothing for it and
+# does not record it as seen; the clean item next to it goes through.
+python3 - "$L2_DIR" <<'PY'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+out = sys.argv[1]
+at = (datetime.now(timezone.utc) - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+def item(kind, text, source):
+    return {"type": kind, "text": text, "action": "x", "verified": True, "at": at, "source": source}
+paths = [
+    item("ready_to_merge", "PR 102 ready to merge: fix /Users/arlenrios/.ssh/id_rsa rotate", {"kind": "pr", "repo": "r", "pr": 102}),
+    item("failed_dispatch", "dev-agents Fix ~/.ssh/id_rsa now failed after 31 s", {"kind": "stream", "dispatch_id": "h1"}),
+    item("quiet_seat", "devops on $HOME/wt quiet for 3 min", {"kind": "stream", "dispatch_id": "h2", "task_id": "1"}),
+    item("prd_proposed", "S11 awaits sign-off in docs/../../etc/passwd", {"kind": "file", "checkout": "c", "file": "x", "line": 1}),
+    item("critic_block", "PR 103 round 1 blocked by critic (file:/etc/passwd)", {"kind": "comment", "repo": "r", "comment_id": 7}),
+    item("ready_to_merge", "PR 104 ready to merge: fix outside-repo in scripts/notify.sh on feat/x", {"kind": "pr", "repo": "r", "pr": 104}),
+]
+json.dump({"schema": "live/1", "view": "live", "needs_you": paths}, open(os.path.join(out, "paths.json"), "w"))
+# the same file after the projector marked the first item
+paths[0]["text"] = "PR 102 ready to merge: fix outside-repo rotate"
+json.dump({"schema": "live/1", "view": "live", "needs_you": paths[:1]}, open(os.path.join(out, "paths-marked.json"), "w"))
+PY
+before=$(toasts)
+out=$(PATH="$N_SHIM:$PATH" env -u FLEET_NOTIFY_SILENT -u NOTIFY_SILENT FLEET_NOTIFY_NEEDS_YOU_STATE="$L2_DIR/seen-paths" \
+  FLEET_NOTIFY_NEEDS_YOU_MIN=1 "$NOTIFY" needs-you "$L2_DIR/paths.json" 2>"$L2_DIR/paths.err") \
+  && ok "notify.sh exits 0 on a hand-written file with operator paths" || bad "notify.sh exits 0 on a hand-written file with operator paths"
+[ "$(printf '%s\n' "$out" | grep -c '^\[notify\] Needs you: ')" = "1" ] \
+  && ok "only the clean item is pushed" || bad "only the clean item is pushed ($out)"
+case "$out" in
+  *"PR 104 ready to merge: fix outside-repo in scripts/notify.sh on feat/x"*) ok "the marker, a repo-relative path and a branch pass" ;;
+  *) bad "the marker, a repo-relative path and a branch pass ($out)" ;;
+esac
+case "$out" in
+  *"/Users/"*|*"~/"*|*'$HOME'*|*"/etc/passwd"*|*"/../"*) bad "no absolute, home, variable, file: or parent path is pushed" ;;
+  *) ok "no absolute, home, variable, file: or parent path is pushed" ;;
+esac
+[ "$(grep -c 'WARNING: needs-you item .* refused' "$L2_DIR/paths.err")" = "5" ] \
+  && ok "each refused item is one stderr line" || bad "each refused item is one stderr line ($(cat "$L2_DIR/paths.err"))"
+grep -q 'id_rsa\|/Users/\|passwd' "$L2_DIR/paths.err" \
+  && bad "the stderr line does not repeat the path" || ok "the stderr line does not repeat the path"
+[ "$(wc -l < "$L2_DIR/seen-paths" | tr -d ' ')" = "1" ] \
+  && ok "a refused item is not recorded as seen" || bad "a refused item is not recorded as seen"
+if [ "$on_mac" = "1" ]; then
+  [ "$(toasts)" = "$((before + 1))" ] && ok "macOS: one toast for the clean item only" || bad "macOS: one toast for the clean item only"
+fi
+out=$(PATH="$N_SHIM:$PATH" env -u FLEET_NOTIFY_SILENT -u NOTIFY_SILENT FLEET_NOTIFY_NEEDS_YOU_STATE="$L2_DIR/seen-paths" \
+  FLEET_NOTIFY_NEEDS_YOU_MIN=1 "$NOTIFY" needs-you "$L2_DIR/paths-marked.json" 2>/dev/null)
+case "$out" in
+  *"PR 102 ready to merge: fix outside-repo rotate"*) ok "the same item, marked by the projector, is pushed later" ;;
+  *) bad "the same item, marked by the projector, is pushed later ($out)" ;;
+esac
+
+# TWO: ready_to_merge notified twice for one PR because the seen key hashed
+# the whole source, comments[] included. The key is now the stable identity:
+# type, source kind, and the comment id / repo and PR / dispatch and seat /
+# checkout, file and line. A later SAFE comment on the same PR, a changed url
+# or a fresh heartbeat timestamp is the same item; a new block comment is not.
+python3 - "$L2_DIR" <<'PY'
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+out = sys.argv[1]
+now = datetime.now(timezone.utc)
+def iso(m): return (now - timedelta(minutes=m)).strftime("%Y-%m-%dT%H:%M:%SZ")
+c1 = {"kind": "comment", "id": "IC_1", "verdict": "SAFE-TO-MERGE", "round": 1, "stem": "CRITIC K", "at": iso(30)}
+c2 = {"kind": "review", "id": "PRR_2", "verdict": "SAFE-TO-MERGE", "round": 1, "stem": "SECURITY CRITIC K", "at": iso(20)}
+def write(name, *items):
+    json.dump({"schema": "live/1", "view": "live", "needs_you": list(items)}, open(os.path.join(out, name), "w"))
+def ready(comments, at):
+    return {"type": "ready_to_merge", "text": "PR 102 ready to merge: the ready PR", "action": "merge",
+            "verified": True, "at": at, "source": {"kind": "pr", "repo": "olympus-platform", "pr": 102,
+            "url": "https://example.invalid/pr/102", "merge_state": "CLEAN", "comments": comments}}
+def block(cid, rnd, url):
+    return {"type": "critic_block", "text": "PR 102 round %d blocked by critic k (BLOCK-FIX)" % rnd, "action": "open the comment",
+            "verified": True, "at": iso(25), "source": {"kind": "comment", "repo": "olympus-platform", "comment_id": cid,
+            "url": url, "pr": 102, "issue": 900, "verdict": "BLOCK-FIX", "round": rnd, "stem": "CRITIC K"}}
+def quiet(event, ts):
+    return {"type": "quiet_seat", "text": "devops on feat/k-quiet quiet for 12 min", "action": "check the log",
+            "verified": True, "at": ts, "source": {"kind": "stream", "dispatch_id": "k-live", "event": event, "task_id": "7", "ts": ts}}
+write("pr-one.json", ready([c1], iso(30)))
+write("pr-two.json", ready([c1, c2], iso(20)))          # a second SAFE verdict landed
+write("block-a.json", block("IC_9001", 1, "https://example.invalid/pr/102#c1"))
+write("block-a-url.json", block("IC_9001", 1, "https://example.invalid/pr/102#issuecomment-9001"))
+write("block-b.json", block("IC_9002", 2, "https://example.invalid/pr/102#c2"))   # a new round, a new item
+write("quiet-1.json", quiet("seat_dispatch", iso(40)))
+write("quiet-2.json", quiet("seat_heartbeat", iso(15)))  # one heartbeat, quiet again
+PY
+L2_SEEN="$L2_DIR/seen-identity"; rm -f "$L2_SEEN"
+push_l2() {   # push_l2 <file>: N=1, the shim on PATH, the identity seen file
+  PATH="$N_SHIM:$PATH" env -u FLEET_NOTIFY_SILENT -u NOTIFY_SILENT FLEET_NOTIFY_NEEDS_YOU_STATE="$L2_SEEN" \
+    FLEET_NOTIFY_NEEDS_YOU_MIN=1 "$NOTIFY" needs-you "$L2_DIR/$1" 2>/dev/null
+}
+lines() { printf '%s\n' "$1" | grep -c '^\[notify\] Needs you: '; }
+before=$(toasts)
+out=$(push_l2 pr-one.json)
+[ "$(lines "$out")" = "1" ] && ok "PR 102 ready: pushed once" || bad "PR 102 ready: pushed once ($out)"
+out=$(push_l2 pr-two.json)
+[ -z "$out" ] && ok "a second SAFE comment on the same PR is not a second toast" \
+  || bad "a second SAFE comment on the same PR is not a second toast ($out)"
+[ "$(wc -l < "$L2_SEEN" | tr -d ' ')" = "1" ] && ok "the seen file still holds one line for PR 102" \
+  || bad "the seen file still holds one line for PR 102 ($(wc -l < "$L2_SEEN"))"
+out=$(push_l2 block-a.json)
+[ "$(lines "$out")" = "1" ] && ok "a block on the same PR is its own item (comment id)" || bad "a block on the same PR is its own item ($out)"
+out=$(push_l2 block-a-url.json)
+[ -z "$out" ] && ok "the same block comment with a changed url is not pushed again" \
+  || bad "the same block comment with a changed url is not pushed again ($out)"
+out=$(push_l2 block-b.json)
+[ "$(lines "$out")" = "1" ] && ok "a new block comment (new id, new round) is a new item" || bad "a new block comment is a new item ($out)"
+out=$(push_l2 quiet-1.json)
+[ "$(lines "$out")" = "1" ] && ok "a quiet seat is pushed once" || bad "a quiet seat is pushed once ($out)"
+out=$(push_l2 quiet-2.json)
+[ -z "$out" ] && ok "the same seat quiet again after one heartbeat (new event, new ts) is not pushed again" \
+  || bad "the same seat quiet again after one heartbeat is not pushed again ($out)"
+[ "$(wc -l < "$L2_SEEN" | tr -d ' ')" = "4" ] && ok "four identities seen: the PR, two blocks, the seat" \
+  || bad "four identities seen ($(wc -l < "$L2_SEEN"))"
+if [ "$on_mac" = "1" ]; then
+  [ "$(toasts)" = "$((before + 4))" ] && ok "macOS: four toasts, never a fifth" || bad "macOS: four toasts, never a fifth ($(( $(toasts) - before )))"
+fi
+grep -q 'comments\[\]\|comments array\|whole source' "$NOTIFY" \
+  && ok "notify.sh states the key rule" || bad "notify.sh states the key rule"
+
 # a missing projection is nothing to push
 FLEET_NOTIFY_NEEDS_YOU_MIN=10 FLEET_NOTIFY_NEEDS_YOU_STATE="$N_STATE" "$NOTIFY" needs-you "$N_DIR/absent.json" >/dev/null 2>&1 \
   && ok "a missing live.json exits 0" || bad "a missing live.json exits 0"

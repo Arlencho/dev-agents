@@ -1044,9 +1044,21 @@ Rules:
 **The push.** `scripts/notify.sh needs-you [live.json]` reads the projection
 and sends **one macOS notification per NEEDS YOU item** that has had no
 action for N minutes, with the item's own `text` as the one line. Once per
-item, never twice: sent items are recorded by their `type` and `source` in a
-seen file. `desk_live.py` calls it after every write (`--once`, `--watch`
-and the server's watcher), never fatally, and only when the variable is set.
+item, never twice: sent items are recorded in a seen file by their stable
+identity, the `type`, the `source.kind` and what names the item for that
+kind (the comment id; the repo and PR number; the dispatch and seat; the
+checkout, file and line). Never the whole `source`: a later SAFE comment on
+the same PR changes `source.comments`, not the item, and makes no second
+toast. `desk_live.py` calls it after every write (`--once`, `--watch` and
+the server's watcher), never fatally, and only when the variable is set.
+
+The one line never carries an operator path. The projector checks every
+slash token of a NEEDS YOU line, and of a PR title before it, against the
+worktree exactly as it does a task line (`outside-repo` for an absolute,
+home, variable or parent-escape path; repo-relative paths, branches and
+URLs pass). `notify.sh` refuses an item whose text still carries such a
+token (one stderr line, nothing sent, not recorded as seen), so a
+hand-written `live.json` cannot put a path on a lock-screen toast.
 
 | Variable | Meaning |
 |----------|---------|

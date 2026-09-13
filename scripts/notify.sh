@@ -25,7 +25,14 @@ set -euo pipefail
 #   site/experience/data/live.json) and sends ONE macOS notification per
 #   NEEDS YOU item that has had no action for N minutes, with the item's own
 #   one-line text. Once per item, never twice: the items already sent are
-#   recorded in a state file keyed on the item's type and source.
+#   recorded in a state file keyed on the item's stable identity (its type,
+#   the source kind and the comment id, the repo and PR number, the dispatch
+#   and seat, or the checkout, file and line). Never on the whole source: a
+#   later SAFE comment on the same PR changes source.comments, not the item.
+#   An item whose text carries an operator path (absolute, home, variable or
+#   parent escape) is refused with one stderr line and never sent: the
+#   projector marks those tokens itself, so only a hand-written live.json
+#   can get here, and it does not get through.
 #   Off by default. scripts/desk_live.py calls this after every write.
 #
 #   FLEET_NOTIFY_NEEDS_YOU_MIN   — N, in minutes. Unset or empty: nothing is
@@ -65,6 +72,43 @@ try:
 except OSError:
     pass
 now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+# The fields that name an item, per source kind. Everything else in `source`
+# (a comments array, a url, a timestamp, a merge state) can change while the
+# item is the same, and must not make a second toast.
+STABLE = {"comment": ("repo", "comment_id"), "pr": ("repo", "pr"),
+          "stream": ("dispatch_id", "task_id"), "file": ("checkout", "file", "line")}
+
+
+def identity(item):
+    src = item.get("source") if isinstance(item.get("source"), dict) else {}
+    kind = src.get("kind")
+    fields = STABLE.get(kind)
+    if fields:
+        named = {f: src.get(f) for f in fields}
+    else:
+        named = src   # an unknown kind has no better name than all of it
+    return "%s|%s|%s" % (item.get("type"), kind, json.dumps(named, sort_keys=True))
+
+
+def has_operator_path(text):
+    """True when a slash token of the line reads as a path outside the
+    worktree: absolute, home, a variable, or a parent escape. The law of
+    task_path in scripts/desk_live.py; the projector already marks these, so
+    a token that still reads so came from a hand-written file."""
+    for tok in text.split(" "):
+        if "/" not in tok:
+            continue
+        core = tok.rstrip(".,;:!?)'\"")
+        if core[:1] in "(\"'":
+            core = core[1:]
+        if core.lower().startswith("file:"):
+            core = core[5:]
+        if core.startswith(("/", "~", "$")) or ".." in core.split("/"):
+            return True
+    return False
+
+
 for item in d.get("needs_you") or []:
     if not isinstance(item, dict) or not item.get("verified"):
         continue
@@ -74,12 +118,17 @@ for item in d.get("needs_you") or []:
         continue   # no time, no proof of how long it has waited
     if (now - at).total_seconds() < after_min * 60:
         continue
-    ident = "%s|%s" % (item.get("type"), json.dumps(item.get("source"), sort_keys=True))
-    key = hashlib.sha1(ident.encode("utf-8")).hexdigest()[:16]
+    key = hashlib.sha1(identity(item).encode("utf-8")).hexdigest()[:16]
     if key in seen:
         continue
+    text = " ".join(str(item.get("text") or "").split())
+    if has_operator_path(text):
+        # Refused, not seen: nothing was sent, and the line says why without
+        # repeating the path.
+        print("WARNING: needs-you item %s refused: its text carries a path outside the worktree"
+              % item.get("type"), file=sys.stderr)
+        continue
     seen.add(key)
-    text = str(item.get("text") or "").replace("\t", " ").replace("\n", " ").strip()
     print("%s\t%s" % (key, text))
 PY
 }

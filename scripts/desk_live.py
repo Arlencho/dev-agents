@@ -772,6 +772,18 @@ def task_path(token):
     return lead + core + tail
 
 
+def mark_paths(value):
+    """One line with every slash token checked against the worktree.
+
+    The rule of task lines (task_path) applied to any text the Floor or the
+    push may print: a PR title, a NEEDS YOU line. Control chars and runs of
+    whitespace become one space first so a path cannot hide behind a tab.
+    """
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    return " ".join(task_path(tok) if "/" in tok else tok for tok in text.split(" "))
+
+
 def first_sentence(value, limit=TASK_MAX):
     """The one line of a seat task the Floor may print. Never the whole body.
 
@@ -780,9 +792,7 @@ def first_sentence(value, limit=TASK_MAX):
     redacted. Cut at the first sentence end whatever its length, else at
     ``limit``, so a short opener never lets the rest of the body through.
     """
-    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
-    text = re.sub(r"\s+", " ", text).strip()
-    text = " ".join(task_path(tok) if "/" in tok else tok for tok in text.split(" "))
+    text = mark_paths(value)
     match = re.match(r"^(.*?[.!?])(?:\s|$)", text)
     if match:
         text = match.group(1)
@@ -1148,7 +1158,7 @@ class GhEnricher:
             if not pick:
                 return {}, None
             return {"number": pick.get("number") if isinstance(pick.get("number"), int) else None,
-                    "title": scrub_text(pick.get("title"), GH_TITLE_MAX) or None,
+                    "title": scrub_text(mark_paths(pick.get("title")), GH_TITLE_MAX) or None,
                     "state": str(pick.get("state") or "").lower() or None,
                     "url": scrub_text(pick.get("url"), 200) or None}, None
 
@@ -1200,7 +1210,10 @@ class GhEnricher:
                                         r.get("body"), kind="review")
                     if rec:
                         records.append(rec)
-            return {"title": scrub_text(data.get("title"), GH_TITLE_MAX) or None,
+            # The title is text an author wrote: slash tokens are checked
+            # against the worktree (mark_paths) like a task line, so an
+            # operator path in a PR title never reaches the page or the push.
+            return {"title": scrub_text(mark_paths(data.get("title")), GH_TITLE_MAX) or None,
                     "state": str(data.get("state") or "").lower() or None,
                     "is_draft": bool(data.get("isDraft")),
                     "merge_state": str(data.get("mergeStateStatus") or "").upper() or None,
@@ -1861,7 +1874,10 @@ def needs_you_view(proj, queue_entries, plan_cache, gh, now):
         checks[check]["reason"] = reason
 
     def add(kind, text, source, verified=True, at=None, **extra):
-        entry = {"type": kind, "text": scrub_text(text, 160), "action": NEEDS_YOU_ACTIONS[kind],
+        # The one line goes to the page and to a macOS toast (notify.sh):
+        # every slash token is checked against the worktree here, whatever
+        # the check that made it, so an operator path never reaches either.
+        entry = {"type": kind, "text": scrub_text(mark_paths(text), 160), "action": NEEDS_YOU_ACTIONS[kind],
                  "source": source, "verified": bool(verified), "at": at,
                  "repo": extra.get("repo"), "branch": extra.get("branch"),
                  "pr": extra.get("pr"), "plan": extra.get("plan")}
