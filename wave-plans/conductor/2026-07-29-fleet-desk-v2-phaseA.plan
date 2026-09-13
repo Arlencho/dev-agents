@@ -1,0 +1,6 @@
+# Fleet Desk v2 Phase A — implement sketch (Almanac + hierarchy + missions + Floor shell)
+# Law: docs/proposals/fleet-desk-v2-SYNTHESIS.md
+# Reference: site/sketches/fleet-desk-v2-hybrid.html (look/feel target, not pixel-perfect)
+# Schema v2 join/PMI law: experience-console-SYNTHESIS.md — do not break
+1 | web-frontend | IMPLEMENT Fleet Desk v2 Phase A per docs/proposals/fleet-desk-v2-SYNTHESIS.md Phase A. Read craft/IA target docs/proposals/sketches/fleet-desk-v2-hybrid.html. Deliver modern Almanac restyle + hierarchy chrome + mission portfolio/issue-run views derived from schema v2 (issue_links, company, wave, status) + live shell empty states (Wave lanes + Conductor spine structure without fake live data). Touch templates/experience/site.css, scripts/experience_build.py; thin experience_data.py mission projection only if needed (document schema; keep join/PMI gates). Pages: Global pipeline + companies + live teaser; company repos+missions; missions index; mission detail with waves/tasks pipeline; Work links to mission; live shell. Keep make experience / desk / experience-open. Tests HTML smokes + make test green. Update docs/experience.md. Branch feat/fleet-desk-v2-phase-a. Open PR. No Phase B dispatch events/SSE. | feat/fleet-desk-v2-phase-a
+

@@ -1,0 +1,17 @@
+# Conductor: E2E critical subset can be cancelled by an apt-get hang — 2026-08-19
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/olympus-platform.git wave-plans/conductor/2026-08-19-e2e-aptget-hang.plan --auto --retries 2
+#
+# OBSERVED, not hypothetical. PR 2717, CI run 32232575194, job 96005898130:
+#   step 16 Install Playwright system deps (cache hit) ran 08:28:02 to 08:40:50
+#   (12.8 min) and was cancelled by the job timeout. Step 17 Run critical E2E
+#   subset was SKIPPED — not one test executed. The aggregate CI passed then
+#   failed on the cancellation, and a green PR went red with no code change.
+#   The identical tree had passed minutes earlier on head c1f2407f.
+#
+# The job budget is deliberate: ci.yml carries timeout-minutes 12 with a comment
+# stating the runtime budget is 5 minutes and saying twice, do NOT raise
+# timeout-minutes. Raising it is the wrong fix and is explicitly forbidden.
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | devops | Fix a CI flake that turns a green PR red without any code change. Evidence: PR 2717, run 32232575194, job 96005898130. Step named Install Playwright system deps (cache hit) at .github/workflows/ci.yml line 1036 runs npx playwright install-deps chromium, which is an apt-get operation. It hung for 12.8 minutes, consumed the entire job budget, and the job was cancelled BEFORE step 17 ran, so zero E2E tests executed and the aggregate CI passed check failed. The same tree passed on the previous head. THE CONSTRAINT THAT MATTERS: the job sets timeout-minutes 12 and the comment above it states the runtime budget is 5 minutes and says twice that timeout-minutes must NOT be raised. Do not raise it. Do not raise the job budget. The fix is to stop an apt stall from consuming the budget silently. Bound that step with its own step-level timeout-minutes, sized so a stall fails fast and still leaves the 5 minute test budget intact, and make it resilient rather than fatal on a transient mirror failure, for example a bounded retry. Consider whether the sibling step at line 1032, npx playwright install --with-deps chromium on a cache miss, needs the same treatment; it has the same apt exposure and no step timeout. Judge whether install-deps is even required on the ubuntu-latest image, since the comment at line 1037 asserts the OS libs must be reinstalled on every cache hit, and if that assertion is false the cheapest fix is to stop doing the work at all; verify before changing behaviour, do not assume. Whatever you change, a stalled apt must produce a fast clear failure or a successful retry, never a silent cancellation that skips the tests and reports as if the suite ran. State plainly in the PR body what the step now does on a stall and what a reviewer would see. Do not touch any test file, any spec, or anything under apps. Do not raise timeout-minutes anywhere. Open a PR, do not merge it, and reference the flake evidence above in the body with the run and job ids. | ci/e2e-aptget-hang

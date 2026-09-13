@@ -1,0 +1,2 @@
+# Conductor critic loop 2/2 — PR #2059 after producer REVISE 7f4b976d
+1 | frontend-critic | Adversarial re-review PR #2059 branch feat/learn-abarranges-rsc (tip should include 7f4b976d). Loop 1 was REVISE: MED positive-control fixtures + learning-doc status/scope. Verify fixtures RED/GREEN with inject or in-memory tests; verify learning doc no longer overclaims Closed 2026-07-23 only. Executable findings only. Post PR comment with VERDICT APPROVE or REVISE. Do not rewrite product copy. | feat/learn-abarranges-rsc

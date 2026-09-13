@@ -1,0 +1,5 @@
+# Fleet Desk Phase 1 critic loop 2 — after producer REVISE B1–B4 fixtures
+# PR #48 feat/fleet-desk-phase1-data
+# Prior critic: REVISE (4 surviving mutants on P3 gate) @ 3f6669d
+# Producer claims: abd6736 fixtures pin all clauses; mutants re-run RED; 188 tests; experience_data.py untouched
+1 | test-engineer | CRITIC LOOP 2 / VERIFY ONLY for PR #48 feat/fleet-desk-phase1-data after producer REVISE (abd6736 + handoff 59b7bff). Checkout branch. Re-verify blocking B1–B4 are load-bearing with executable proof: reintroduce each mutant (specialized→packs; drop p2_ok for P3; drop revisions>=2; drop -n depth) and confirm suite goes RED; baseline make test green. Confirm experience_data.py production logic still matches pre-REVISE behavior for P3 (no silent production change). Re-check schema v2 honesty, git-history, pairing, gh soft-fail, snapshot. Output handoff.md VERDICT APPROVE or REVISE (executable only). Comment on PR #48 if gh works. Do not redesign. Do not re-implement. Branch feat/fleet-desk-phase1-data. | feat/fleet-desk-phase1-data

@@ -1,0 +1,9 @@
+# Round four for feat/floor-plain (PR 70): critic only. 2026-09-12
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-12-floor-plain-critic4.plan --auto --retries 1
+# Round three: block 2 CLOSED, both notes CLEARED, one new block: the fixed 6rem
+# tracks starved the purpose column at 390 and 400. The orchestrator applied a
+# phone-width media query (3.75rem and 4.25rem tracks below 600px) in 7122f8e.
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | frontend-critic | READ-ONLY RE-REVIEW of the Floor page on branch feat/floor-plain (PR 70) at head 7122f8e or later. No commits, no push, no edits; tmp writes and the gitignored site build only. Record head SHA at start and at report. Re-run your round-three red3.mjs exactly: at 390 and 400 the purpose column must be at least 120 px and at most 4 lines for a queue-length purpose, with one outcome right edge across rows; at 1280 the outcome edge must still be straight and the tracks unchanged. Paste the measured grid, column width, line count and right edges at all three widths. Confirm the timer text (7 min, 12 min, under a minute) still fits or overflows left into the gap and never the page width at 390. Re-run everything that passed in round three. Post ONE comment on the PR whose first line reads FRONTEND CRITIC FLOOR PLAIN ROUND 4 with SAFE-TO-MERGE or BLOCK-FIX. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/floor-plain

@@ -1,0 +1,6 @@
+# Fleet Desk v2 Phase A critic — verify before merge
+# PR: https://github.com/Arlencho/dev-agents/pull/57
+# Law: docs/proposals/fleet-desk-v2-SYNTHESIS.md Phase A
+# Sketch: docs/proposals/sketches/fleet-desk-v2-hybrid.html
+# Producer: web-frontend fca45f0 — DO NOT re-implement
+1 | frontend-critic | CRITIC / VERIFY ONLY for PR #57 feat/fleet-desk-v2-phase-a (Fleet Desk v2 Phase A). Checkout branch. Adversarial verification against SYNTHESIS Phase A and sketch IA: (1) hierarchy chrome Global/Company/Repo/Mission/Wave present; Almanac|Floor toggle; (2) dark-first craft + a11y text+color reduced-motion; (3) missions portfolio and mission detail derived honestly from issue_links without inventing companies or live seat state; (4) Queued/In flight not fabricated from handoffs alone; (5) /live/ shell teaches make desk-live without fake running agents; (6) experience_data.py join/PMI gates untouched or only documented thin projection; (7) make test green; HTML smokes non-vacuous. Output handoff.md VERDICT APPROVE or REVISE with executable failures only. Comment on PR #57 if gh works. Do not redesign. Do not re-implement. Branch feat/fleet-desk-v2-phase-a. | feat/fleet-desk-v2-phase-a

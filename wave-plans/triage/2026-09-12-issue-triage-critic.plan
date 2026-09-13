@@ -1,0 +1,10 @@
+# Plan-critic pass over the triage classification already posted on issue 2814. 2026-09-12
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/olympus-platform.git wave-plans/triage/2026-09-12-issue-triage-critic.plan --auto --retries 1
+#
+# The classifier seat finished its work and posted the table, then the launcher
+# exit step failed (roles/claude.md lookup), so the critic wave never ran.
+# This plan runs only the critic against the comment that exists.
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | plan-critic | READ-ONLY REVIEW of the classification posted as the first comment on issue 2814 in Arlencho/olympus-platform, titled Issue triage 2026-09-12 classification. No closes, no edits, no labels, no comments on any other issue; tmp writes only. THE QUESTION THAT MATTERS: would executing the CLOSE_FIXED verdicts close something that is still real. For each of the 13 CLOSE_FIXED rows, open the issue, read its body and its last two comments, then verify the cited evidence on main yourself (the file and line, or the merged PR diff). Grade each row CONFIRMED, REFUTED, or PARTIAL (fixed in part, name what remains). A row whose evidence you cannot find on main is REFUTED. Then sample the milestone assignments: pick 15 rows across the seven milestone buckets, favouring priority p0 and p1 issues and any issue assigned to luddement, and say whether the milestone fits the milestone definitions in the repo (use the real milestones from the GitHub API, not the stale doc). Skim the 41 Unsure rows and name any where the answer is actually determinable from the repo. Post ONE comment on issue 2814 whose first line reads CRITIC TRIAGE 2026-09-12, with a table of the 13 close verdicts, the 15 sampled milestone rows, the Unsure rows you could settle, and a final line stating how many closes are cleared for execution. HOUSE STYLE: no long dash, no AI tool or vendor name. | triage/2026-09-12-critic

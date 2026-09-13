@@ -1,0 +1,8 @@
+# Floor v3-C fix round 4: one finding from CRITIC FLOOR V3C ROUND 3 BLOCK-FIX on PR 79 (a percent-encoded path in a title still reaches the toast). 2026-09-13
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-13-floor-v3c-fix3.plan --detach --retries 1
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | devops | On branch feat/floor-v3c (PR 79), fix finding 1 of the comment on PR 79 whose first line reads CRITIC FLOOR V3C ROUND 3 BLOCK-FIX: task_path and has_operator_path treat a percent-encoded slash (%2F or %2f) as a path start, decoding or matching before the must-contain-slash skip, including after file:; add the critic fixture as a test and keep every existing test green. VERIFY: the desk test suite with real exit codes in the PR body under a Round 4 heading. HOUSE STYLE: no long dash anywhere, no AI tool or vendor name, no Co-Authored-By trailer. Commit and push. | feat/floor-v3c
+
+2 | plan-critic | READ-ONLY REVIEW ROUND 4 of PR 79 on branch feat/floor-v3c. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Re-run every earlier fixture (plain, colon-glued, parentheses, percent-encoded) plus a double-encoded one; confirm the double notification fix holds. Post ONE comment on PR 79 whose first line reads CRITIC FLOOR V3C ROUND 4 with SAFE-TO-MERGE, BLOCK-FIX or BLOCK-ESCALATE and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/floor-v3c

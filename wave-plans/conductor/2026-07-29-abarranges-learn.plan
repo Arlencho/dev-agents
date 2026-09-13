@@ -1,0 +1,3 @@
+# Conductor: ABarranges learning + regression (product fix already on main)
+# Packet: wave-plans/conductor/2026-07-29-abarranges-task-packet.md
+1 | web-frontend | ABarranges class: product JSX already fixed; add learning stub + cheap regression for RSC whitespace after bold entity; do not rewrite legal copy | feat/learn-abarranges-rsc

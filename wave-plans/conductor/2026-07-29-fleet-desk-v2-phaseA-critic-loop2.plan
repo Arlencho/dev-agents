@@ -1,0 +1,5 @@
+# Fleet Desk v2 Phase A critic loop 2 — after producer REVISE M5/M7/M8
+# PR #57 feat/fleet-desk-v2-phase-a
+# Prior critic: REVISE test-only (3 surviving mutations) @ ece10fc
+# Producer claims: f99e42b pins M5 M7 M8; 265 tests; mutants re-run RED
+1 | frontend-critic | CRITIC LOOP 2 / VERIFY ONLY for PR #57 feat/fleet-desk-v2-phase-a after producer REVISE f99e42b. Checkout branch. Re-verify M5 M7 M8 are load-bearing with executable mutation proof: invent companies[0] on unlinked mission path must fail tests; remove prefers-reduced-motion must fail; empty status pill must fail; baseline make test green. Confirm production experience_build/data logic unchanged except if true bugs. Re-check Phase A SYNTHESIS gates still hold. Output handoff.md VERDICT APPROVE or REVISE. Comment on PR #57 if gh works. Do not redesign. Do not re-implement. Branch feat/fleet-desk-v2-phase-a. | feat/fleet-desk-v2-phase-a

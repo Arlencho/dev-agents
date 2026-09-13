@@ -1,0 +1,4 @@
+# Fleet Desk v2 Phase B critic loop 2 — after producer REVISE d4b2ca5
+# PR #59 feat/fleet-desk-v2-phase-b
+# Prior: REVISE D1 stale-as-live + D2/M1; producer fixed build-time staleness derivation + traps + pins
+1 | frontend-critic | CRITIC LOOP 2 / VERIFY ONLY for PR #59 feat/fleet-desk-v2-phase-b after producer REVISE d4b2ca5. Checkout branch. Re-verify D1: build-time floor and home teaser derive live/stale/offline from last_event_ts not stored state alone; old live.json cannot show green LIVE. Re-verify close-out traps and M1 pin load-bearing. Run tests/critic/phase-b-honesty-repro.sh and make test. Output handoff.md VERDICT APPROVE or REVISE. Comment on PR #59 if gh works. Do not redesign. Do not re-implement. Branch feat/fleet-desk-v2-phase-b. | feat/fleet-desk-v2-phase-b

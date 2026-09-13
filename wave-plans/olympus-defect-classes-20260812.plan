@@ -1,0 +1,500 @@
+# Olympus — post-gate backlog, waved by DEFECT CLASS — 2026-08-12
+#
+# GOAL: work the open backlog in the order that finds the most defects per
+# hour, rather than in priority order.
+#
+# WHY CLASS BEATS PRIORITY — measured on 2026-08-11/12, not assumed.
+#   The fabricated-data class had SEVEN instances. Exactly ONE was filed by
+#   a human. Every other was found by FOLLOWING a fix:
+#     #2537 (savings from the day of the month) -> its sweep found #2540
+#     #2521 (match % = provider ordering) -> #2541 -> #2548
+#     #2540's sweep found #2551 (the PRD itself instructs the fabrication)
+#   Same shape in unfalsifiable-guard: 3 instances, 1 filed, 2 downstream.
+#   Priority ordering cannot see that. It interleaves unrelated work and
+#   loses the pattern between PRs.
+#
+# THE HEADLINE NUMBER
+#   ⚠ PROVISIONAL - DO NOT PLAN HEADCOUNT OR TIMELINES AGAINST 155/112.
+#   The non-defect classes below sum to 69 plus 2 unclassified, which implies
+#   ~196 defects, not 155. One of the two numbers is wrong and the recount has
+#   not been done. The SHAPE of the argument survives either way (class beats
+#   priority; the non-defects belong off the wave track). The number does not.
+#
+#   267 open issues. 155 are defects. The other 112 are features (28),
+#   chores (22), compliance documents (14), ops gates (5) and similar.
+#   Those must NOT be waved by defect class - they need their own track.
+#   Mixing them in is why the backlog reads as unmanageable.
+#
+#   Only 16 issues (~6%) are closeable. The speed-filed cohort is NOT full
+#   of duplicates: the reviewers cited each other and split deliberately by
+#   mechanism. The backlog is large because the defects are real.
+#
+# THE RE-FRAME THAT CHANGES THE ORDER
+#   The fabrication class keeps regenerating after two sweeps because the
+#   sweeps were pointed at the CODE and the source is the PRD.
+#   #2551 is not one bad paragraph, it is a policy across six spec pages.
+#   The PRD contradicts itself about it:
+#     docs/prd/pages/booked-v2.md:316          FORBIDS the Tokyo fixture
+#     docs/prd/pages/09-bookings-detail.md:1120 MANDATES it
+#   An implementer reading either page is following the PRD. That single
+#   contradiction has already produced THREE implementations in the code.
+#
+#   Two things make it urgent rather than tidy:
+#     1. The premise it was ratified under expires this week.
+#        20-stories.md:7 records it verbatim: "sandbox/demo posture - no
+#        real users". False the moment the F&F cohort is invited.
+#     2. scripts/voice-lint.sh globs only *.go *.ts *.tsx. It CANNOT read
+#        a .md file. The document defining every user-facing string in the
+#        product is structurally unlintable. That is the mechanism that let
+#        all of this accumulate.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# WAVE ORDER, and why each earns its slot
+# ────────────────────────────────────────────────────────────────────────────
+#
+# THIS IS A PRIORITY OF YIELD, NOT A SERIAL SCHEDULE. What actually runs is
+# the highest-value work available under non-conflicting scopes, with class
+# order as the default when value and scope allow. Round 3 dispatched #2555,
+# #2556 and #2557 - all Wave 4 - ahead of Waves 2 and 3, because they are
+# money and fundraising surfaces. That was correct. Do not read the numbering
+# as a dispatch order.
+#
+# 0  THE SPEC IS WRONG          ~13 filed + a large unfiled body
+#    Multiplies exactly the way fabricated-data does, and survives every
+#    code sweep by construction. Every hour spent fixing code before the
+#    PRD is amended re-instructs the defect. Co-founder call DONE 2026-08-12
+#    (see DECISIONS). Execution owner: #2592 (D1) + #2551 (D3) + #2313 (D4)
+#    + #2456 (D2 catalogue). Not blocked on another decision — blocked on
+#    shipping the PRD/code amendments.
+#
+# 1  BLIND TEST                 20
+#    The only class whose defects invalidate every other wave's output.
+#    Nineteen fixes merged 2026-08-12, each shipping tests written the same
+#    day by the same process, and nobody has watched one fail. Until this
+#    is cleared, "fixed" is a claim rather than a fact.
+#    Run it TEST-FIRST against the merged fixes, not against the backlog.
+#
+# 2  UNFALSIFIABLE GUARD        18
+#    The class that PRODUCES siblings in other classes. #2521 is the proof:
+#    the fabricated match percentage existed BECAUSE the bestScore > 0
+#    guard could not fire, and removing the floor is what exposed #2541 and
+#    #2548. Every guard fixed converts a silent defect into a loud one
+#    somewhere else. Also the only near-mechanical signature in the set.
+#
+# 3  INVISIBLE FAILURE          20
+#    Determines whether anything can be found in production at all.
+#    #2471 (prod runs at DEBUG) and #2117 (13 call sites discard errors)
+#    mean the answer to "is this happening live?" is always "we cannot
+#    tell". Fixes no traveller-visible bug; makes waves 4+ evidence-driven
+#    instead of speculative.
+#
+# 4  FABRICATED DATA            38
+#    Largest and the proven multiplier. Fourth ONLY because the swept
+#    surfaces are thin now and the remaining yield is in surfaces nobody
+#    has swept (Hermes, the API ticker, three main-nav pages, analytics).
+#    Two exceptions jump the queue - see IMMEDIATE below.
+#
+# 5  COLLAPSED ERROR STATES     7    (+ UNREACHABLE STATE 4)
+#    Run together: the same traveller experience from two sides, both
+#    concentrated in checkout/confirm. One engineer holding that flow fixes
+#    all eleven with one mental model.
+#    GATED on the #2456/#2507 copy decision - an implementer cannot write a
+#    compliant error string until the catalogue/voice conflict is settled.
+#
+# 6  UNRECONCILED MODEL OUTPUT  6    [NEW CLASS]
+#    A model self-report is written through to persisted state or the
+#    traveller WITHOUT reconciliation against what the server already
+#    knows. Not fabrication (the value is not invented, it is trusted) and
+#    not an unfalsifiable guard (there is no guard at the seam at all).
+#    One reconciliation seam at the conductor boundary likely closes
+#    several. High density in a small area.
+#    #2216 #2219 #2234 #2241 #2254 #2311
+#
+# 7  SPEC/CODE DRIFT, ordinary half   ~20
+# 8  LEAK                        10   (4 of 10 are one mechanism: a raw
+#                                      Stripe error crossing a redaction
+#                                      boundary into 5 distinct sinks)
+# 9  STATE LOSS / DUPLICATION    11
+# 10 CONTRACT-VALIDATION (6), INFRA-CI (14), LATENT-SCALE (4),
+#    ORPHANED-SURFACE (4)
+#
+# NOT DEFECT WAVES — 69 issues. Do not schedule them as such.
+#   compliance-doc-gap (14) is ONE writing project with a deadline attached
+#   to the raise, not fourteen engineering tickets.
+#   ops-readiness (5) is external gates. feature (28) + chore (22) are
+#   ordinary product work.
+#
+# CLASSES THAT ARE NOT WAVES, said plainly
+#   wasted-supplier-work: ONE issue (#2378) with two secondary carriers.
+#     Fold into whoever next touches the stays fan-out.
+#   latent-scale-defect: needs a TRIAGE RULE, not a wave - re-raise to p0
+#     BEFORE the triggering config change ships.
+#   external-fact-drift: 4 issues with nothing in common but their failure
+#     mode. By construction no CI gate catches it. Calendar item, not sprint.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# IMMEDIATE — unfiled, found during classification, act regardless of order
+# ────────────────────────────────────────────────────────────────────────────
+#
+# A  FILED #2555 - apps/web/components/checkout-pay-options.tsx:53
+#    A green role="status" line reading "Code applied" for ANY non-empty
+#    string. No API call, no validation, no price change anywhere. Mounted
+#    on all four checkout branches. THE MONEY SCREEN.
+#
+# B  FILED #2556 - services/hermes/cmd/hermes/render.go:275
+#    formatMinorAmount defaults an unstated currency to EUR, and
+#    gateway.go:713 renders THE PAY-LINK AMOUNT through it. This is exactly
+#    the fix PR #2547 shipped on web on 2026-08-12. Hermes is a LIVE PROD
+#    SERVICE and was not in that sweep. formatPrice also has no non-finite
+#    guard: NaN renders as "NaN EUR".
+#    No open issue covers ANY Hermes rendering surface.
+#
+# C  HELD for D1 - docs/prd/pages/01-homepage.md:352 -> apps/web/app/atlas-home-page.tsx:230
+#    "14,200 trips planned / 4.93 avg rating / 38 countries". No upstream
+#    field, no API, no source. PRD-MANDATED and PINNED BY A TEST
+#    (atlas-home-page.test.tsx:179), so the fabrication is load-bearing.
+#    Public front page. Claims about the business.
+#
+# D  FILED #2557 - analytics/investor-snapshot.sh:101
+#    interactions_total says "synthetic traffic excluded" in its own
+#    comment. `synthetic` is stamped at only 2 of 8 apievent.Emit sites, so
+#    a synthetic actor's signups, bookings and payments count as real
+#    product interactions on an INVESTOR-FACING one-pager.
+#    Also analytics/weekly_active_users.sql:20 - no msg filter and no
+#    synthetic filter, so a user_id on ANY Cloud Run stdout line counts as
+#    weekly-active, including error and rate-limit logs.
+#
+# E  FILED #2560 - apps/api/internal/handler/routes.go:467 + cmd/server/main.go:1959
+#    GET /api/v1/live/ticker publicly serves invented values at 200:
+#    "SAS STO-LHR EUR 182", "EUR/USD 1.0842", "AGENTS 1,248 online".
+#    StaticSource is the ONLY ticker source wired in production.
+#    #628, the issue that tracked wiring real sources, is CLOSED - closed
+#    correctly for the web (which deleted its component) while the endpoint
+#    stayed wired. Delete both.
+#
+# F  FILED #2558 - apps/api/internal/service/orphan_observability_test.go
+#    NINE unconditional t.Skip calls, all reading "remove after
+#    orphan_service.go lands". It landed in the SAME COMMIT (91e1a5ac,
+#    28 May) and the file has not been touched since. One of them is
+#    TestOrphanDetector_AlertTag_FiresPerOrphanDetected - precisely the
+#    assertion #2477 says does not exist.
+#    THE CHEAPEST FIX IN THE REPORT: delete nine lines, see what falls over.
+#
+# G  FILED #2559 - apps/web/tests/e2e/critical/a11y-public-surfaces.spec.ts:51
+#    expect(blocking).toEqual([]) after a bare page.goto with nothing
+#    asserting the page rendered. goto resolves on ANY HTTP response, so a
+#    500 or an unhydrated shell yields a near-empty DOM in which axe finds
+#    zero violations. THE ONLY a11y GATE IN THE REPO. Both sibling specs in
+#    the same directory anchor first.
+#
+# H  HELD pending verification - apps/api/internal/service/stay_price_change.go:225
+#    `if storedPrice <= 0 { return false, nil }` is the SINGLE price gate
+#    both the /confirm-trip preflight and the book path run against a fresh
+#    Duffel quote - and the client supplies selected_result at POST
+#    /bookings, so the skip is reachable under client control. When skipped,
+#    the currency check, the tolerance check and the acceptance flow are all
+#    bypassed, and it emits NOTHING.
+#    VERIFY BEFORE ESCALATING: the fail-open is a deliberate posture on
+#    #626. What is new is client reachability. Confirm end to end first.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# DECISIONS — DECIDED 2026-08-12 (co-founder call). Do not re-litigate in PR
+# review. Recorded on GitHub; umbrella PRD amendment #2592.
+# Implementation of PRD + code is NOT done until the linked issues close.
+# ────────────────────────────────────────────────────────────────────────────
+#
+# D1  LAUNCH-SEED FABRICATION — DECIDED. Policy: No launch-seed for F&F.
+#     Umbrella: olympus-platform #2592. Answers:
+#       1. No — does not survive F&F beta.
+#       2. Real scorer or remove; no editorial "Atlas match %" (align #1702).
+#       3. Remove homepage stats row now; real counters only post-launch.
+#       4. Omit free-cancel line when cancellable_until is null (no Mar 22).
+#       5. No named property + price + Hold CTA before Duffel Stays is wired.
+#     PRD still instructs the old policy until #2592 lands — treat code that
+#     follows the old PRD as known debt, not as ratification.
+#
+# D2  #2456 / #2507 — DECIDED. Voice wins; rewrite catalogue to pass voice.
+#     #2456 open (documentation + human-task), one PRD pass (~20 strings +
+#     01-conventions). #2507 CLOSED as duplicate of #2456. GATES WAVE 5
+#     until the catalogue amendment merges.
+#
+# D3  #2551 — DECIDED. Absent activities render nothing. Delete dinner-name
+#     fallbacks; align 09-bookings-detail with booked-v2 forbid; remove
+#     DESIGN_DINNER_FALLBACK (components/bookings/atlas-booked-helpers.ts).
+#     Comment on issue 2026-08-12. Linked from #2592.
+#
+# D4  #2313 — DECIDED. Carrier lock only when resolved trip has a flight
+#     leg; never on hotels-only; key on resolved intent not client flow
+#     default. Comment on issue 2026-08-12. Linked from #2592.
+#
+# D5  #2174 #2176 #2382 #2370 #2381 — DECIDED process:
+#     #2382 #2370 #2381 re-scoped to the 2026-08-11 answers (comments
+#     2026-08-12); drop analysis, implement one-line change.
+#     #2174 #2176 remain pure product decisions (human-task); do not wave
+#     as eng defects until answered, then re-scope.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# READY NOW, no decision needed
+# ────────────────────────────────────────────────────────────────────────────
+#   blind-test, unfalsifiable-guard, invisible-failure, leak,
+#   state-loss-or-duplication, contract-validation-gap, infra-ci,
+#   latent-scale-defect, orphaned-surface.
+#   collapsed-error-states and unreachable-state are ready EXCEPT where the
+#   copy catalogue is the blocker (D2).
+#
+# ────────────────────────────────────────────────────────────────────────────
+# CLOSES — 9 confident, 7 probable
+# ────────────────────────────────────────────────────────────────────────────
+#   CONFIDENT: #2507 (dup of #2456) · #2410 (dup of #2405) ·
+#     #2225 (dup of #2241, folded by its own comment) · #1950 (fixed
+#     8ebcc8f7, which closed the later twin #2090 and left this open) ·
+#     #2365 (4f921c6c) · #2018 (a14108fd + 341b0241) · #1897 (e3edf025) ·
+#     #1609 (7bbef43d) · #1724 (3933a6ee + fa6f846f + 3b45fbed + d57cbaed)
+#
+#   PROBABLE, check the named item first: #2411 (dup #2425) · #1832
+#     (f4aea8d6 removed the root cause, not the prescribed fix) · #1840
+#     (53cdfb1e, but the same commit says the non-EUR case is "tracked in
+#     #1840") · #2009 (superseded; agent_conductor.go:449 records an
+#     explicit #2158 decision AGAINST this backstop) · #1861 (names a
+#     wizard that does not exist on main) · #1565 (stale per LLM_ROUTING.md;
+#     failover is a different question from cost) · #2383 (its own opening
+#     line says neither item is a defect)
+#
+#   DO NOT CLOSE ON SIMILARITY — five clusters that look like duplicates
+#   and are not:
+#     #2424/#2432/#2434 (three field groups, different sensitivity)
+#     #2429/#2438/#2445/#2465/#2409 (FIVE distinct sinks, one mechanism)
+#     #2497/#2498/#2499/#2500 (four residuals of #2475)
+#     #2414/#2415 · #2447/#2448
+#     #2422 is BLOCKED-BY #2419, not a duplicate.
+#
+#   PARTIALLY FIXED — resist closing on a commit-message search:
+#     #2332 (naming fixed by fc6e4c98; ics.ts + on-trip tab still inverted)
+#     #2371 (dates fixed by 72562507; timezone anchor remains)
+#     #2522 (Res-1 fixed by 2f0fed89; Res-2 in preflight-gate.ts untouched)
+#     #2516 (2 of 12 items addressed by 559aff09)
+#   The 19 commits of 2026-08-12 closed NOTHING outright.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# OPERATING NOTES carried from the 2026-08-11 gate wave
+# ────────────────────────────────────────────────────────────────────────────
+#
+# THE SHARED CHECKOUT GOES STALE AND COSTS REAL TIME.
+#   It was 19 commits behind when this plan was written. An agent dispatched
+#   into it re-finds defects that are already fixed. Fetch and fast-forward
+#   BEFORE every dispatch round.
+#
+# THREE WAYS A FAIL-FIRST PROOF LIED THIS WEEK. Put these in every brief
+# until they live in a skill file:
+#   a) a perl -0pi syntax error left the source pristine and the suite
+#      printed passes
+#   b) mutations anchored on the first matching return landed in the ERROR
+#      branch and failed to COMPILE, which a naive runner reports as RED
+#   c) git clean -fd deleted worktree node_modules symlinks, so six "reds"
+#      were module-resolution errors
+#
+# THE VERDICT FORMAT IS SHIP IT / SHIP IT WITH X / DO NOT SHIP.
+#   Only "makes something worse than main" blocks. Rank findings as
+#   REGRESSIONS (block) vs RESIDUALS (file). This single change is why
+#   nothing stalled on 2026-08-12 while quality went up.
+#
+# PRE-DISPATCH CHECKLIST — both of these were missed on 2026-08-11:
+#   1. Search for an existing issue before filing. Three duplicates were
+#      filed by not doing this.
+#   2. Set the assignee in the SAME action as the status label. 111 issues
+#      went out with no assignee.
+#
+# RE-PLAN AFTER EACH ROUND. The gate plan had to be corrected twice; it was
+#   right when written and wrong within hours.
+
+# ════════════════════════════════════════════════════════════════════════════
+# WAVE 1 — BLIND TEST — DISPATCHED 2026-08-12
+# Scope: the AUGUST cohort only. The 5 pre-August members (#1913 #1760 #1759
+# #1758 #1108*) wait for the staleness pass, EXCEPT #1108 which rides with
+# #2318 because it is the same file and the same divergence.
+# ════════════════════════════════════════════════════════════════════════════
+#
+# ROUND 1 — four agents, disjoint file sets, isolated worktrees
+#
+1 | test-engineer | #2558 nine unconditional t.Skip calls in orphan_observability_test.go. The file they wait on landed in the SAME COMMIT (91e1a5ac, 28 May). :380 is precisely the assertion #2477 says does not exist; :575 proves a three-state invariant over two states. | task/2558
+1 | test-engineer | #2559 the only a11y gate in the repo passes on an empty DOM. Bare page.goto, nothing asserts the page rendered, so a 500 scores clean on all three surfaces. Both sibling specs already anchor first. | task/2559
+1 | test-engineer | #2374 + #2418 two assertions that accept malformed input: toHaveTextContent substring-matches so "+-1" satisfies a "+1" check, and the parity helper returns "0m" on ANY regex non-match instead of failing. Both signatures are MECHANICAL - sweep for siblings. | task/2374
+1 | go-backend | #2318 + #1108 the memory booking store accepts ids Postgres rejects (~44 fixtures test unstorable ids) and ListOrphanCandidates filters on a different column than Postgres. Consider a shared conformance suite over per-site patches. | task/2318
+#
+# HELD FROM ROUND 1, and why
+#   #2477  eleven money-path measurements. Couples to #2558 - read that PR's
+#          result first so the two agree rather than diverge.
+#   #2401 #2413 #2414  the inverted from_airport/to_airport contract. Spans
+#          apps/web fixtures, the API mock and api.yaml examples: three
+#          scopes, so it needs its own round rather than a conflict.
+#   #2257 #2124 #2094 #2080 #2498  round 2.
+#
+# EVERY BRIEF CARRIES the three ways a fail-first proof lied this week
+# (mutation never applied / mutation failed to compile / clean -fd killed
+# node_modules symlinks) and the throwaway-worktree rule. Until these live in
+# a skill file they get retyped every time.
+
+# ════════════════════════════════════════════════════════════════════════════
+# DEFINITION OF DONE — an issue is not done when its PR merges
+# ════════════════════════════════════════════════════════════════════════════
+#
+# Every issue walks the full chain. `scripts/land.sh <PR#>` automates the
+# mechanical parts; the judgement parts are listed at the end of its output
+# and stay manual on purpose.
+#
+#   1. CRITIC     no PR merges without one. 5 of 5 on 2026-08-12, and every
+#                 one found something wrong with the producer's CLAIMS rather
+#                 than its code.
+#   2. MERGE ORDER - THE HARD GATE THAT IS NOT AUTOMATED, AND IS NOT OPTIONAL.
+#                 Before landing two PRs that can COUPLE - same subsystem OR
+#                 shared test surface - merge them LOCALLY and run the suite.
+#                 mergeStateStatus CLEAN IS NOT SAFETY. #2568 and #2561 shared
+#                 NO FILE, both reported CLEAN, and the second to land would
+#                 have reddened main with no warning from git. Nothing but
+#                 running the combined tree finds this. land.sh cannot do it
+#                 for you and says so.
+#   3. CI GREEN   poll `.status == "completed"`. `.conclusion // "RUNNING"`
+#                 does NOT catch an empty string and exits immediately.
+#   4. MERGE      then RE-CHECK the issue state. A squash can drop the
+#                 `Closes #N` keywords and the issue silently stays open.
+#                 #2374 and #2418 both did this.
+#   5. MAIN GREEN a red main silently deadlocks the entire merge queue -
+#                 every open PR inherits UNSTABLE and "Ready: 0" reads as
+#                 quiet rather than as a jam.
+#   6. DEPLOY     only if the diff touches shippable code. A test-only change
+#                 has nothing to deploy and must not be reported as deployed.
+#   7. PROD       ask the service which commit it is running. A green deploy
+#                 run is not a deploy; a 9-second success is a gate skip.
+#                 Compare against the newest apps/api commit, NOT origin/main:
+#                 the API only deploys on apps/api/**, so lagging main after a
+#                 web-only merge is healthy.
+#   8. VERIFY THE CLAIM - AND SPLIT THE TWO KINDS. Never report them as one.
+#                 (a) EXTERNALLY VERIFIED: probed on the live service. #2574
+#                     (parse veto on prod), #2486 (sweeper running, from Cloud
+#                     Logging, control query first).
+#                 (b) NO PUBLIC PROBE EXISTS: internal behaviour with no
+#                     externally observable surface. #2568 (booking-store
+#                     conformance), #2413 (mock locality rung - mock_active is
+#                     false in prod so the path is unreachable there).
+#                 (b) is a legitimate outcome, but it must be NAMED as such.
+#                 It is not a second kind of green.
+#                 Not that the page loads. Assert the specific thing
+#                 the PR said it fixed. RUN THE CONTROL FIRST: on 2026-08-12 a
+#                 probe of 904KB of prod bundle returned 0 for the new string
+#                 AND 0 for `Confirm & Pay`, so the corpus could not see the
+#                 surface and every 0 was meaningless.
+#   9. SAY WHAT WAS NOT VERIFIED   that beats a green probe implying coverage
+#                 it does not have.
+#  10. CLOSE      with a receipt naming the merge SHA and the evidence.
+#                 status:qa is ONLY for something a human must look at.
+#
+# THE FOUR WAYS A FAIL-FIRST PROOF LIED THIS WEEK — in every brief until they
+# live in a skill file:
+#   a) a perl -0pi syntax error left the source pristine and the suite passed
+#   b) a mutation landed in the error branch and failed to COMPILE; a naive
+#      runner reports that as RED
+#   c) git clean -fd deleted worktree node_modules symlinks, so six "reds"
+#      were module-resolution errors. Turbopack also rejects a node_modules
+#      SYMLINK in a worktree - use a hardlink tree (cp -al) or --webpack.
+#   d) a nil-deref panic killed the test binary early: two failures at 2.7s
+#      against a 14.3s baseline, reading as the OPPOSITE conclusion.
+#      RECORD THE BASELINE DURATION BEFORE MUTATING.
+#
+# And one that bit the orchestrator, not an agent:
+#   e) the Go module root is apps/api. `go test` from the repo root gives
+#      `[setup failed]`, which reads exactly like a real break.
+
+# ════════════════════════════════════════════════════════════════════════════
+# PROD VERIFICATION PLAN — written BEFORE the PR lands, not after
+# ════════════════════════════════════════════════════════════════════════════
+#
+# Deciding how to prove something after it merges is how a green badge gets
+# accepted as evidence. Each in-flight PR gets its check defined up front,
+# including an honest "not externally observable" where that is the truth.
+#
+# ── ROUND 1, LANDED ────────────────────────────────────────────────────────
+#
+# #2566 (#2374 #2418)  test-only. NOTHING TO VERIFY ON PROD, and it must not
+#     be reported as deployed. Evidence is CI: 316 files / 4489 tests, plus
+#     the counterfactual (bare string assertion + bug = 33 passed, 0 failed).
+#
+# #2564 (#2559)  test-only, same. Evidence is the E2E critical job executing
+#     (not skipped) and the three a11y tests passing by name.
+#
+# #2561 (#2558)  test-only. Evidence is the nine formerly-skipped tests now
+#     running, each red under a reviewer-applied mutation.
+#
+# #2568 (#2318 #1108)  PRODUCTION CODE. Live on prod as 257ad922, confirmed by
+#     asking the service its version. The behaviour itself (uuid rejection at
+#     the store, orphan predicate parity) is INTERNAL and has no public
+#     endpoint - SAY SO rather than inventing a probe. Strongest available
+#     evidence is CI's Postgres Integration job running the conformance suite
+#     against a real container, plus the reviewer breaking the POSTGRES store
+#     and watching the suite redden.
+#
+# ── ROUND 2, IN FLIGHT — checks defined now ────────────────────────────────
+#
+# PR #2570 (#2477 #2486) orphan detector runner + funnel
+#     PROD CHECK: after deploy, query Cloud Logging for the detector actually
+#     firing on a schedule. This is the one issue whose whole point is
+#     reachability, so "the code is live" is NOT the check - "it ran" is.
+#     CAUTION: nothing in infra/monitoring is APPLIED in GCP (verified
+#     2026-08-11, policies/metrics/channels all empty). A merged alert
+#     definition pages NOBODY until someone applies the file. If the PR
+#     implies otherwise, send it back.
+#
+# PR #2571 (#2401 #2413) fixture contract + missing locality codes
+#     PROD CHECK: the locality table is production code. Probe the live API
+#     with KEF, IDR and GOA and assert a NON-EMPTY origin. Run a control
+#     first with a code known to resolve - if the control fails, the probe
+#     cannot see the surface and every result is meaningless.
+#     The fixture half is test-only: nothing to verify, say so.
+#
+# PR #2574 (#2342 #2335) hotel-path guards
+#     PROD CHECK: POST /parse with a phrase the LITERAL match misses, e.g.
+#     "just book a hotel in Lisbon", and assert hotel-only scope is detected.
+#     Control: "just a hotel in Lisbon", which the old literal match catches.
+#     Both must pass after; only the control passes before. That contrast IS
+#     the proof.
+#     SECOND CHECK for #2335: confirm no stays fan-out on a request whose
+#     hotel leg never ran. Observable in the request log as absent stays
+#     calls. Worth a before/after count since it is supplier quota.
+#
+# PR #2124 chat intro/parse seam e2e
+#     test-only. NOTHING TO VERIFY ON PROD. Evidence is each spec reddening
+#     when its fix (#2514 / #2536 / #2125) is reverted.
+#
+# ── THE RULE THAT KEEPS THIS HONEST ────────────────────────────────────────
+#   Assert the SPECIFIC claim the PR made, never "the page loads".
+#   RUN THE CONTROL FIRST. On 2026-08-12 a probe of 904KB of prod bundle
+#   returned 0 for the new string AND 0 for `Confirm & Pay`, so the corpus
+#   could not see the surface and every 0 was meaningless.
+#   SAY WHAT COULD NOT BE VERIFIED. That beats a green probe implying
+#   coverage it does not have.
+
+# ════════════════════════════════════════════════════════════════════════════
+# ROUND 3 — DISPATCHED 2026-08-12 ~19:55
+# ════════════════════════════════════════════════════════════════════════════
+#
+# WAVE 1 CLOSED. 12 PRs merged, 27 issues closed, all prod-verified or
+# honestly recorded as not externally observable.
+#   #2554 #2561 #2564 #2566 #2568 #2571 #2574 #2579 #2580 #2581 #2570
+#
+# PROCESS FAILURE TO NOT REPEAT: after round 2 came back, the agent queue sat
+# EMPTY while the orchestrator did merges, receipts, prod verification and a
+# red-main diagnosis. All necessary, none of it dispatching. Arlen caught it.
+# Second time today. RULE: dispatch the next batch BEFORE landing the last one.
+#
+3 | web-frontend | #2555 (P1) "Code applied" renders for ANY non-empty string on the checkout screen. No API call, no validation, no price change. Mounted on all four checkout branches. Fabricated-data class ON THE MONEY SCREEN, in an aria-live region, immediately before pay. Recommend deleting the field; check the PRD first. | task/2555
+3 | go-backend | #2556 (P1) Hermes renders an unstated currency as EUR on the PAY-LINK AMOUNT, NaN as an amount, a duration where a departure clock time belongs, and tells a traveller who already paid that their link is still open. PR #2547 shipped this exact fix on web today; Hermes is LIVE PROD and was not in that sweep. No open issue covers any Hermes rendering surface. | task/2556
+3 | devops | #2557 (P1) The investor snapshot counts synthetic traffic as real. `synthetic` is stamped at 2 of 8 emit sites and NULL IS NOT TRUE is TRUE in BigQuery, so synthetic signups, bookings and payments land on a FUNDRAISING one-pager. Plus weekly_active_users.sql counts a user_id on ANY stdout line, including auth rejections. Regenerate and record the delta. | task/2557
+3 | go-backend | #2488 + #2462 (WAVE 2) placeTheStayAsk appends at the tail, which is index 0 on an empty slice, defeating the enquiry veto. stayIsWantedBySomethingBetter reads only the prior row, empty by construction on that surface. Expect siblings to start failing loudly - that is the goal. | task/2488
+#
+# HELD, and why
+#   #2560  the prod ticker serving invented FX. Real but not traveller-facing,
+#          and #628 is closed so nobody is waiting on it.
+#   #2572  GOA/Genoa. P1 and live, but the fix is a product question about
+#          what wins when three letters are both a code and a city name.
+#   #2573  88 values / 19 files. Two are shared fixture MODULES that mislead
+#          everywhere at once - those first.
+#   #2578  the flight half of the #2335 probe premise.

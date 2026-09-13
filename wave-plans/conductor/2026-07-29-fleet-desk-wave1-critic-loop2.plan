@@ -1,0 +1,5 @@
+# Fleet Desk Wave 1 critic loop 2 — after producer REVISE F1+F2
+# PR #46 feat/fleet-desk-data-contract
+# Prior critic: REVISE on F1 (experience-data wiped HTML) F2 (vacuous transcript test)
+# Producer claims fixed: commits 1823655 + f41484c; suite 97→97+ checks
+1 | test-engineer | CRITIC LOOP 2 / VERIFY ONLY for PR #46 feat/fleet-desk-data-contract after producer REVISE. Checkout branch. Re-verify blocking F1 and F2 are fixed with executable proof: (1) make experience then make experience-data leaves HTML index and refreshes data/index.json — do not wipe site; (2) fixture log paths + transcript marker make no-dump assertions non-vacuous; mutant that reintroduces rmtree(out_dir) or embeds log body/path must fail tests. Re-check SYNTHESIS data contract, PMI P2 gate, joins. Output handoff.md VERDICT APPROVE or REVISE (executable only). Comment on PR #46 if gh works. Do not redesign UI. Do not re-implement. Branch feat/fleet-desk-data-contract. | feat/fleet-desk-data-contract

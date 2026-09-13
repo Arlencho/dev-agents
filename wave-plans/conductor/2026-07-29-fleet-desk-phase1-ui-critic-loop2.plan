@@ -1,0 +1,5 @@
+# Fleet Desk Phase 1 UI critic loop 2 — after producer REVISE C1+C2
+# PR #49 feat/fleet-desk-phase1-ui
+# Prior critic: REVISE (C1 P3 overclaim, C2 dropped issue links) @ edffe2e
+# Producer claims: 8a22cd2 — band-aware P3 framing; union issue links; 221 tests
+1 | frontend-critic | CRITIC LOOP 2 / VERIFY ONLY for PR #49 feat/fleet-desk-phase1-ui after producer REVISE (8a22cd2). Checkout branch. Re-verify blocking C1 and C2 with executable proof: (1) sub-P3 roles with proven_loop_evidence (fixture-runner P1) must NOT claim the P3 gate is satisfied; only band P3 keeps positive proven-loop framing; (2) partial issue_links_resolved must not drop remaining raw issue_links — all cited refs render. Confirm critic loop-1 assertions are in tests and green. Re-check JSON-only renderer, experience_data.py untouched, make test green. Output handoff.md VERDICT APPROVE or REVISE (executable only). Comment on PR #49 if gh works. Do not redesign. Do not re-implement. Branch feat/fleet-desk-phase1-ui. | feat/fleet-desk-phase1-ui

@@ -1,0 +1,142 @@
+# Calliope honesty slice — 2026-08-13
+#
+# GOAL, this slice only: a traveller who already said enough is not re-asked,
+# not sent to the wrong city, not silently locked to an airline, and not told
+# we are searching a leg we are not searching.
+#
+# NOT "finish Calliope" and NOT "close #2168". Do not close #2168.
+#
+# G2 < 5s and G3 > 80% are OUT of pass/fail. C5 reports each of G1-G4 as
+# met / missed / n too small. A metric that cannot yet be measured is not a
+# gate, and saying so is the point of the slice.
+#
+# IN:  #2257 #2173 #2274 #2230 #2216 #2254
+# OUT: #2174 #2176 #2175 #2217 #2220 #2235 #2242 #2243
+#
+# ────────────────────────────────────────────────────────────────────────────
+# THREE AMENDMENTS to the plan as written. Reasons, not preferences.
+# ────────────────────────────────────────────────────────────────────────────
+#
+# A1. #2173 MOVES OUT OF WAVE 1. The plan contradicted itself.
+#     It says "#2257 first so later replay numbers mean something" and then
+#     schedules #2173 in wave 1, parallel with #2257 - which does not merge
+#     until after its wave-2 critic. So the C5 baseline would be measured
+#     with the instrument #2257 is fixing, and the 08-14 re-run would
+#     disagree with it for reasons unrelated to the Conductor.
+#     -> #2173 runs AFTER #2257 lands. If that is unacceptable for timing,
+#        the report MUST state which numbers were taken pre-fix. It may not
+#        silently mix them.
+#
+# A2. EVERY PROD PROBE GETS A CONTROL, not just Malmo.
+#     The plan gets the diacritics probe right (unaccented first, then
+#     accented) and then asks for "fly Malta in June (no carrier lock)" with
+#     no control. A probe that finds no lock is INDISTINGUISHABLE from a probe
+#     that cannot see locks. Same for the hotels-only prose check.
+#     -> Controls are mandatory. See PROD PROBES below.
+#     This is the exact defect the slice exists to fix, applied to its own
+#     verification. On 2026-08-12 a 904KB prod-bundle probe returned 0 for the
+#     target AND 0 for the control, and every 0 was meaningless.
+#
+# A3. BUDGET THE CORRECTION ROUNDS. The plan has verdicts and no loop-back.
+#     Every PR on 08-12 and 08-13 took one or two rounds after its critic, and
+#     those rounds were where the value was. Six waves with no allowance will
+#     slip on the first SHIP IT WITH X, and the temptation is to wave it
+#     through. Assume ONE correction round per code branch. Four code branches
+#     -> four rounds. If a branch needs a third, that is a signal about the
+#     branch, not about the schedule.
+#
+# DROPPED from the plan: "if dispatch is unproven since 07-30, one throwaway
+# seat first". Dispatch is proven - 15+ producer and critic seats ran on
+# 08-12/13 with no dispatch failures. Skip the throwaway.
+#
+# KEPT, and worth naming because it is better than what ran on 08-12:
+#   FAIL-FIRST TESTS ARE THEIR OWN WAVE, BEFORE IMPLEMENTATION.
+#   Waves 1 and 4 write tests; waves 2 and 5 write code. A test written by
+#   someone who already knows the implementation tends to test the
+#   implementation. Separating the seats is the stronger discipline. Adopt
+#   this generally, not just here.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# ORDER
+# ────────────────────────────────────────────────────────────────────────────
+#
+1 | test-engineer | #2257 fix the replay sink so grant_route survives. Everything measured later depends on this being right first. | task/2257-replay-grant-route
+1 | test-engineer | #2274 FAIL-FIRST TESTS ONLY. Accented city names normalise to empty because ResolveIATA does an exact uppercase lookup against unaccented keys. Do not implement. | task/2274-iata-fold
+1 | test-engineer | #2230 FAIL-FIRST TESTS ONLY. A fuzzy carrier match in "fly-X" frames mints a hard carrier lock from ordinary words. Keep "fly luftansa" working. Do not implement. | task/2230-carrier-frames
+#
+2 | backend-critic | Review #2257. | task/2257-replay-grant-route
+2 | go-backend | Implement #2274. Unicode fold; no accented keys in the table. | task/2274-iata-fold
+2 | go-backend | Implement #2230. Kill the false locks, keep the real one. | task/2230-carrier-frames
+#
+3 | backend-critic | Review #2274. | task/2274-iata-fold
+3 | backend-critic | Review #2230. | task/2230-carrier-frames
+3 | test-engineer | #2216 + #2254 FAIL-FIRST TESTS ONLY, one branch. Moved up from wave 4 so wave 3 is not critics-only. | task/2216-2254-ready-prose
+#
+4 | go-backend | Implement #2216 + #2254 on that tree. | task/2216-2254-ready-prose
+4 | devops | #2173 C5 baseline report + re-runnable query. AFTER #2257 lands (A1). State G1-G4 as met/missed/n-too-small. | task/2173-c5-baseline
+#
+5 | backend-critic | Review the combined #2216 + #2254 tree. | task/2216-2254-ready-prose
+#
+# ────────────────────────────────────────────────────────────────────────────
+# LANDING — mine, not a seat
+# ────────────────────────────────────────────────────────────────────────────
+#   #2257, #2274, #2230 land separately. Disjoint files.
+#   #2216 + #2254 land as ONE PR. Same Conductor/recap package: two CLEAN PRs
+#   can still redden main.
+#   HARD GATE: before landing any two that can couple, merge them LOCALLY and
+#   run the suite. CLEAN is not safety. Proven twice now - #2568/#2561 shared
+#   no file and would have reddened main; #2594/#2596 shared two and did
+#   conflict while both reported clean.
+#   #2173 is a report. I read it. No code critic.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# PROD PROBES — control FIRST, every time (A2)
+# ────────────────────────────────────────────────────────────────────────────
+#   diacritics   control: "Malmo"  -> expect a resolved city
+#                target:  "Malmö"  -> expect the SAME resolution
+#
+#   carrier      control: "fly Lufthansa to Malta in June"
+#                         -> expect a carrier lock, PROVING locks are visible
+#                target:  "fly to Malta in June"
+#                         -> expect NO lock
+#                Without the control, "no lock" and "cannot see locks" are the
+#                same observation.
+#
+#   prose        control: a trip request -> expect "flights" in the narration
+#                target:  "just a hotel in Lisbon" -> expect NO "flights"
+#
+#   Say what could NOT be verified. That beats a green probe implying coverage
+#   it does not have.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# DONE WHEN
+# ────────────────────────────────────────────────────────────────────────────
+#   1. A critic verdict on every code branch.
+#   2. Four fail-firsts watched RED then GREEN. Watched, not asserted.
+#   3. Combined #2216 + #2254 suite green, run from apps/api.
+#   4. Replay: hotel-only confirmation case clean, grant_route countable.
+#   5. C5 file exists under docs/qa/, dated, G1-G4 stated honestly.
+#   6. All six prod probes run, each with its control first.
+#   7. What could not be verified is written down.
+#   8. #2168 STAYS OPEN.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# CARRIED FORWARD — in every brief until they live in a skill file
+# ────────────────────────────────────────────────────────────────────────────
+#   Module root is apps/api. `go test` from the repo root gives
+#   [setup failed], which reads exactly like a real break.
+#
+#   FIVE ways a proof has lied on this repo in the last week:
+#   a) a perl -0pi syntax error left the source pristine and the suite passed
+#   b) a mutation landed in the error branch and failed to COMPILE; a naive
+#      runner reports that as RED
+#   c) git clean -fd deleted worktree node_modules symlinks, so six "reds"
+#      were module-resolution errors
+#   d) a nil-deref panic killed the test binary early: two failures at 2.7s
+#      against a 14.3s baseline, reading as the OPPOSITE conclusion.
+#      RECORD THE BASELINE DURATION. Better, compare COLLECTED TEST COUNTS.
+#   e) NEW, 2026-08-13: a DIRTY PR gets no merge ref, so GitHub runs NOTHING,
+#      and `check-runs` returns an EMPTY array. Zero pending, zero failing,
+#      reads as green. `gh pr checks` shows the STALE run from the previous
+#      head and also looks green. land.sh now requires a non-zero run count
+#      and refuses on DIRTY. Count the checks; absence is not success.

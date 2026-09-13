@@ -1,0 +1,5 @@
+# Fleet Desk Wave 1 critic — verify data contract delivery before merge
+# PR: https://github.com/Arlencho/dev-agents/pull/46
+# Law: docs/proposals/experience-console-SYNTHESIS.md §3, §5, §7
+# Producer already shipped on feat/fleet-desk-data-contract — DO NOT re-implement UI.
+1 | test-engineer | CRITIC / VERIFY ONLY for PR #46 feat/fleet-desk-data-contract (Fleet Desk Wave 1 data contract). Checkout the PR branch. Adversarial verification against SYNTHESIS: (1) site/experience/data/index.json schema + docs/experience-data.md match; (2) make experience builds JSON then HTML; (3) tests/run-experience-tests.sh + fixtures cover joins, wave field, PMI P2 outcome gate (n_done>=5 AND success>=70%), Phase 0 no P3, redaction of secret-like tokens, no agent transcript dumps; (4) join rules never invent companies. Output: handoff.md with VERDICT APPROVE or REVISE, executable failures only (failing test diffs or file:line contract violations). If gh works, comment on PR #46. Do not redesign UI (Wave 2). Branch feat/fleet-desk-data-contract. | feat/fleet-desk-data-contract

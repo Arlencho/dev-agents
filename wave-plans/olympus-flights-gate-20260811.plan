@@ -1,0 +1,139 @@
+# Olympus — Flights go-live gate — 2026-08-11
+#
+# GOAL: a clean QA report from Johan on issue #2180, so flights can be tested
+# live in production.
+#
+# THE GATE is Johan's 9 flow criteria, not the backlog. As of his run-2 re-test
+# (2026-08-11, booking AT-21496 / PNR MPTHSQ): 2 pass, 7 fail.
+# 104 issues were opened on 2026-08-11. Eleven of them block a criterion.
+# The other 93 are post-launch and are deliberately absent from this plan.
+#
+# CRITERION -> BLOCKER MAP    [UPDATED 2026-08-12 after execution]
+#   1  Parse, one-way and return .......... #2514 MERGED (2f0fed89)
+#                                           one-way itself: Johan must test it
+#   2  Results render correctly ........... #2515 MERGED, #2513 MERGED
+#   3  Price consistency .................. #2515 MERGED (EUR 922 vs 921.54)
+#   4  Selection carries right flight ..... PASSES
+#   5  Passenger details .................. #2444 MERGED, but see CORRECTION 1
+#   6  Checkout discloses everything ...... PASSES
+#   7  Card payment completes ............. #2302 + #2296 -> Ludvig. Prod runs
+#                                           Stripe TEST keys (pk_test_), so the
+#                                           card path cannot take real money and
+#                                           should be exercised now.
+#   8  Confirmation correct ............... #2511 MERGED, #2512 MERGED,
+#                                           #2513 MERGED
+#   9  Bookings list survives refresh ..... #2511 MERGED (same durable class)
+#
+# MONEY SAFETY — not in Johan's list, blocks live money regardless
+#   #2504  MERGED (bfc73d25). NOTE: nothing in infra/monitoring is APPLIED in
+#          GCP - verified absent, not merely unverified. The policy exists and
+#          pages nobody until someone applies the file. See #2477.
+#   #2491  in review as PR #2530
+#
+# ADDED AFTER THE PLAN WAS WRITTEN
+#   #2387  state the arrival and return airports before purchase. PR #2531.
+#          This SHOULD have been in the gate from the start and was not -
+#          Arlen caught the omission. § 24.4 (sell whatever the supplier
+#          offers, do not filter) is defensible ONLY if the traveller is told
+#          which airport they arrive at before paying. See CORRECTION 2.
+#
+# ────────────────────────────────────────────────────────────────────────────
+# CORRECTION 1 — criterion 5 was never BROKEN, it was NOT EXERCISED
+#
+# The traveller form has validated all five fields since 714073d2, merged
+# 2026-08-11 05:54 - thirteen and a half hours BEFORE QA's 19:24 capture.
+# Both his runs were happy-path only, so he never took an invalid path.
+#
+# #2444 was real and worth merging: it closed the same hole on the second
+# form, the one a future routing change silently reopens. But merging it
+# changed NOTHING about what QA will observe.
+#
+# Criterion 5 closes when QA re-runs and captures a rejection. Not on a merge.
+# The original plan recorded it as blocked by code. That was wrong.
+#
+# CORRECTION 2 — #2513 removed the tripwire that found the bug
+#
+# QA caught the military-airfield ticket because "Fussa" looked wrong on the
+# page. #2513 correctly renames it to "Tokyo (OKO)" per § 24.1 - and that was
+# the only signal a human could spot. The review said so plainly.
+#
+# So for the window between #2513 merging and #2387 shipping, a mis-sold
+# ticket was HARDER to spot than before either landed. Sequencing the
+# rename ahead of the disclosure was an ordering error.
+#
+# Rule for next time: when a fix removes a symptom, ship the replacement
+# signal first or in the same wave. A symptom is an instrument until
+# something better exists.
+# ────────────────────────────────────────────────────────────────────────────
+#
+# EXECUTION MODEL — read this before dispatching
+# This plan is the DURABLE RECORD and the wave ordering. Execution is run
+# in-session by the orchestrator, not fire-and-collect, because the
+# producer-critic loop needs someone reading each finding and re-briefing.
+# On 2026-08-11 three separate fixes shipped containing the same class of
+# defect they were written to remove; a critic caught each one and the
+# producer was re-briefed within minutes. That is the value being preserved.
+#
+# Do NOT run `dispatch.sh` against this file without validating dispatch on a
+# throwaway issue first. It was last exercised 2026-07-30 and has not been
+# confirmed to reach olympus-platform and produce a PR.
+#
+# THE RULE THAT DOES NOT BEND
+# No fix merges without something adversarial having tried to break it, and
+# without a fail-first proof: revert the fix, watch the test go red, paste it.
+# A test that cannot observe the bug it was written for is the signature
+# defect of this whole cohort. It appeared ~21 times on 2026-08-11.
+#
+# Full issue text carries the file:line, the reproduction and the acceptance
+# criterion. Agents read the issue; this file does not restate it.
+
+# ── WAVE 1 — producers: confirmation + results (criteria 2, 3, 8, 9) ────────
+1 | web-frontend | Fix #2511 (P0). The booking confirmation renders rich from a post-checkout stash and thin from the durable row, so a revisit shows only the total. Read the issue. Diagnose FIRST whether the row lacks the data or the reader fails to read it - those have different fixes, and if it was never persisted that is a server gap: stop and report rather than faking it client-side. Acceptance is EQUALITY between the two sources for one booking, not presence of a total. Do not fabricate values to fill slots; render nothing over a placeholder. Fail-first proof required. | fix/2511-confirmation-durable-render
+1 | web-frontend | Fix #2512 (P1). The flight confirmation never states the travel dates, and segments crossing midnight carry no +1 marker. Read the issue. Drive the test from a fixture whose travel dates differ from the booking date, so a wrong field cannot pass. Fail-first proof required. | fix/2512-confirmation-travel-dates
+1 | web-frontend | Fix #2515 (P1). Four defects where the results surface states something untrue about what it is showing: Economy tab renders Premium-economy cards; a 34h itinerary with a 20h layover is the unflagged ATLAS PICK; the stated count disagrees with the cards; and EUR 922 on the card versus EUR 921.54 at checkout. For the ATLAS PICK, establish FIRST whether ranking genuinely prefers it - if so the ranking is wrong and copy will not fix it. For the price, check which value is correct against the provider rather than making both agree on the wrong one. Assert AGREEMENT between the two things that claim to describe the same fact, never presence. Do not mint copy for the layover flag; check the PRD or report the gap. Fail-first proof required. | fix/2515-results-consistency
+1 | web-frontend | Fix #2514 (P1). The traveller's answer to "who's coming" is concatenated into the origin field, and the question is then re-asked. Read the issue. The display is the symptom: establish whether the value reached search_input on the wire, because if it did, the search ran on it and rendering it correctly is not the fix. Same class as #2102. Assert the wire payload. Fail-first proof required. | fix/2514-origin-field-pollution
+
+# ── WAVE 2 — critics on wave 1, same branches ───────────────────────────────
+2 | frontend-critic | Adversarially review branch fix/2511-confirmation-durable-render. Verdict FIRST: is this better than main, or does it make something worse? Only "makes something worse" blocks. Attack the equality claim: find a booking shape where the two render paths still diverge, and check that an honestly-absent field renders empty rather than fabricated. Confirm the fail-first proof reproduces. Findings with file:line and reproduction. | fix/2511-confirmation-durable-render
+2 | frontend-critic | Adversarially review branch fix/2512-confirmation-travel-dates. Verdict FIRST: better than main, or worse? Check the date is the travel date and not the booking date, that a midnight-crossing leg is marked, and that the test would fail if the wrong field were rendered. Confirm the fail-first proof. | fix/2512-confirmation-travel-dates
+2 | frontend-critic | Adversarially review branch fix/2515-results-consistency. Verdict FIRST: better than main, or worse? The highest-value attack is the price: confirm one formatter drives every surface and that the value chosen matches the provider. Then find a filter/set pair that still disagrees. Check the ATLAS PICK conclusion is evidenced, not asserted. Confirm the fail-first proof. | fix/2515-results-consistency
+2 | frontend-critic | Adversarially review branch fix/2514-origin-field-pollution. Verdict FIRST: better than main, or worse? Establish independently whether the polluted value ever reached the wire. Find another utterance shape that still lands in a structured field. Confirm the fail-first proof. | fix/2514-origin-field-pollution
+
+# ── WAVE 3 — producer: the airport rule (criteria 2 and 8) ──────────────────
+# Deliberately after wave 1: #2513 needs a decision informed by the #2385
+# harness, which found OKO in 4 of 12 sandbox windows alongside NYS and BQH.
+# Two consecutive QA bookings ticketed through Yokota Air Base, rendered to
+# the traveller as "Fussa". Do NOT filter blind: the harness exists precisely
+# because a filter written from a guess hides inventory we want.
+3 | go-backend | Fix #2513 (P1). Read the issue and the #2385 harness. Establish the rule for non-scheduled-civil fields FROM the harness classification, then apply it. Separately and independently: a place must never render as "Fussa" to a traveller who asked for Tokyo, and an outbound/return airport asymmetry must be explained on the page or not happen. If you conclude the rule needs a co-founder decision, say so and stop rather than choosing one. Fail-first proof required. | fix/2513-non-civil-airports
+
+# ── WAVE 4 — critic on wave 3 ──────────────────────────────────────────────
+4 | backend-critic | Adversarially review branch fix/2513-non-civil-airports. Verdict FIRST: better than main, or worse? The blocking risk is over-filtering: find legitimate inventory the rule removes. Then find a non-civil field it still admits. Check the rule was derived from the harness rather than hand-written. Confirm the fail-first proof. | fix/2513-non-civil-airports
+
+# ── WAVE 5 — producers: form validation (criterion 5) + money safety ────────
+5 | web-frontend | Fix #2444 (P3 by label, GATE by effect). Five traveller fields have no client-side validation. Johan has graded criterion 5 FAIL twice for "no invalid-input rejection appears in any of the 126 frames" - his test cannot mean anything until there is a rejection to observe. Read the issue. Use the validation catalogue in docs/prd/01-conventions.md section 3.3, and note #2507: two of its strings trip the voice lint, so use the substitutions already shipped in app/auth/page.tsx. Also fix the DOB picker opening at August 2026 and the +44 phone placeholder for a Swedish traveller, both from #2516. Fail-first proof required. | fix/2444-traveller-validation
+5 | web-frontend | Fix #2491 (P1). The booking payload is re-projected on every press from defaults that arrive over the network, so currency is "" before the profile lands and "EUR" after: same cart, two idempotency keys, two bookings. #2487 shipped the key; this is the unstable input underneath it. Read the issue. Freezing the projection at selection time covers every affected field at once; field-by-field patching does not. Note this changes what is persisted as search_input, which the server reads functionally - that deserves a PRD clause. Unskip lazy-defaults-payload-drift.test.ts as the acceptance criterion. | fix/2491-freeze-booking-payload
+5 | devops | Fix #2504 (P1). The two orphaned-order alert keys have no Cloud Monitoring policy, so a leaked live airline ticket pages nobody. Read the issue. Note verified on 2026-08-11: NOTHING in infra/monitoring is applied in GCP - policies, log metrics and channels all return empty - so adding a fifth definition changes nothing operationally until someone applies the file. Say so in the PR rather than implying coverage. | ops/2504-orphan-alert-policies
+
+# ── WAVE 6 — critics on wave 5 ─────────────────────────────────────────────
+6 | frontend-critic | Adversarially review branch fix/2444-traveller-validation. Verdict FIRST: better than main, or worse? Find an invalid input that still passes, and a valid input the rules now reject - a false rejection blocks a real traveller and is the worse direction. Confirm the copy came from the catalogue and passes the voice lint. Confirm the fail-first proof. | fix/2444-traveller-validation
+6 | frontend-critic | Adversarially review branch fix/2491-freeze-booking-payload. Verdict FIRST: better than main, or worse? Attack the freeze in both directions: a field that still drifts after it, and a genuinely new cart that now collides with an old one. The second is worse - it hands a traveller someone else's booking. Confirm the unskipped test genuinely reddens on the old behaviour. | fix/2491-freeze-booking-payload
+6 | devops | Adversarially review branch ops/2504-orphan-alert-policies. Verdict FIRST: better than main, or worse? Check the metric filter against the LINE THE CODE EMITS, not against the PR description. Confirm the threshold fires when it should and stays quiet when it should. Confirm the NOT APPLIED status is stated rather than implied. | ops/2504-orphan-alert-policies
+
+# ── NOT IN THIS PLAN, tracked elsewhere ────────────────────────────────────
+# #2302 + #2296  card payment surface and the 3DS dead-end -> Ludvig.
+#                Criterion 7. Prod runs Stripe TEST keys (pk_test_), so the
+#                card path cannot take real money today - which is exactly
+#                why it should be built and exercised now rather than having
+#                its first production run be a friend's real card.
+# #2182          price alerts -> Ludvig. Not gate-critical: worker stopped
+#                since 2026-07-18, so no alert fires either way.
+#
+# ── AFTER WAVE 6 ───────────────────────────────────────────────────────────
+# Deploy, verify on prod against the newest apps/api commit, then ask Johan
+# for one full pass. Triage what he finds against the criterion map above.
+# Expect one or two loops, not ten.
+#
+# Three things Johan can test RIGHT NOW that depend on nothing here:
+#   a one-way request in chat; the bookings LIST plus a refresh; and
+#   deliberately bad input in the traveller form once wave 5 lands.

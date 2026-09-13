@@ -1,0 +1,6 @@
+# Floor v3-B critic round 3: the critic seat died on the spend limit at 17:37; the round 3 fix is on the branch at ae35e8f. PR 80. 2026-09-13
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-13-floor-v3b-critic3.plan --detach --retries 1
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | frontend-critic | READ-ONLY REVIEW ROUND 3 of PR 80 on branch feat/floor-v3b. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. The round 2 comment lives on the closed PR 78 (same branch) with first line CRITIC FLOOR V3B ROUND 2 BLOCK-FIX; re-run its repros for R2-1 (replay receipt on a static desk) and R2-2 (anchor offset under the sticky header) at 400, 768 and 1280; re-run the five questions on the live fixture; confirm the branch is rebased on main and builds. Post ONE comment on PR 80 whose first line reads CRITIC FLOOR V3B ROUND 3 with SAFE-TO-MERGE, BLOCK-FIX or BLOCK-ESCALATE and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/floor-v3b

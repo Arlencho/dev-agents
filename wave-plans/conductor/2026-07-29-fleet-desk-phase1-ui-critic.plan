@@ -1,0 +1,5 @@
+# Fleet Desk Phase 1 UI bind critic — verify thin bind before merge
+# PR: https://github.com/Arlencho/dev-agents/pull/49
+# Law: schema v2 from #48; thin bind only — no restyle required
+# Producer: web-frontend Kimi on feat/fleet-desk-phase1-ui
+1 | frontend-critic | CRITIC / VERIFY ONLY for PR #49 feat/fleet-desk-phase1-ui (Fleet Desk Phase 1 thin UI bind). Checkout branch. Adversarial verification against schema v2 and producer handoff: (1) Trail shows pr_url/pr_state when present, issue_links_resolved, reviewed_by/reviews pairing links; (2) Roles show P3 + proven_loop_evidence; no false "capped at P2" when display_cap is P3; (3) Skills show git history / revisions with honest unavailable vs empty; (4) Home/About show critic_pairs and gh_enrichment status when data present; (5) experience_data.py join/PMI gates untouched; renderer still JSON-only; (6) make test green; HTML smokes non-vacuous for new fields. Output handoff.md VERDICT APPROVE or REVISE (executable failures only). Comment on PR #49 if gh works. Do not redesign. Do not re-implement. Branch feat/fleet-desk-phase1-ui. | feat/fleet-desk-phase1-ui

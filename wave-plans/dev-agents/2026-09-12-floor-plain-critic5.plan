@@ -1,0 +1,9 @@
+# Round four for feat/floor-plain (PR 70): critic only. 2026-09-12
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-12-floor-plain-critic4.plan --auto --retries 1
+# Round four: the round-three item CLOSED, one new block: the narrowed timer track crossed the outcome badge.
+# The orchestrator let the timer wrap inside its track below 600px in e5f104a.
+
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | frontend-critic | READ-ONLY RE-REVIEW of the Floor page on branch feat/floor-plain (PR 70) at head e5f104a or later. No commits, no push, no edits; tmp writes and the gitignored site build only. Record head SHA at start and at report. Re-run your round-three red4.mjs exactly on the timer fixture: at 390 and 400 the timer text, including under a minute, must stay inside its own track (wrapping is allowed) and never cross the outcome badge, the outcome right edge must stay straight across rows, and the purpose column must keep at least 120 px and at most 4 lines; at 1280 nothing changes. Paste the measured timer box, outcome edge and purpose column at all three widths, and the row height of the wrapped timer row. Re-run everything that passed in round three. Post ONE comment on the PR whose first line reads FRONTEND CRITIC FLOOR PLAIN ROUND 5 with SAFE-TO-MERGE or BLOCK-FIX. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/floor-plain
