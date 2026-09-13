@@ -1711,7 +1711,9 @@ STEM_MAX = 80
 
 # The critic first-line convention: the first line of the comment carries the
 # word CRITIC, the verdict opens the text after a colon on that line or closes
-# it (else it opens a later line of its own), and a re-review says ROUND n.
+# it, and a re-review says ROUND n. A body line counts only when it opens with
+# the explicit Verdict: label; a bare verdict word on a body line is not one
+# (the landing rule reads first lines only).
 # "CRITIC TILE CONNECT GUIDE ROUND 2: SAFE-TO-MERGE". See first_line_verdict.
 CRITIC_LINE_RE = re.compile(r"\bCRITIC\b")
 VERDICT_WORDS = "BLOCK-ESCALATE|BLOCK-FIX|BLOCK-CLOSE|SAFE-TO-MERGE|APPROVE-MERGE|BLOCK|SAFE"
@@ -1800,7 +1802,7 @@ def track_name(purpose):
 def first_line_verdict(first_line):
     """The verdict the first line of a critic comment carries, else None.
 
-    Same start-of-token rule as a body line: the verdict opens the text after
+    Start-of-token rule: the verdict opens the text after
     a colon ("CRITIC K ROUND 2: BLOCK-FIX on two items") or closes the line
     ("CRITIC FLOOR V3A BLOCK-FIX"). A verdict quoted mid-sentence ("the last
     review said BLOCK-FIX but this is not a verdict") never counts, and a
@@ -1831,18 +1833,21 @@ def first_line_verdict(first_line):
 
 
 def critic_verdict(first_line, body):
-    """The verdict a critic comment carries, from its first line else a line
-    of its own in the body ("BLOCK-FIX on two items", "Verdict: SAFE-TO-MERGE").
-    A verdict quoted mid-sentence ("SAFE-TO-MERGE or BLOCK-FIX") never counts."""
+    """The verdict a critic comment carries: its first line, else a body line
+    that opens with the explicit Verdict: label ("Verdict: SAFE-TO-MERGE").
+    A bare verdict word on a body line ("SAFE-TO-MERGE" on a line of its own)
+    counts for nothing, and a verdict quoted mid-sentence ("SAFE-TO-MERGE or
+    BLOCK-FIX") never counts."""
     verdict = first_line_verdict(first_line)
     if verdict:
         return verdict
     for line in str(body or "").splitlines()[1:]:
         clean = re.sub(r"^[\s*#>_`-]+", "", line).strip()
-        clean = re.sub(r"^verdict\s*[:.]\s*", "", clean, flags=re.IGNORECASE)
-        match = VERDICT_RE.match(clean)
-        if match:
-            return match.group(1)
+        label = re.match(r"^verdict\s*[:.]\s*", clean, flags=re.IGNORECASE)
+        if label:
+            match = VERDICT_RE.match(clean[label.end():])
+            if match:
+                return match.group(1)
     return None
 
 
@@ -1865,16 +1870,6 @@ def critic_record(comment_id, url, created_at, body, kind="comment"):
     if verdict is None:
         return None
     round_match = ROUND_RE.search(first)
-    stem = ROUND_RE.sub(" ", VERDICT_RE.sub(" ", first))
-    stem = re.sub(r"[^A-Za-z0-9 ]+", " ", stem)
-    # The heading is the leading run of upper-case words: a critic who wrote a
-    # sentence on the first line still keys one thread, not one per round.
-    words = []
-    for token in stem.split():
-        if token.upper() != token:
-            break
-        words.append(token)
-    stem = " ".join(words) or stem
     return {
         "id": comment_id,
         "url": scrub_text(url, 200) or None,
@@ -1882,23 +1877,45 @@ def critic_record(comment_id, url, created_at, body, kind="comment"):
         "kind": kind,
         "verdict": verdict,
         "round": int(round_match.group(1)) if round_match else 1,
-        "stem": scrub_text(stem, STEM_MAX) or "CRITIC",
+        "stem": critic_stem(first),
         "_prs": {int(n) for n in PR_REF_RE.findall(text)},
         "_slugs": {tok.strip(".,;:()'\"`") for tok in text.split() if "/" in tok},
     }
 
 
+def critic_stem(first_line):
+    """The heading of a critic first line: the thread key, the words the Floor
+    and the runner may print. Verdict words and the ROUND token are removed,
+    punctuation becomes space, and the heading is the leading run of upper-case
+    words: a critic who wrote a sentence on the first line still keys one
+    thread, not one per round, and nothing after the heading (a path, a prompt,
+    a token) survives. Never empty: "CRITIC" when nothing else is left.
+    """
+    stem = ROUND_RE.sub(" ", VERDICT_RE.sub(" ", str(first_line or "")))
+    stem = re.sub(r"[^A-Za-z0-9 ]+", " ", stem)
+    words = []
+    for token in stem.split():
+        if token.upper() != token:
+            break
+        words.append(token)
+    return scrub_text(" ".join(words), STEM_MAX) or "CRITIC"
+
+
 def latest_round(records):
     """The newest comment of every critic thread (thread = first-line heading).
 
-    A re-review replaces its own earlier round, never another critic's, so a
-    PR is only clean when every thread's newest verdict is safe.
+    Newest by time of posting: a critic who takes a SAFE back with a later
+    BLOCK is heard, whatever ROUND token either line carries (a ROUND 2 SAFE
+    followed by a plain BLOCK-FIX reads BLOCK-FIX). The round only breaks a
+    tie between comments with the same timestamp or none. A re-review
+    replaces its own earlier verdict, never another critic's, so a PR is only
+    clean when every thread's newest verdict is safe.
     """
     threads = {}
     for rec in records:
         key = rec["stem"].upper()
         current = threads.get(key)
-        if current is None or (rec["round"], rec["at"] or "") > (current["round"], current["at"] or ""):
+        if current is None or (rec["at"] or "", rec["round"]) > (current["at"] or "", current["round"]):
             threads[key] = rec
     return sorted(threads.values(), key=lambda r: r["at"] or "", reverse=True)
 
@@ -2868,153 +2885,6 @@ def project(events, now=None, source=None, malformed=0, replay=False):
     out["events_seen"] = len(events)
     out["recent_events"] = events[-RECENT_EVENTS:]
     return out
-
-
-
-# ── critic verdicts ──────────────────────────────────────────────────────────
-#
-# The critic first-line convention, read by the Floor (NEEDS YOU) and by the
-# queue runner (scripts/queue-runner.sh, one fix round and landing). One parser
-# for both: the runner imports these functions, it never re-implements them.
-# This block is the same text as on the floor-v3a branch of this file; when
-# both land, keep one copy.
-
-STEM_MAX = 80
-
-# The critic first-line convention: the first line of the comment carries the
-# word CRITIC, the verdict opens the text after a colon on that line or closes
-# it, and a re-review says ROUND n. A verdict word on a later body line is not
-# a verdict; the landing rule reads first lines only.
-# "CRITIC TILE CONNECT GUIDE ROUND 2: SAFE-TO-MERGE". See first_line_verdict.
-CRITIC_LINE_RE = re.compile(r"\bCRITIC\b")
-VERDICT_WORDS = "BLOCK-ESCALATE|BLOCK-FIX|BLOCK-CLOSE|SAFE-TO-MERGE|APPROVE-MERGE|BLOCK|SAFE"
-VERDICT_RE = re.compile(r"\b(%s)\b" % VERDICT_WORDS)
-# A verdict that closes the first line ("CRITIC FLOOR V3A BLOCK-FIX").
-VERDICT_TAIL_RE = re.compile(r"(?:^|\s)(%s)$" % VERDICT_WORDS)
-# A verdict standing as a token of its own, markdown and closing punctuation
-# allowed around it ("**BLOCK-FIX**", "(BLOCK-FIX)"). A heading word followed
-# by a colon ("BLOCK:") is not one. See first_line_verdict.
-VERDICT_TOKEN_RE = re.compile(r"(?<!\S)[*_`(]*(%s)[*_`).!,]*(?!\S)" % VERDICT_WORDS)
-ROUND_RE = re.compile(r"\bROUND\s+(\d{1,3})\b", re.IGNORECASE)
-BLOCK_VERDICTS = frozenset(("BLOCK-ESCALATE", "BLOCK-FIX", "BLOCK-CLOSE", "BLOCK"))
-SAFE_VERDICTS = frozenset(("SAFE-TO-MERGE", "APPROVE-MERGE", "SAFE"))
-PR_REF_RE = re.compile(r"\bPR #?(\d{1,7})\b", re.IGNORECASE)
-
-
-def first_line_verdict(first_line):
-    """The verdict the first line of a critic comment carries, else None.
-
-    Start-of-token rule: the verdict opens the text after
-    a colon ("CRITIC K ROUND 2: BLOCK-FIX on two items") or closes the line
-    ("CRITIC FLOOR V3A BLOCK-FIX"). A verdict quoted mid-sentence ("the last
-    review said BLOCK-FIX but this is not a verdict") never counts, and a
-    heading word BLOCK or SAFE before the colon never steals BLOCK-FIX or
-    SAFE-TO-MERGE after it ("CRITIC V3A BLOCK: BLOCK-FIX" reads BLOCK-FIX).
-
-    Two different verdict words standing as tokens of their own where the
-    verdict is read (after the first colon, else anywhere on a line with no
-    colon) make the line ambiguous, and it carries no verdict: "CRITIC FLOOR
-    V3A BLOCK-FIX SAFE-TO-MERGE", with or without a colon, in either order,
-    invents neither a block nor a ready item. The same word twice ("BLOCK-FIX
-    (round 1 BLOCK-FIX stands)") is one verdict. A heading that itself holds
-    a verdict word wants the colon form: only what follows the colon is read.
-    """
-    text = str(first_line or "")
-    scope = text.split(":", 1)[1] if ":" in text else text
-    if len(set(VERDICT_TOKEN_RE.findall(scope))) > 1:
-        return None
-    for segment in text.split(":")[1:]:
-        match = VERDICT_RE.match(segment.strip(" \t*_`"))
-        if match:
-            return match.group(1)
-    tail = text.rstrip(" \t.!*_`)")
-    match = VERDICT_TAIL_RE.search(tail)
-    if match:
-        return match.group(1)
-    return None
-
-
-def critic_verdict(first_line, body):
-    """The verdict a critic comment carries. First lines only: a comment whose
-    first line carries no single verdict word has no verdict, whatever a later
-    body line says ("BLOCK-FIX on two items" or "Verdict: SAFE-TO-MERGE" on a
-    line of its own in the body count for nothing). The body argument stays in
-    the signature for the callers that already hold the comment."""
-    return first_line_verdict(first_line)
-
-
-def critic_record(comment_id, url, created_at, body, kind="comment"):
-    """A critic comment reduced to what the Floor may know, else None.
-
-    Kept: id, url, time, verdict, round, the heading of the first line (its
-    verdict and round token removed, capped). Dropped: the body. The PR
-    numbers ("PR 2829") and slash tokens (branch names) the body mentions are
-    kept as numbers and slugs only, in-process, so a findings-issue comment
-    can be attributed to the PR it grades. A bare "#N" is an issue reference
-    by convention and is not used for attribution.
-    """
-    text = str(body or "")
-    lines = text.strip().splitlines()
-    first = lines[0].strip() if lines else ""
-    if not CRITIC_LINE_RE.search(first):
-        return None
-    verdict = critic_verdict(first, text)
-    if verdict is None:
-        return None
-    round_match = ROUND_RE.search(first)
-    return {
-        "id": comment_id,
-        "url": scrub_text(url, 200) or None,
-        "at": created_at if isinstance(created_at, str) else None,
-        "kind": kind,
-        "verdict": verdict,
-        "round": int(round_match.group(1)) if round_match else 1,
-        "stem": critic_stem(first),
-        "_prs": {int(n) for n in PR_REF_RE.findall(text)},
-        "_slugs": {tok.strip(".,;:()'\"`") for tok in text.split() if "/" in tok},
-    }
-
-
-def critic_stem(first_line):
-    """The heading of a critic first line: the thread key, the words the Floor
-    and the runner may print. Verdict words and the ROUND token are removed,
-    punctuation becomes space, and the heading is the leading run of upper-case
-    words: a critic who wrote a sentence on the first line still keys one
-    thread, not one per round, and nothing after the heading (a path, a prompt,
-    a token) survives. Never empty: "CRITIC" when nothing else is left.
-    """
-    stem = ROUND_RE.sub(" ", VERDICT_RE.sub(" ", str(first_line or "")))
-    stem = re.sub(r"[^A-Za-z0-9 ]+", " ", stem)
-    words = []
-    for token in stem.split():
-        if token.upper() != token:
-            break
-        words.append(token)
-    return scrub_text(" ".join(words), STEM_MAX) or "CRITIC"
-
-
-def latest_round(records):
-    """The newest comment of every critic thread (thread = first-line heading).
-
-    Newest by time of posting: a critic who takes a SAFE back with a later
-    BLOCK is heard, whatever ROUND token either line carries (a ROUND 2 SAFE
-    followed by a plain BLOCK-FIX reads BLOCK-FIX). The round only breaks a
-    tie between comments with the same timestamp or none. A re-review
-    replaces its own earlier verdict, never another critic's, so a PR is only
-    clean when every thread's newest verdict is safe.
-    """
-    threads = {}
-    for rec in records:
-        key = rec["stem"].upper()
-        current = threads.get(key)
-        if current is None or (rec["at"] or "", rec["round"]) > (current["at"] or "", current["round"]):
-            threads[key] = rec
-    return sorted(threads.values(), key=lambda r: r["at"] or "", reverse=True)
-
-
-def public_comment(rec):
-    """The published shape of a critic comment: no body, no names from it."""
-    return {k: v for k, v in rec.items() if not k.startswith("_")}
 
 
 def attach_queue_and_day(proj, events_dir, queue_file, now, gh=None):
