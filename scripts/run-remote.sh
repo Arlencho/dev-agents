@@ -116,7 +116,9 @@ REPO_NAME=$(basename "$REPO_URL" .git)
 #
 # Layout on the worker (issue #66):
 #   FETCH_DIR  ~/dev/<repo>                          the fetch point: objects and
-#              refs only. Seats never check a branch out here again.
+#              refs only, HEAD detached at origin/main so no branch, main
+#              included, is ever checked out here. Seats never check a branch
+#              out here again.
 #   SEAT_DIR   ~/dev/worktrees/<repo>/<dispatch>/<task>-<branch>
 #              one git worktree per seat, added from origin/<branch> when the
 #              branch exists on origin, else as a new branch from origin/main.
@@ -379,23 +381,24 @@ cd "$FETCH_DIR"
 FETCH_DIR=$(pwd -P)   # git prints real paths in `worktree list`; compare like with like
 git fetch --prune origin
 
-# The fetch point never checks a task branch out again. One left there by the
-# shared-checkout flow would block `git worktree add` for that branch forever,
-# so park HEAD on main once. A dirty tree is left alone and reported.
+# The fetch point has no branch checked out: HEAD stays detached at
+# origin/main, so `git worktree add` is free for every branch, main included
+# (a branch checked out here, even main, would block a seat on that branch
+# forever). A clean tree is detached on every seat start, which also keeps
+# the preamble's git state fresh; a dirty tree is left alone and reported with
+# its real reason, and a seat that needs that branch says so below.
+fetch_point_clean() { [ -z "$(git status --porcelain)" ]; }
 head_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
-if [ -n "$head_branch" ] && [ "$head_branch" != "main" ]; then
-    if [ -z "$(git status --porcelain)" ]; then
-        echo "Fetch point was left on $head_branch; parking it on main"
-        git checkout -q main
-        head_branch=main
-    else
-        echo "WARNING: fetch point $FETCH_DIR is on $head_branch with uncommitted changes; a seat on that branch cannot start until it is cleaned by hand" >&2
-    fi
-fi
-# Keep main fresh for the preamble's git state: a fast-forward of the ref the
-# fetch point already sits on, never a checkout of another branch.
-if [ "$head_branch" = "main" ] && [ -z "$(git status --porcelain)" ]; then
-    git merge -q --ff-only origin/main 2>/dev/null || true
+if fetch_point_clean; then
+    [ -n "$head_branch" ] && echo "Fetch point was left on $head_branch; detaching it at origin/main"
+    git checkout -q --detach origin/main
+    # The local main ref feeds the preamble's git state; refresh it without a
+    # checkout (refused, harmlessly, while a seat worktree has main out).
+    git branch -q -f main origin/main 2>/dev/null || true
+elif [ -n "$head_branch" ]; then
+    echo "WARNING: fetch point $FETCH_DIR is on $head_branch with uncommitted changes, so it cannot be detached; a seat on $head_branch cannot start until the tree is cleaned by hand" >&2
+else
+    echo "WARNING: fetch point $FETCH_DIR has uncommitted changes; left as is" >&2
 fi
 
 # Guardrail hooks live in the fetch point's .git/hooks and apply to every
@@ -457,7 +460,13 @@ wait_for_branch() {
         holder=$(branch_holder)
         [ -n "$holder" ] || return 0
         if [ "$holder" = "$FETCH_DIR" ]; then
-            echo "ERROR: $BRANCH is checked out in the fetch point $FETCH_DIR with uncommitted changes; clean it by hand" >&2
+            # Only a dirty tree keeps a branch checked out at the fetch point
+            # (a clean one was detached above); name whichever it is.
+            if fetch_point_clean; then
+                echo "ERROR: $BRANCH is checked out in the fetch point $FETCH_DIR and it could not be detached; run 'git -C $FETCH_DIR checkout --detach origin/main' by hand" >&2
+            else
+                echo "ERROR: $BRANCH is checked out in the fetch point $FETCH_DIR, which has uncommitted changes; commit or stash them there so the fetch point can be detached" >&2
+            fi
             return 1
         fi
         pid=$(holder_seat_pid "$holder")
@@ -632,16 +641,20 @@ if [ "$REMOTE_EXIT" -eq 75 ]; then
     echo "RATE_CAP recorded for $PROVIDER — dispatch will fail over"
 fi
 
-# On other failures, auto-record a learning from the last 3 log lines
-# (skip 75 — already logged high above).
+# On other failures, auto-record a learning (skip 75, logged high above).
+# The summary is a fixed code plus facts, never a line of agent output: a
+# learning is injected into later prompts, and a raw cap or auth phrase in it
+# would be echoed by a CLI and read by the launcher's classifier as a fresh
+# cap or auth exit for a seat that actually did its work. The log has the
+# detail.
 if [ "$REMOTE_EXIT" -ne 0 ] && [ "$REMOTE_EXIT" -ne 75 ] && [ -x "$SCRIPT_DIR/learnings.sh" ]; then
-    if [ "$IS_LOCAL" -eq 1 ]; then
-        FAIL_TAIL=$(tail -3 "$HOME/dev/agent-logs/$LOG_FILE" 2>/dev/null || echo "no log available")
-    else
-        FAIL_TAIL=$(ssh "$HOST" "tail -3 $LOG_DIR/$LOG_FILE 2>/dev/null" || echo "no log available")
-    fi
+    case "$REMOTE_EXIT" in
+        69) FAIL_CODE="UNAVAILABLE: $PROVIDER launcher exit 69 (CLI missing or session invalid)" ;;
+        77) FAIL_CODE="BLOCKED: guardrails stopped the seat (exit 77)" ;;
+        *)  FAIL_CODE="TASK_FAIL: seat exit $REMOTE_EXIT" ;;
+    esac
     "$SCRIPT_DIR/learnings.sh" add "$REPO_NAME" "$AGENT" failure \
-        "Agent exited $REMOTE_EXIT. Last output: $FAIL_TAIL" \
+        "$FAIL_CODE for $AGENT on $HOST; log $LOG_FILE" \
         --severity medium 2>/dev/null || true
     echo "Recorded failure learning for $REPO_NAME/$AGENT"
 fi

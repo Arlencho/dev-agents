@@ -43,6 +43,9 @@ FETCH="$HOME/dev/product"
 WT="$HOME/dev/worktrees/product"
 export PATH="$FLEET/tests/shims:$PATH"
 export SHIM_MODE=work SEAT_WAIT_POLL_S=1 DISPATCH_LOCK_POLL_S=1 FLEET_HEARTBEAT_S=0
+# A suite launched from inside a seat inherits that seat's env; the rows below
+# choose their own provider and event stream.
+unset AGENT_PROVIDER AGENT_MODEL FLEET_EVENTS_FILE FLEET_EVENTS_DIR
 
 seat() { # <task-id> <branch> [dispatch-id]   env: SHIM_WORK_SLEEP SHIM_WORK_TAG AGENT_PROVIDER
     AGENT_PROVIDER="${AGENT_PROVIDER:-claude}" AGENT_WAVE=1 AGENT_TASK_ID="$1" FLEET_DISPATCH_ID="${3:-d1}" \
@@ -70,7 +73,7 @@ wait $PB; check "seat b exit" "0" "$?"
 check "seat worktrees after both ended" "0" "$(seat_trees)"
 check "feat/a reached origin" "chore: seat work a chore: seed" "$(origin_log feat/a)"
 check "feat/b reached origin" "chore: seat work b chore: seed" "$(origin_log feat/b)"
-check "fetch point stays on main" "main" "$(git -C "$FETCH" symbolic-ref --short HEAD)"
+check "fetch point is detached, no branch checked out" "detached" "$(git -C "$FETCH" symbolic-ref -q --short HEAD || echo detached)"
 check "no stale fetch-point lock" "absent" "$([ -d "$FETCH.seat-lock" ] && echo present || echo absent)"
 
 echo ""
@@ -88,6 +91,41 @@ check "failed seat's ledger line carries status failed" "1" \
       "$(grep -c '"status":"failed"' "$FLEET/wave-plans/1/handoffs/1-devops-feat-f1.jsonl" 2>/dev/null)"
 check_true "ratecap wrote the vendor cooldown file" test -f "$FLEET/logs/provider-state/claude.cooldown"
 check "worktrees after the failures" "0" "$(seat_trees)"
+# The failure learnings are injected into the next seat's prompt; a raw cap or
+# auth phrase there would be echoed by a CLI and misread by the classifier.
+check "failure learnings carry a fixed code, never the classifier phrase" "0" \
+      "$(grep -ciE 'not logged in|please run /login|usage limit|limit resets|oauth session expired' "$FLEET/learnings/product.jsonl")"
+check "learnings recorded for the fail, ratecap and noauth seats" "3" "$(grep -c '"type":"failure"' "$FLEET/learnings/product.jsonl")"
+check "ratecap learning" "1" "$(grep -c '"summary":"RATE_CAP:' "$FLEET/learnings/product.jsonl")"
+check "noauth learning" "1" "$(grep -c '"summary":"UNAVAILABLE:' "$FLEET/learnings/product.jsonl")"
+check "learnings reach the next prompt" "1" "$(SHIM_ARGV_LOG="$SANDBOX/argv" SHIM_MODE=success seat 18 feat/prompt > /dev/null 2>&1; tr '\0' '\n' < "$SANDBOX/argv" | grep -c 'UNAVAILABLE: claude launcher exit 69')"
+SHIM_WORK_SLEEP=1 SHIM_WORK_TAG=after seat 19 feat/after > "$SANDBOX/after.log" 2>&1
+check "the seat after the noauth seat is classified by its own output" "0" "$?"
+check "feat/after reached origin" "chore: seat work after chore: seed" "$(origin_log feat/after)"
+
+echo ""
+echo "== two dispatches started in the same second get two ids, two runtimes, two event files =="
+# fleet-events mints <utc second>-<slug>-<pid>; two inits in one process each
+# are the two dispatchers. Retry until a pair lands in the same second.
+FE_DIR="$SANDBOX/fe"; mkdir -p "$FE_DIR"
+for _try in 1 2 3 4 5 6 7 8; do
+    ID1=$(FLEET_EVENTS_DIR="$FE_DIR" bash "$FLEET/scripts/fleet-events.sh" init product wave | xargs basename | sed 's/\.jsonl$//')
+    ID2=$(FLEET_EVENTS_DIR="$FE_DIR" bash "$FLEET/scripts/fleet-events.sh" init product wave | xargs basename | sed 's/\.jsonl$//')
+    [ "${ID1:0:15}" = "${ID2:0:15}" ] && break
+done
+check "both ids share the same second" "${ID1:0:15}" "${ID2:0:15}"
+check_true "the ids differ" test "$ID1" != "$ID2"
+check "two event files" "2" "$(ls "$FE_DIR"/*.jsonl | wc -l | tr -d ' ')"
+check "latest points at the second" "$ID2.jsonl" "$(cat "$FE_DIR/latest")"
+echo "  ids: $ID1  $ID2"
+SHIM_WORK_SLEEP=3 SHIM_WORK_TAG=s1 seat 23 feat/s1 "$ID1" > "$SANDBOX/s1id.log" 2>&1 & PS1_=$!
+SHIM_WORK_SLEEP=3 SHIM_WORK_TAG=s2 seat 24 feat/s2 "$ID2" > "$SANDBOX/s2id.log" 2>&1 & PS2_=$!
+sleep 2
+check "two runtimes alive at once" "2" "$(find "$HOME/dev/agent-runtime" -mindepth 1 -maxdepth 1 -type d \( -name "$ID1" -o -name "$ID2" \) | wc -l | tr -d ' ')"
+wait $PS1_; check "seat of the first id exit" "0" "$?"
+wait $PS2_; check "seat of the second id exit" "0" "$?"
+# A direct seat leaves its runtime to the sweep; only dispatch.sh removes one.
+rm -rf "$HOME/dev/agent-runtime/$ID1" "$HOME/dev/agent-runtime/$ID2"
 
 echo ""
 echo "== FLEET_KEEP_FAILED_WORKTREES=1 keeps a failed tree; the next seat clears it =="
@@ -216,21 +254,25 @@ if [ -n "$BASH4" ]; then
     disp da A "$SANDBOX/x.da" & D1=$!; sleep 0.5; disp db B "$SANDBOX/x.db" & D2=$!
     # Dispatch start-up (worker probe, plan parse, lock) takes a few seconds:
     # poll for the moment both seats are alive rather than guess a delay.
-    seen=0; polls=0
+    seen=0; polls=0; rts=0
     while [ "$polls" -lt 60 ]; do
         n=$(seat_trees); [ "$n" -gt "$seen" ] && seen=$n
-        [ "$seen" -ge 2 ] && break
+        n=$(find "$HOME/dev/agent-runtime" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-product-[0-9]*' | wc -l | tr -d ' '); [ "$n" -gt "$rts" ] && rts=$n
+        [ "$seen" -ge 2 ] && [ "$rts" -ge 2 ] && break
         sleep 0.5; polls=$((polls + 1))
     done
     check "two seat worktrees from two dispatches alive at once" "2" "$seen"
+    check "two dispatch runtimes alive at once" "2" "$rts"
     check "two branch locks held" "2" "$(find "$HOME/dev/dispatch-locks/product" -name '*.lock' | wc -l | tr -d ' ')"
     wait $D1 $D2
     check "dispatch on feat/da exit" "0" "$(cat "$SANDBOX/x.da")"
     check "dispatch on feat/db exit" "0" "$(cat "$SANDBOX/x.db")"
     check "neither dispatch queued" "0" "$(cat "$SANDBOX/disp-da.log" "$SANDBOX/disp-db.log" | grep -c 'Another dispatch holds')"
     check "worktrees after both" "0" "$(seat_trees)"
-    # dispatch ids are <date>-<time>-<repo>; the direct-seat runtimes above stay
-    check "localhost runtimes removed with their dispatches" "0" "$(find "$HOME/dev/agent-runtime" -mindepth 1 -maxdepth 1 -type d -name '*-product' | wc -l | tr -d ' ')"
+    # dispatch ids are <utc second>-<repo>-<pid>; the direct-seat runtimes above stay
+    check "localhost runtimes removed with their dispatches" "0" "$(find "$HOME/dev/agent-runtime" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-product-[0-9]*' | wc -l | tr -d ' ')"
+    check "each dispatch wrote its own event file" "2" "$(ls "$FLEET/logs/fleet-events"/[0-9]*-product-[0-9]*.jsonl | wc -l | tr -d ' ')"
+    check "the two dispatch ids differ" "2" "$(grep -ho '"dispatch_id":"[^"]*"' "$FLEET/logs/fleet-events"/[0-9]*-product-[0-9]*.jsonl | sort -u | wc -l | tr -d ' ')"
 
     echo ""
     echo "== two real dispatches on the same branch serialize =="
@@ -249,5 +291,31 @@ else
 fi
 
 echo ""
+# Last: these seats push to origin/main, which every later branch would inherit.
+echo "== a seat whose branch is main starts: the fetch point holds no branch =="
+SHIM_WORK_SLEEP=1 SHIM_WORK_TAG=m seat 20 main > "$SANDBOX/main.log" 2>&1
+check "seat on main exit" "0" "$?"
+check "main reached origin" "chore: seat work m chore: seed" "$(origin_log main)"
+check "fetch point still detached" "detached" "$(git -C "$FETCH" symbolic-ref -q --short HEAD || echo detached)"
+check "no fetch-point error in the log" "0" "$(grep -c 'checked out in the fetch point' "$SANDBOX/main.log")"
+git -C "$FETCH" checkout -q main
+echo dirty > "$FETCH/README.md"
+SHIM_WORK_SLEEP=1 SHIM_WORK_TAG=m2 seat 21 main > "$SANDBOX/main2.log" 2>&1
+check "a dirty fetch point on main blocks a seat on main" "1" "$?"
+check "the error names the uncommitted changes" "1" "$(grep -c 'which has uncommitted changes' "$SANDBOX/main2.log")"
+git -C "$FETCH" checkout -q -- README.md
+SHIM_WORK_SLEEP=1 SHIM_WORK_TAG=m3 seat 22 main > "$SANDBOX/main3.log" 2>&1
+check "a clean fetch point on main is detached and the seat starts" "0" "$?"
+check "detach reported" "1" "$(grep -c 'Fetch point was left on main; detaching it' "$SANDBOX/main3.log")"
+check "main on origin" "chore: seat work m3 chore: seat work m chore: seed" "$(origin_log main)"
+
+echo ""
 echo "== $pass passed, $fail failed =="
+if [ "$fail" -ne 0 ]; then
+    # Seat logs, for a failure on a machine without a shell to look at them.
+    for f in "$SANDBOX"/*.log; do
+        [ -f "$f" ] || continue
+        echo "---- $(basename "$f") (last 40 lines) ----"; tail -40 "$f"
+    done
+fi
 [ "$fail" -eq 0 ]

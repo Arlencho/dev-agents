@@ -3,6 +3,7 @@
 #
 # Append-only JSONL stream of dispatch facts for the Ops Floor.
 #   logs/fleet-events/<dispatch_id>.jsonl   one JSON object per line
+#                                            (<utc second>-<repo slug>-<pid>)
 #   logs/fleet-events/latest                pointer file (basename of the newest run)
 #
 # Law: docs/proposals/fleet-desk-v2-SYNTHESIS.md §3 Phase B
@@ -76,7 +77,13 @@ fleet_events_init() {
 
     local slug
     slug="$(printf '%s' "$repo_slug" | LC_ALL=C tr -c 'A-Za-z0-9._-' '-' | cut -c1-40)"
-    FLEET_DISPATCH_ID="${forced_id:-$(date -u +%Y%m%d-%H%M%S)-${slug:-fleet}}"
+    # <utc second>-<repo slug>-<dispatcher pid>. The pid keeps two dispatches
+    # started in the same second apart: the id names the events file, the
+    # per-dispatch launcher runtime and the seat worktree directory, and a
+    # shared id let the first dispatch to finish delete the runtime under the
+    # other. Nothing parses the id back into parts; it travels as an opaque
+    # path-safe token (no spaces: the worktree lock reason is split on them).
+    FLEET_DISPATCH_ID="${forced_id:-$(date -u +%Y%m%d-%H%M%S)-${slug:-fleet}-$$}"
     FLEET_EVENTS_DIR="$base_dir"
     FLEET_EVENTS_FILE="$base_dir/${FLEET_DISPATCH_ID}.jsonl"
 

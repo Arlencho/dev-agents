@@ -49,9 +49,10 @@ effective_model() {
 }
 
 # Run a vendor CLI, classify the outcome against the rate-cap pattern table.
-# Usage: run_and_classify <vendor> <cmd...>
+# Usage: AGENT_PROMPT_TEXT=<prompt> run_and_classify <vendor> <cmd...>
 # Only the LAST 25 lines of output are matched — cap/auth messages appear at
 # the end of a run; agents may legitimately discuss rate limits mid-transcript.
+# Lines that appear verbatim in AGENT_PROMPT_TEXT are never matched.
 run_and_classify() {
     local vendor="$1"; shift
     local patterns="${RATECAP_PATTERNS:-$(dirname "${BASH_SOURCE[0]}")/../config/ratecap-patterns.conf}"
@@ -81,6 +82,20 @@ run_and_classify() {
     local tail_out
     tail_out=$(tail -25 "$tmp")
     rm -f "$tmp"
+
+    # Classify the CLI's own output only. The prompt carries injected text
+    # (charter, preamble, learnings, task) that may quote a cap or auth phrase,
+    # and a CLI that echoes its prompt would feed it straight back here. Every
+    # output line that appears verbatim in the prompt is dropped before the
+    # pattern table sees it. Launchers set AGENT_PROMPT_TEXT to the full
+    # prompt they hand the CLI.
+    if [ -n "${AGENT_PROMPT_TEXT:-}" ]; then
+        local prompt_lines
+        prompt_lines=$(mktemp)
+        printf '%s\n' "$AGENT_PROMPT_TEXT" | sed '/^[[:space:]]*$/d' > "$prompt_lines"
+        tail_out=$(printf '%s\n' "$tail_out" | grep -vxF -f "$prompt_lines" || true)
+        rm -f "$prompt_lines"
+    fi
 
     if [ -f "$patterns" ]; then
         local class regex
