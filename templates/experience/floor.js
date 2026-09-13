@@ -219,11 +219,12 @@
     var hasSummary = s && typeof s === "object" && st.state !== "replay";
 
     var today = d.today || [];
-    var landed = 0, failed = 0;
+    var landed = 0, failed = 0, aborted = 0;
     today.forEach(function (t) {
       var w = outcomeWord(t);
       if (w === "landed") landed++;
       else if (w === "failed") failed++;
+      else if (w === "aborted") aborted++;
     });
 
     var el;
@@ -237,14 +238,25 @@
     if (el && !el.hidden) el.textContent = landed + " landed";
     el = show("strip-failed", !!hasSummary);
     if (el && !el.hidden) {
-      el.textContent = failed + " failed";
+      /* The figure must equal what it links to: the FAILED list holds
+         failed and aborted rows alike, so both counts ride the figure. */
+      el.textContent = aborted
+        ? failed + " failed · " + aborted + " aborted"
+        : failed + " failed";
       el.className = "sfig" + (failed > 0 ? " bad" : "");
     }
     var needs = hasSummary && typeof s.needs_you === "number"
       ? s.needs_you : (hasSummary ? (d.needs_you || []).length : null);
+    var skippedChecks = ((d.needs_you_meta || {}).checks || [])
+      .filter(function (c) { return c.status === "skipped"; }).length;
     el = show("strip-needs", needs != null);
     if (el && !el.hidden) {
-      el.textContent = "needs you: " + needs;
+      /* A zero next to skipped checks is not a verified zero: say so in
+         the figure itself. */
+      el.textContent = "needs you: " + needs +
+        (skippedChecks
+          ? " (" + skippedChecks + (skippedChecks === 1 ? " check" : " checks") + " skipped)"
+          : "");
       el.className = "sfig" + (needs > 0 ? " hot" : "");
     }
     el = show("strip-event", !!(st.state !== "replay" && typeof st.age === "number"));
@@ -269,10 +281,12 @@
   /* ── 4.2 NEEDS YOU ────────────────────────────────────────────────── */
 
   /* The reason the page exists: one row per item, newest first (the
-     projection orders), each with exactly one action. The action links to
-     the item's source url when the source carries one. An unverified item
-     says so. Checks that could not run are named in the note, so an empty
-     list never reads as "verified nothing to do" when a source was absent. */
+     projection orders), each with exactly one reachable action. The action
+     links to the item's source url when the source carries one, else to the
+     place on this page that answers it. An unverified item says so. Checks
+     that could not run are named in the note, and when the list is empty
+     because they did not run, the empty row itself carries the qualification
+     instead of reading as a verified all-clear. */
   var CHECK_WORDS = {
     critic_block: "critic verdicts",
     ready_to_merge: "merge-ready PRs",
@@ -287,15 +301,17 @@
     if (!box) return;
     var items = d.needs_you || [];
     var meta = d.needs_you_meta || {};
+    var skipped = (meta.checks || []).filter(function (c) { return c.status === "skipped"; });
+    var skippedNames = function () {
+      return skipped.map(function (c) {
+        return CHECK_WORDS[c.check] || c.check;
+      }).join(", ");
+    };
     var note = $("floor-needs-note");
     if (note) {
-      var skipped = (meta.checks || []).filter(function (c) { return c.status === "skipped"; });
       if (skipped.length) {
-        var names = skipped.map(function (c) {
-          return CHECK_WORDS[c.check] || c.check;
-        }).join(", ");
         var reason = skipped[0].reason ? " (" + skipped[0].reason + ")" : "";
-        note.textContent = "not checked: " + names + reason;
+        note.textContent = "not checked: " + skippedNames() + reason;
         note.hidden = false;
       } else {
         note.textContent = "";
@@ -303,20 +319,71 @@
       }
     }
     if (!items.length) {
-      box.innerHTML = '<li class="muted">Nothing needs you.</li>';
+      if (skipped.length) {
+        /* A skipped check means "unknown", never "nothing": when the checks
+           that matter did not run, the empty row itself says so, in words,
+           instead of claiming an all-clear (docs/experience-data.md). */
+        var reasons = [];
+        skipped.forEach(function (c) {
+          if (c.reason && reasons.indexOf(c.reason) < 0) reasons.push(c.reason);
+        });
+        box.innerHTML = '<li class="muted">Nothing found in the checks that ran; ' +
+          esc(skippedNames()) + " not checked" +
+          (reasons.length ? " (" + esc(reasons.join("; ")) + ")" : "") + ".</li>";
+      } else {
+        box.innerHTML = '<li class="muted">Nothing needs you.</li>';
+      }
       return;
     }
+    /* Every row carries one reachable action: the source url when there is
+       one, else the place on this page that answers it. A failed run's
+       action opens the replay of its own stream; a PRD sign-off or a missing
+       variable jumps to the queue row it blocks; a quiet seat jumps to NOW.
+       A dead span is not an action. */
+    var queueRows = d.queue || [];
+    var actHref = function (it) {
+      var src = it.source || {};
+      if (src.url) return src.url;
+      if (it.type === "failed_dispatch") {
+        return src.dispatch_id
+          ? "?replay=1&dispatch_id=" + encodeURIComponent(src.dispatch_id)
+          : "#floor-failed-card";
+      }
+      if (it.type === "quiet_seat") return "#floor-now-card";
+      if (it.type === "prd_proposed" || it.type === "missing_variable") {
+        for (var i = 0; i < queueRows.length; i++) {
+          var q = queueRows[i];
+          var bsrc = (q.blocked_by || {}).source || {};
+          var match = (it.plan && q.plan_basename === it.plan) ||
+            (src.file && bsrc.file === src.file);
+          if (match && q.position != null) {
+            return "#floor-queue-row-" + q.position;
+          }
+        }
+        return "#floor-queue-card";
+      }
+      return "#floor-needs-card";
+    };
+    /* File sources publish only what the redaction law allows: the checkout
+       name, the path relative to it, and the line. */
+    var srcCite = function (it) {
+      var src = it.source || {};
+      if (src.kind === "file" && src.file) {
+        var at = (src.checkout ? src.checkout + ":" : "") + src.file +
+          (src.line ? ":" + src.line : "");
+        return ' <span class="mono faint">' + esc(at) + "</span>";
+      }
+      return "";
+    };
     box.innerHTML = items.map(function (it) {
       var act = esc(it.action || "look");
-      var src = it.source || {};
-      var actHtml = src.url
-        ? '<a class="act" href="' + esc(src.url) + '">' + act + "</a>"
-        : '<span class="act">' + act + "</span>";
+      var actHtml = '<a class="act" href="' + esc(actHref(it)) + '">' + act + "</a>";
       return '<li class="nrow' + (it.verified === false ? " unv" : "") + '">' +
         '<span class="nbody">' +
         (it.repo ? '<span class="rname">' + esc(it.repo) + "</span> " : "") +
         esc(it.text || "item without text") +
         (it.verified === false ? ' <span class="faint">(not verified)</span>' : "") +
+        srcCite(it) +
         "</span>" + actHtml + "</li>";
     }).join("");
   }
@@ -421,7 +488,16 @@
         parts.push('running <span data-elapsed-from="' + esc(seat.started_at || "") +
           '" data-elapsed-min="1">' + fmtMin(now.elapsed_s) + "</span>");
       }
-      if (typeof now.heartbeat_age_s === "number") {
+      /* The heartbeat age derives from its timestamp and ticks on the same
+         clock the strip's "last event" recomputes from: a frozen projection
+         can never leave a fresh heartbeat under a green LED. The stored
+         heartbeat_age_s is the fallback only when no timestamp arrives. */
+      var hbMs = new Date(seat.last_heartbeat_ts || "").getTime();
+      if (!isNaN(hbMs)) {
+        var hbAge = Math.max(0, Math.round((Date.now() - hbMs) / 1000));
+        parts.push('heartbeat <span data-elapsed-from="' + esc(seat.last_heartbeat_ts) +
+          '" data-elapsed-ago="1">' + fmtAgo(hbAge) + "</span>");
+      } else if (typeof now.heartbeat_age_s === "number") {
         parts.push("heartbeat " + fmtAgo(now.heartbeat_age_s));
       }
     }
@@ -545,7 +621,9 @@
      Off a live stream it does not run at all: a clock still climbing while the
      LED says offline is a liveness claim the projection cannot back. Spans
      marked data-elapsed-min tick in plain minutes (the seat status clause),
-     the rest in the compact timer format. */
+     spans marked data-elapsed-ago tick as floored ages (the heartbeat, the
+     same clock as the strip's "last event"), the rest in the compact timer
+     format. */
   function tickElapsed() {
     if (!elapsedLive) return;
     var nodes = document.querySelectorAll("[data-elapsed-from]");
@@ -553,7 +631,9 @@
       var from = new Date(nodes[i].getAttribute("data-elapsed-from") || "").getTime();
       if (isNaN(from)) continue;
       var secs = Math.max(0, Math.round((Date.now() - from) / 1000));
-      nodes[i].textContent = nodes[i].getAttribute("data-elapsed-min") ? fmtMin(secs) : fmtDur(secs);
+      nodes[i].textContent = nodes[i].getAttribute("data-elapsed-ago")
+        ? fmtAgo(secs)
+        : nodes[i].getAttribute("data-elapsed-min") ? fmtMin(secs) : fmtDur(secs);
     }
   }
 
@@ -587,7 +667,11 @@
         ? ' <span class="mono">#' + q.issue.number + "</span>" : "";
       var blocked = q.blocked
         ? '<span class="qblocked">blocked: ' + esc(q.blocked) + "</span>" : "";
-      return '<li class="qrow' + (q.blocked ? " isblocked" : "") + '">' +
+      /* The row id lets a NEEDS YOU action jump straight to the plan it
+         blocks. */
+      var rowId = q.position != null
+        ? ' id="floor-queue-row-' + esc(q.position) + '"' : "";
+      return '<li class="qrow' + (q.blocked ? " isblocked" : "") + '"' + rowId + '>' +
         '<span class="qpos mono">' + esc(q.position) + "</span>" +
         '<span class="qbody"><span class="qpurpose"><span class="rname">' +
         esc(q.repo || "repo not declared") + "</span>" + issue + " " +
@@ -670,16 +754,36 @@
     var branches = (t.branches || []).map(function (b) {
       return '<span class="mono faint">' + esc(b) + "</span>";
     }).join(" ");
-    /* Repo is the first word; the PR number follows when one exists for
-       the landing's branch (issue 72). */
-    var pr = t.pr && typeof t.pr.number === "number"
-      ? ' <span class="mono">PR #' + t.pr.number + "</span>" : "";
+    /* Repo is the first word; the receipt follows (proposal section 4:
+       every number a link to its source). A landed run's PR number links to
+       the PR and carries its title; every run links the replay of its own
+       stream, and its trail when the Almanac join exists. */
+    var pr = "";
+    if (t.pr && typeof t.pr.number === "number") {
+      var label = "PR #" + t.pr.number + (t.pr.title ? " · " + t.pr.title : "");
+      pr = t.pr.url
+        ? ' <a class="mono" href="' + esc(t.pr.url) + '">' + esc(label) + "</a>"
+        : ' <span class="mono">' + esc(label) + "</span>";
+    }
+    var links = almanacLinks();
+    var branch0 = (t.branches || [])[0] || "";
+    var trailId = branch0 && links.by_branch ? links.by_branch[branch0] : null;
+    var receipt = "";
+    if (trailId) {
+      receipt = '<a href="../trail/' + esc(trailId) + '/index.html">trail</a>';
+    }
+    if (t.dispatch_id) {
+      receipt += (receipt ? " " : "") +
+        '<a href="?replay=1&amp;dispatch_id=' +
+        esc(encodeURIComponent(t.dispatch_id)) + '">replay</a>';
+    }
     return '<li class="trow">' +
       '<span class="tbody"><span class="tpurpose"><span class="rname">' +
       esc(t.repo || "repo not reported") + "</span>" + pr + " " +
       esc(t.purpose || t.plan_basename || t.dispatch_id) + "</span>" +
       '<span class="tmeta">' +
-      (branches || '<span class="faint">no branch reported</span>') + "</span></span>" +
+      (branches || '<span class="faint">no branch reported</span>') +
+      (receipt ? " " + receipt : "") + "</span></span>" +
       '<span class="' + cls + ' tout">' + esc(word) + "</span>" +
       '<span class="timer mono">' + fmtMin(t.duration_s) + "</span></li>";
   }

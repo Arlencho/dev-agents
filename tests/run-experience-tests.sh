@@ -766,6 +766,18 @@ grep -q 'id="strip-event" href="#floor-legacy">last event ' "$FL" \
 grep -q 'id="floor-state-note" hidden' "$FL" \
   && ok "strip: a live stream shows no state sentence" || bad "strip: a live stream shows no state sentence"
 
+# Round 2, B4: a heartbeat can never be newer than the last event, so its
+# age derives from last_heartbeat_ts and ticks on the same clock as the
+# strip's "last event" (a frozen projection cannot leave a fresh heartbeat
+# under a green LED). The fixture seats carry last_heartbeat_ts.
+grep -q 'heartbeat <span data-elapsed-from="' "$FL" \
+  && grep -q 'data-elapsed-ago="1"' "$FL" \
+  && ok "B4: the heartbeat age derives from its timestamp, not the stored value" \
+  || bad "B4: the heartbeat age derives from its timestamp, not the stored value"
+grep -q 'data-elapsed-ago' "$FIXOUT/assets/floor.js" \
+  && ok "B4: the page ticker advances the heartbeat age every second" \
+  || bad "B4: the page ticker advances the heartbeat age every second"
+
 grep -q 'Iris round 2 blocked by backend critic, 3 findings' "$FL" \
   && grep -q 'href="https://example.invalid/issues/900#c9001">open the comment</a>' "$FL" \
   && ok "NEEDS YOU row renders the critic block with its one action" \
@@ -877,6 +889,141 @@ grep -q 'Nothing needs you\.' "$FL" \
 grep -q 'id="strip-needs" href="#floor-needs-card" hidden' "$FL" \
   && ok "replay strip paints no needs-you figure (no summary, no borrowing)" \
   || bad "replay strip paints no needs-you figure (no summary, no borrowing)"
+
+# ── Floor v3-B round 2: the six critic BLOCK findings, one test each ──
+# Fixture: the base v3 page plus one skipped check with a reason (the normal
+# state wherever gh cannot list variables), two NEEDS YOU rows whose sources
+# carry no url (a failed run, a PRD sign-off), and one aborted run beside
+# the failed one.
+python3 - "$TMP/live-v3.json" "$TMP/live-v3-fix.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["needs_you_meta"]["checks"] = [
+    {"check": "critic_block", "status": "ok", "reason": None, "looked_at": 2},
+    {"check": "missing_variable", "status": "skipped",
+     "reason": "gh variable list: not authenticated", "looked_at": 0},
+]
+d["needs_you"] += [
+    {"type": "failed_dispatch",
+     "text": "Track K W0-B fix wave failed after 437 s",
+     "action": "see the output",
+     "source": {"kind": "stream", "dispatch_id": "v3-failed",
+                "stream": "v3-failed.jsonl", "event": "dispatch_end"},
+     "verified": True, "at": d["last_event_ts"], "repo": "dev-agents",
+     "branch": "feat/k-w0b", "pr": None, "plan": "k-w0b.plan"},
+    {"type": "prd_proposed",
+     "text": "S11 awaits sign-off",
+     "action": "approve or edit",
+     "source": {"kind": "file", "checkout": "olympus-platform",
+                "file": "docs/prd/pages/track-k.md", "line": 42,
+                "named_by": "k-next.plan"},
+     "verified": True, "at": d["last_event_ts"], "repo": "olympus-platform",
+     "branch": None, "pr": None, "plan": "k-next.plan"},
+]
+d["summary"]["needs_you"] = 3
+d["today"].append({
+    "dispatch_id": "v3-aborted", "source": "logs/fleet-events/v3-aborted.jsonl",
+    "plan": "wave-plans/k-w0c.plan", "plan_basename": "k-w0c.plan", "repo": "dev-agents",
+    "purpose": "Track K W0-C: the halted wave.", "purpose_source": "queue",
+    "status": "aborted", "outcome": "aborted", "end_status": "aborted",
+    "duration_s": 90, "started_at": d["last_event_ts"], "ended_at": d["last_event_ts"],
+    "seats": 1, "succeeded": 0, "failed": 0, "branches": ["feat/k-w0c"],
+    "pr": {"branch": "feat/k-w0c", "number": None, "title": None, "state": None,
+           "url": None, "lookup": "verified",
+           "reason": "no open or merged PR for this branch"},
+    "prs": []})
+json.dump(d, open(sys.argv[2], "w"), indent=2)
+PY
+cp "$TMP/live-v3-fix.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with the round-2 fixture" || bad "renderer succeeds with the round-2 fixture"
+
+# B1: the skipped-check note wraps inside its card head, so a long reason
+# can never widen the page (the overflow the critic measured at 400 px).
+grep -A4 '#floor-needs-note' "$FIXOUT/assets/site.css" | grep -q 'white-space: normal' \
+  && ok "B1: the needs-you note wraps (a note never widens the page)" \
+  || bad "B1: the needs-you note wraps (a note never widens the page)"
+grep -q 'not checked: repository variables (gh variable list: not authenticated)' "$FL" \
+  && ok "B1: the skipped check and its reason still render in the note" \
+  || bad "B1: the skipped check and its reason still render in the note"
+
+# B2: every NEEDS YOU row carries one reachable action; the landed and
+# failed lists answer question 3 with real receipts.
+grep -q '<a class="act" href="https://example.invalid/issues/900#c9001">open the comment</a>' "$FL" \
+  && grep -q '<a class="act" href="?replay=1&amp;dispatch_id=v3-failed">see the output</a>' "$FL" \
+  && grep -q '<a class="act" href="#floor-queue-row-1">approve or edit</a>' "$FL" \
+  && ok "B2: all three NEEDS YOU actions are reachable links" \
+  || bad "B2: all three NEEDS YOU actions are reachable links"
+if grep -q '<span class="act">' "$FL"; then
+  bad "B2: no NEEDS YOU action renders as a dead span"
+else
+  ok "B2: no NEEDS YOU action renders as a dead span"
+fi
+grep -q '<a class="mono" href="https://example.invalid/pr/95">PR #95 · feat: the contract</a>' "$FL" \
+  && ok "B2: the landed row links the PR and prints its title" \
+  || bad "B2: the landed row links the PR and prints its title"
+python3 - "$FL" <<'PY' \
+  && ok "B2: every failed-list row carries the replay receipt of its run" \
+  || bad "B2: every failed-list row carries the replay receipt of its run"
+import re, sys
+html = open(sys.argv[1]).read()
+m = re.search(r'id="floor-failed-list">(.*?)</ol>', html, re.S)
+rows = re.findall(r'<li class="trow">.*?</li>', m.group(1), re.S)
+sys.exit(0 if rows and all("dispatch_id=" in r and ">replay</a>" in r for r in rows) else 1)
+PY
+grep -q 'id="floor-queue-row-1"' "$FL" \
+  && ok "B2: queue rows carry the ids a NEEDS YOU action jumps to" \
+  || bad "B2: queue rows carry the ids a NEEDS YOU action jumps to"
+
+# B3: strip anchors offset by the sticky header height at both widths
+# (129 px at 1280, 237 px at 400), so a figure never lands its heading
+# behind the header.
+grep -q 'scroll-margin-top: 140px' "$FIXOUT/assets/site.css" \
+  && grep -q 'scroll-margin-top: 250px' "$FIXOUT/assets/site.css" \
+  && ok "B3: floor anchor targets offset by the sticky header at both widths" \
+  || bad "B3: floor anchor targets offset by the sticky header at both widths"
+
+# B5: the failed figure equals the failed list it links to.
+grep -q 'id="strip-failed" href="#floor-failed-card">1 failed · 1 aborted' "$FL" \
+  && ok "B5: the strip counts aborted beside failed when the list lists both" \
+  || bad "B5: the strip counts aborted beside failed when the list lists both"
+
+# B6: with a check skipped, the needs-you figure never reads as verified.
+grep -q 'id="strip-needs" href="#floor-needs-card">needs you: 3 (1 check skipped)' "$FL" \
+  && ok "B6: the needs-you figure names the skipped check" \
+  || bad "B6: the needs-you figure names the skipped check"
+
+# B6 empty: no item found but the checks that matter did not run, so the
+# row itself says so instead of "Nothing needs you."
+python3 - "$TMP/live-v3.json" "$TMP/live-v3-fix-empty.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["needs_you"] = []
+d["summary"]["needs_you"] = 0
+d["needs_you_meta"]["checks"] = [
+    {"check": "critic_block", "status": "skipped", "reason": "gh not on PATH", "looked_at": 0},
+    {"check": "ready_to_merge", "status": "skipped", "reason": "gh not on PATH", "looked_at": 0},
+    {"check": "prd_proposed", "status": "skipped",
+     "reason": "no checkout on this machine", "looked_at": 0},
+    {"check": "missing_variable", "status": "skipped", "reason": "gh not on PATH", "looked_at": 0},
+]
+json.dump(d, open(sys.argv[2], "w"), indent=2)
+PY
+cp "$TMP/live-v3-fix-empty.json" "$FIXOUT/data/live.json"
+python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1 \
+  && ok "renderer succeeds with the all-checks-skipped fixture" \
+  || bad "renderer succeeds with the all-checks-skipped fixture"
+grep -q 'Nothing found in the checks that ran; critic verdicts, merge-ready PRs, PRD sign-offs, repository variables not checked' "$FL" \
+  && ok "B6: the empty row names the checks that did not run" \
+  || bad "B6: the empty row names the checks that did not run"
+grep -q 'id="strip-needs" href="#floor-needs-card">needs you: 0 (4 checks skipped)' "$FL" \
+  && ok "B6: a zero beside skipped checks never reads as a verified zero" \
+  || bad "B6: a zero beside skipped checks never reads as a verified zero"
+if grep -q '>Nothing needs you\.<' "$FL"; then
+  bad "B6: 'Nothing needs you.' never renders when checks were skipped"
+else
+  ok "B6: 'Nothing needs you.' never renders when checks were skipped"
+fi
 
 rm "$FIXOUT/data/live.json"
 python3 "$REPO_DIR/scripts/experience_build.py" --repo "$FIX" --out "$FIXOUT" >>"$TMP/html-live.log" 2>&1

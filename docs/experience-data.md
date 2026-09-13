@@ -876,19 +876,31 @@ The Floor page (`templates/experience/floor.js`, mirrored by the build-time
 snapshot in `scripts/experience_build.py`) reads these fields in the v3 order
 ([`floor-v3-purpose.md`](proposals/floor-v3-purpose.md) § 4): first the status
 strip (running, up next, landed, failed, needs you, last event; every figure
-links to its section, "needs you" is red when non-zero, and under stale or
+links to its section, "needs you" is red when non-zero, the failed figure
+counts aborted beside failed because the list it links to lists both, a
+needs-you figure beside skipped checks names them so a zero never reads as
+verified, and under stale or
 offline the strip says so first in words, before any number); then NEEDS YOU
-(newest first, one action each, empty state "Nothing needs you."); then NOW
+(newest first, one reachable action each: the source url when there is one,
+else the replay of the run, the queue row the item blocks, or the NOW card;
+empty state "Nothing needs you.", replaced by "Nothing found in the checks
+that ran; ... not checked" naming the skipped checks and their reasons when
+any check was skipped); then NOW
 grouped by repo with a header per repo carrying its own seats-live and
 dispatches-live counts (a replay drops the word "live", since the seats shown
 are history); each seat card reads repo, issue and milestone (with a
 "milestone unverified" mark when the lookup was skipped), purpose, the seat
-task line, the status clause, the branch dim, and the PR number and title
+task line, the status clause (the heartbeat age derives from
+`last_heartbeat_ts` and ticks on the same clock as the strip's "last event",
+so a frozen projection never leaves a fresh heartbeat under a green LED),
+the branch dim, and the PR number and title
 when one exists; then UP NEXT (repo first, issue, purpose, plan file dim, a
 blocked plan shows its `blocked` reason in place); then INITIATIVES (one row
 per open milestone, a fallback row says "streams and queue alone"); then
 FAILED and LANDED today (failed first when non-empty, rows lead with the repo
-and carry the issue or PR number when present); last, one `<details>`
+and carry the receipts: a landed PR number links to the PR and prints its
+title, and every row links the replay of its own stream, plus the trail when
+the Almanac join exists); last, one `<details>`
 control, closed by default, holding replay and the scrubber, stream facts,
 the schema line, the pipeline tiles, the lanes or spine, the event tail and
 the trail links.

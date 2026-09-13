@@ -33,6 +33,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import experience_data
 
@@ -881,22 +882,26 @@ class Renderer:
                 return state, age
         return staleness.get("state") or "none", None
 
+    def _floor_branch_trails(self) -> Dict[str, str]:
+        """Branch → trail id map (pure Almanac derivation, no live state)."""
+        by_branch: Dict[str, str] = {}
+        for t in self.trails:
+            b = (t.get("branch") or "").strip()
+            if b and b not in by_branch:
+                by_branch[b] = t["task_id"]
+        return by_branch
+
     def _floor_almanac_links_json(self) -> str:
         """Branch → trail and plan → mission maps for Floor cross-links.
 
         Pure Almanac derivation (schema v2) — no live state. Used by floor.js
         so a seat branch can deep-link to its trail when the join exists.
         """
-        by_branch: Dict[str, str] = {}
-        for t in self.trails:
-            b = (t.get("branch") or "").strip()
-            if b and b not in by_branch:
-                by_branch[b] = t["task_id"]
         by_plan: Dict[str, str] = {}
         # Missions do not carry plan filenames; plan_hint on trails is free text.
         # Link by mission slug when only one mission and we know it — otherwise
         # leave by_plan empty (honest). Floor still links Work + Missions.
-        payload = {"by_branch": by_branch, "by_plan": by_plan, "by_mission": {}}
+        payload = {"by_branch": self._floor_branch_trails(), "by_plan": by_plan, "by_mission": {}}
         for m in self.missions:
             payload["by_mission"][m["slug"]] = m["ref"]
         return json.dumps(payload, separators=(",", ":"), sort_keys=True)
@@ -1148,7 +1153,20 @@ class Renderer:
                     f'running <span data-elapsed-from="{esc(seat.get("started_at") or "")}" '
                     f'data-elapsed-min="1">{self._fmt_min(now["elapsed_s"])}</span>'
                 )
-            if self._is_num(now.get("heartbeat_age_s")):
+            # The heartbeat age derives from its timestamp at build time and
+            # ticks on the same clock the strip's "last event" recomputes
+            # from: a frozen projection can never leave a fresh heartbeat
+            # under a green LED. The stored heartbeat_age_s is the fallback
+            # only when no timestamp arrives.
+            hb_ts = seat.get("last_heartbeat_ts")
+            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            hb_age = self._secs_between(now_iso, hb_ts) if hb_ts else None
+            if hb_age is not None:
+                parts.append(
+                    f'heartbeat <span data-elapsed-from="{esc(hb_ts)}" '
+                    f'data-elapsed-ago="1">{self._fmt_ago(hb_age)}</span>'
+                )
+            elif self._is_num(now.get("heartbeat_age_s")):
                 parts.append(f"heartbeat {self._fmt_ago(now['heartbeat_age_s'])}")
         return ", ".join(parts) + "."
 
@@ -1197,6 +1215,10 @@ class Renderer:
         today = live.get("today") or []
         landed = sum(1 for t in today if self._outcome_word(t) == "landed")
         failed = sum(1 for t in today if self._outcome_word(t) == "failed")
+        aborted = sum(1 for t in today if self._outcome_word(t) == "aborted")
+        skipped_checks = sum(
+            1 for c in ((live.get("needs_you_meta") or {}).get("checks") or [])
+            if c.get("status") == "skipped")
 
         def fig(fid: str, href: str, text: str, cls: str = "sfig", on: bool = True) -> str:
             hid = "" if on else " hidden"
@@ -1214,12 +1236,22 @@ class Renderer:
             figs.append(fig("strip-queued", "#floor-queue-card", "", on=False))
         if has_summary:
             figs.append(fig("strip-landed", "#floor-landed-card", f"{landed} landed"))
-            figs.append(fig("strip-failed", "#floor-failed-card", f"{failed} failed",
+            # The figure must equal what it links to: the FAILED list holds
+            # failed and aborted rows alike, so both counts ride the figure.
+            failed_txt = (f"{failed} failed · {aborted} aborted" if aborted
+                          else f"{failed} failed")
+            figs.append(fig("strip-failed", "#floor-failed-card", failed_txt,
                             "sfig bad" if failed > 0 else "sfig"))
             needs = s.get("needs_you")
             if not self._is_num(needs):
                 needs = len(live.get("needs_you") or [])
-            figs.append(fig("strip-needs", "#floor-needs-card", f"needs you: {needs}",
+            # A zero next to skipped checks is not a verified zero: the
+            # figure itself says some checks did not run.
+            needs_txt = f"needs you: {needs}"
+            if skipped_checks:
+                needs_txt += (f" ({skipped_checks} "
+                              f"{'check' if skipped_checks == 1 else 'checks'} skipped)")
+            figs.append(fig("strip-needs", "#floor-needs-card", needs_txt,
                             "sfig hot" if needs > 0 else "sfig"))
         else:
             figs.append(fig("strip-landed", "#floor-landed-card", "", on=False))
@@ -1242,11 +1274,15 @@ class Renderer:
         """NEEDS YOU (proposal section 4.2, mirrored in floor.js).
 
         One row per item, newest first (the projection orders), each with
-        exactly one action. The action links to the item's source url when
-        the source carries one. An unverified item says so. Checks that
-        could not run are named in the note, so an empty list never reads as
-        "verified nothing to do" when a source was absent. The honesty rule
-        is the projection's: needs_you never invents an item.
+        exactly one reachable action: the source url when there is one, else
+        the place on this page that answers it (a failed run's action opens
+        the replay of its own stream, a PRD sign-off or missing variable
+        jumps to the queue row it blocks, a quiet seat jumps to NOW). An
+        unverified item says so. Checks that could not run are named in the
+        note, and when the list is empty because they did not run, the empty
+        row itself carries the qualification instead of reading as a
+        verified all-clear. The honesty rule is the projection's: needs_you
+        never invents an item.
         """
         check_words = {
             "critic_block": "critic verdicts",
@@ -1258,31 +1294,77 @@ class Renderer:
         }
         items = live.get("needs_you") or []
         meta = live.get("needs_you_meta") or {}
+        queue = live.get("queue") or []
         skipped = [c for c in (meta.get("checks") or []) if c.get("status") == "skipped"]
+
+        def skipped_names() -> str:
+            return ", ".join(check_words.get(c.get("check") or "", c.get("check") or "?")
+                             for c in skipped)
+
         if skipped:
-            names = ", ".join(check_words.get(c.get("check") or "", c.get("check") or "?")
-                              for c in skipped)
             reason = skipped[0].get("reason")
-            note = f"not checked: {esc(names)}" + (f" ({esc(reason)})" if reason else "")
+            note = f"not checked: {esc(skipped_names())}" + (f" ({esc(reason)})" if reason else "")
             note_html = f'<span class="more faint" id="floor-needs-note">{note}</span>'
         else:
             note_html = '<span class="more faint" id="floor-needs-note" hidden></span>'
+
+        def act_href(it: Dict[str, Any]) -> str:
+            src = it.get("source") or {}
+            if src.get("url"):
+                return src["url"]
+            if it.get("type") == "failed_dispatch":
+                return (f"?replay=1&dispatch_id={quote(str(src['dispatch_id']), safe='')}"
+                        if src.get("dispatch_id") else "#floor-failed-card")
+            if it.get("type") == "quiet_seat":
+                return "#floor-now-card"
+            if it.get("type") in ("prd_proposed", "missing_variable"):
+                for q in queue:
+                    bsrc = (q.get("blocked_by") or {}).get("source") or {}
+                    match = (it.get("plan") and q.get("plan_basename") == it.get("plan")) or \
+                        (src.get("file") and bsrc.get("file") == src.get("file"))
+                    if match and q.get("position") is not None:
+                        return f"#floor-queue-row-{q['position']}"
+                return "#floor-queue-card"
+            return "#floor-needs-card"
+
+        def src_cite(it: Dict[str, Any]) -> str:
+            """File sources publish only what the redaction law allows: the
+            checkout name, the path relative to it, and the line."""
+            src = it.get("source") or {}
+            if src.get("kind") == "file" and src.get("file"):
+                at = (f"{src['checkout']}:" if src.get("checkout") else "") + str(src["file"])
+                if src.get("line"):
+                    at += f":{src['line']}"
+                return f' <span class="mono faint">{esc(at)}</span>'
+            return ""
+
         if items:
             rows = []
             for it in items:
-                src = it.get("source") or {}
                 action = esc(it.get("action") or "look")
-                act = (f'<a class="act" href="{esc(src["url"])}">{action}</a>'
-                       if src.get("url") else f'<span class="act">{action}</span>')
+                act = f'<a class="act" href="{esc(act_href(it))}">{action}</a>'
                 unv = it.get("verified") is False
                 rows.append(
                     f'<li class="nrow{" unv" if unv else ""}"><span class="nbody">'
                     + (f'<span class="rname">{esc(it["repo"])}</span> ' if it.get("repo") else "")
                     + esc(it.get("text") or "item without text")
                     + (' <span class="faint">(not verified)</span>' if unv else "")
+                    + src_cite(it)
                     + f"</span>{act}</li>"
                 )
             rows_html = "".join(rows)
+        elif skipped:
+            # A skipped check means "unknown", never "nothing": the empty row
+            # itself says which checks did not run and why.
+            reasons = []
+            for c in skipped:
+                r = c.get("reason")
+                if r and r not in reasons:
+                    reasons.append(r)
+            rows_html = ('<li class="muted">Nothing found in the checks that ran; '
+                         f"{esc(skipped_names())} not checked"
+                         + (f" ({esc('; '.join(reasons))})" if reasons else "")
+                         + ".</li>")
         else:
             rows_html = '<li class="muted">Nothing needs you.</li>'
         return f"""
@@ -1489,9 +1571,12 @@ class Renderer:
         if queue:
             # Repo is the first word of the row; the issue number follows
             # when the plan header names one (issue 72); a blocked reason
-            # renders in place on the dim plan line (Floor v3).
+            # renders in place on the dim plan line (Floor v3). The row id
+            # lets a NEEDS YOU action jump straight to the plan it blocks.
             rows = "".join(
-                f'<li class="qrow{" isblocked" if q.get("blocked") else ""}">'
+                f'<li class="qrow{" isblocked" if q.get("blocked") else ""}"'
+                + (f' id="floor-queue-row-{esc(q["position"])}"' if q.get("position") is not None else "")
+                + '>'
                 f'<span class="qpos mono">{esc(q.get("position"))}</span>'
                 f'<span class="qbody"><span class="qpurpose"><span class="rname">'
                 f'{esc(q.get("repo") or "repo not declared")}</span>'
@@ -1518,12 +1603,15 @@ class Renderer:
     </div>
 """
 
-    def _today_row(self, t: Dict[str, Any]) -> str:
+    def _today_row(self, t: Dict[str, Any], by_branch: Dict[str, str]) -> str:
         """One finished-run row (mirrored in floor.js todayRow).
 
         Failed and aborted wear different pills so a scan of the column
-        tells them apart. Repo is the first word of the row; the PR number
-        follows when one exists for the landing's branch (issue 72).
+        tells them apart. Repo is the first word; the receipt follows
+        (proposal section 4: every number a link to its source). A landed
+        run's PR number links to the PR and carries its title; every run
+        links the replay of its own stream, and its trail when the Almanac
+        join exists.
         """
         word = self._outcome_word(t)
         cls = {"landed": "st st-done", "failed": "st st-fail",
@@ -1532,14 +1620,26 @@ class Renderer:
             f'<span class="mono faint">{esc(b)}</span>' for b in (t.get("branches") or [])
         ) or '<span class="faint">no branch reported</span>'
         pr = t.get("pr")
-        pr_html = (f' <span class="mono">PR #{pr["number"]}</span>'
-                   if isinstance(pr, dict) and isinstance(pr.get("number"), int) else "")
+        pr_html = ""
+        if isinstance(pr, dict) and isinstance(pr.get("number"), int):
+            label = f"PR #{pr['number']}" + (f" · {pr['title']}" if pr.get("title") else "")
+            pr_html = (f' <a class="mono" href="{esc(pr["url"])}">{esc(label)}</a>'
+                       if pr.get("url") else f' <span class="mono">{esc(label)}</span>')
+        receipt = ""
+        branch0 = (t.get("branches") or [""])[0]
+        trail_id = by_branch.get(branch0) if branch0 else None
+        if trail_id:
+            receipt = f'<a href="../trail/{esc(trail_id)}/index.html">trail</a>'
+        if t.get("dispatch_id"):
+            did = quote(str(t["dispatch_id"]), safe="")
+            receipt += (" " if receipt else "") + \
+                f'<a href="?replay=1&amp;dispatch_id={esc(did)}">replay</a>'
         return (
             '<li class="trow">'
             f'<span class="tbody"><span class="tpurpose"><span class="rname">'
             f'{esc(t.get("repo") or "repo not reported")}</span>{pr_html} '
             f'{esc(t.get("purpose") or t.get("plan_basename") or t.get("dispatch_id"))}</span>'
-            f'<span class="tmeta">{branches}</span></span>'
+            f'<span class="tmeta">{branches}{" " + receipt if receipt else ""}</span></span>'
             f'<span class="{cls} tout">{esc(word)}</span>'
             f'<span class="timer mono">{esc(self._fmt_min(t.get("duration_s")))}</span></li>'
         )
@@ -1568,11 +1668,12 @@ class Renderer:
                 f'{esc(meta.get("streams_read") or 0)} stream(s) read'
                 + live_note)
         failed_html = ""
+        by_branch = self._floor_branch_trails()
         if failed_rows:
             failed_html = f"""
     <div class="card mt" id="floor-failed-card">
       <div class="cardhead"><h2>Failed today</h2><span class="more faint">from the event stream</span></div>
-      <ol class="tlist" id="floor-failed-list">{"".join(self._today_row(t) for t in failed_rows)}</ol>
+      <ol class="tlist" id="floor-failed-list">{"".join(self._today_row(t, by_branch) for t in failed_rows)}</ol>
     </div>
 """
         else:
@@ -1586,7 +1687,7 @@ class Renderer:
     <div class="card mt" id="floor-landed-card">
       <div class="cardhead"><h2>Landed today</h2><span class="more faint">from the event stream</span></div>
       <p class="muted" id="floor-today-note">{note}</p>
-      <ol class="tlist" id="floor-today-list">{"".join(self._today_row(t) for t in landed_rows) if landed_rows else '<li class="muted">Nothing has landed today yet.</li>'}</ol>
+      <ol class="tlist" id="floor-today-list">{"".join(self._today_row(t, by_branch) for t in landed_rows) if landed_rows else '<li class="muted">Nothing has landed today yet.</li>'}</ol>
     </div>
 """
         return failed_html + landed_html

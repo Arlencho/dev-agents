@@ -222,6 +222,12 @@ header.site {
   text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint);
 }
 .cardhead .more { font-size: 12px; white-space: nowrap; }
+/* The NEEDS YOU skip note can run long (several check names plus a reason),
+   and a note must never widen the page: it wraps inside its own head. */
+.cardhead .more#floor-needs-note {
+  white-space: normal; text-align: right;
+  min-width: 0; overflow-wrap: anywhere;
+}
 .card h2.sec {
   margin: 14px 0 6px; font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint);
@@ -439,6 +445,21 @@ a.sfig:hover { color: var(--accent); text-decoration: none; }
 /* needs you is red when non-zero; failed is red when non-zero. */
 .sfig.hot { color: var(--bad); }
 .sfig.bad { color: var(--bad); }
+
+/* Strip figures link to their sections, and the sticky header must not eat
+   the heading the reader jumped to: offset every Floor anchor target by the
+   header height. Measured 129 px at 1280 wide, 237 px at 400 wide (the nav
+   and scope chips wrap), so the phone offset is larger. */
+#floor-needs-card, #floor-now-card, #floor-queue-card, #floor-initiatives-card,
+#floor-failed-card, #floor-landed-card, #floor-legacy {
+  scroll-margin-top: 140px;
+}
+@media (max-width: 640px) {
+  #floor-needs-card, #floor-now-card, #floor-queue-card, #floor-initiatives-card,
+  #floor-failed-card, #floor-landed-card, #floor-legacy {
+    scroll-margin-top: 250px;
+  }
+}
 
 .waiting {
   display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
