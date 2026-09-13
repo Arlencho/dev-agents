@@ -1,14 +1,17 @@
-1 running, 0 up next, 0 landed, 0 failed, needs you: not in this projection, last event 3 s ago
+no counts: this projection carries no summary, last event 3 s ago
 
 NEEDS YOU
-  Not in this projection.
+  Nothing needs you.
 
 NOW
-  repo not reported: 1 seat live, 1 dispatch live
+  unknown: 1 seat live, 1 dispatch live
     repo not reported  code-critic  no issue  task line not o...  at work, wave 2  under a minute in
 
 UP NEXT
-  Not in this projection.
+  Nothing armed. The next dispatch is whatever the operator types.
+
+INITIATIVES
+  No open milestone with recent activity is known to this projection.
 
 LANDED today
-  Not in this projection.
+  Nothing has landed today yet.

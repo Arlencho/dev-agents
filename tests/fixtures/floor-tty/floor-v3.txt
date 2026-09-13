@@ -20,6 +20,9 @@ UP NEXT
   2.  olympus-platform  #2800  Assistant Channel W2-C: update_trip, the enforcement matri...  queued
   3.  dev-agents  #72  Floor in the terminal: the same live.json a...  blocked: held by the operator
 
+INITIATIVES
+  No open milestone with recent activity is known to this projection.
+
 FAILED today
   olympus-platform  Assistant Channel W1-D: the security review seat.  failed after 8 min
   olympus-platform  2026-09-13-w1e-hosts.plan  aborted after 2 min

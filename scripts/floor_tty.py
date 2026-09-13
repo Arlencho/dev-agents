@@ -13,7 +13,9 @@ docs/proposals/floor-v3-purpose.md section 4:
     3. NOW grouped by repo, one line per seat: repo, role, issue, task line,
        status sentence, elapsed.
     4. UP NEXT: position, repo, issue, purpose, the blocked reason in place.
-    5. FAILED today, then LANDED today.
+    5. INITIATIVES: repo, milestone, waves landed of planned, open issues,
+       last landed PR, the exit sentence.
+    6. FAILED today, then LANDED today.
 
 Never more than 60 lines, never wider than 100 columns. Refreshes every five
 seconds in place; q quits; --once prints and exits for scripting. Plain text
@@ -24,6 +26,12 @@ event streams, only the projection; a queued plan is only ever queued;
 stale and offline mark every section; a replay carries its watermark on
 every section; no prompt, task body, path or secret is printed (the
 projection publishes none, and this file prints only the fields it names).
+
+The same gate as the page: a file that is not a JSON object with schema
+live/1 is not a projection. It is refused before anything is counted, so the
+terminal can never paint a live Floor from a file the page would drop. A key
+the projection lacks reads as the page reads it: the strip figures need a
+summary, and a missing list is the same empty copy as an empty one.
 """
 
 import argparse
@@ -230,7 +238,9 @@ def fit_row(parts, indent="  ", sep="  ", width=WIDTH, c=None):
 
 
 class Section:
-    """A header, its rows, and a footer that grows when rows are trimmed."""
+    """A header, its rows, and a footer that grows when rows are trimmed. A
+    row is one line, or a list of lines that stand or fall together (a
+    wrapped row): the trim drops whole rows, never a continuation line."""
 
     def __init__(self, header, rows=None, footer_indent="  "):
         self.header = header
@@ -240,7 +250,8 @@ class Section:
 
     def lines(self):
         out = list(self.header) if isinstance(self.header, list) else [self.header]
-        out.extend(self.rows)
+        for r in self.rows:
+            out.extend(r if isinstance(r, list) else [r])
         if self.hidden:
             out.append(self.footer_indent + "... and %d more not shown" % self.hidden)
         return out
@@ -287,23 +298,27 @@ def status_lines(d, state, age, c):
         lead = "Idle: no event stream has been seen. Run a dispatch to put motion on the Floor."
 
     degraded = state in ("stale", "offline")
-    running = summary.get("running") if summary and isinstance(summary.get("running"), int) else sum(
-        1 for s in d.get("seats") or [] if s.get("status") == "running")
-    queued = summary.get("queued") if summary and isinstance(summary.get("queued"), int) else len(d.get("queue") or [])
-    figs = ["%d running%s" % (running, " at last event" if degraded else ""), "%d up next" % queued,
-            "%d landed" % landed,
-            ("%d failed, %d aborted" % (failed, aborted)) if aborted else "%d failed" % failed]
-    if failed:
-        figs[3] = c(figs[3], "red")
-    if "needs_you" in d:
-        needs = summary.get("needs_you") if summary and isinstance(summary.get("needs_you"), int) else len(d.get("needs_you") or [])
+    # The figures are the page's strip: each one shows only when the
+    # projection carries a summary, and running and up next only when the
+    # summary states them. Without a summary the page hides every figure,
+    # so the terminal prints none and says why, never a zero.
+    figs = []
+    if summary is None:
+        figs.append("no counts: this projection carries no summary")
+    else:
+        if isinstance(summary.get("running"), int):
+            figs.append("%d running%s" % (summary["running"], " at last event" if degraded else ""))
+        if isinstance(summary.get("queued"), int):
+            figs.append("%d up next" % summary["queued"])
+        figs.append("%d landed" % landed)
+        fig = ("%d failed, %d aborted" % (failed, aborted)) if aborted else "%d failed" % failed
+        figs.append(c(fig, "red") if failed else fig)
+        needs = summary["needs_you"] if isinstance(summary.get("needs_you"), int) else len(d.get("needs_you") or [])
         skipped = sum(1 for k in (d.get("needs_you_meta") or {}).get("checks") or [] if k.get("status") == "skipped")
         fig = "needs you: %d" % needs
         if skipped:
             fig += " (%s skipped)" % plural(skipped, "check")
         figs.append(c(fig, "red") if needs else fig)
-    else:
-        figs.append("needs you: not in this projection")
     if age is not None:
         figs.append("last event " + fmt_ago(age))
     counts = ", ".join(figs)
@@ -331,10 +346,26 @@ def needs_ref(item):
     if kind == "stream":
         return "run %s" % src.get("dispatch_id", "?")
     if kind == "file":
-        return "%s line %s" % (src.get("file", "file"), src.get("line", "?"))
+        return file_cite(src)
     if item.get("pr"):
         return "PR %s" % item["pr"]
     return ""
+
+
+def file_cite(src):
+    """The file and line, relative to the checkout, or nothing. An absolute
+    path, a home path or a path that climbs out of the checkout is not a
+    citation the terminal may print (section 6), so the action stands alone."""
+    path = src.get("file")
+    if not isinstance(path, str) or not path.strip():
+        return ""
+    path = path.strip()
+    if os.path.isabs(path) or path.startswith("~") or ".." in path.split("/") or "\\" in path:
+        return ""
+    if path.startswith("./"):
+        path = path[2:]
+    line = src.get("line")
+    return path + (" line %s" % line if line is not None else "")
 
 
 def needs_section(d, state, c):
@@ -342,11 +373,9 @@ def needs_section(d, state, c):
     header = c("NEEDS YOU", "bold") + mark
     if state == "replay":
         return Section(header, ["  Not shown on a replay: the past cannot ask for anything."])
-    items = d.get("needs_you")
+    items = d.get("needs_you") or []
     meta = d.get("needs_you_meta") or {}
     skipped = [k for k in meta.get("checks") or [] if k.get("status") == "skipped"]
-    if items is None:
-        return Section(header, ["  Not in this projection."])
     rows = []
     for it in items:
         text = it.get("text") or it.get("type") or "item"
@@ -409,7 +438,7 @@ def now_section(d, state, now, c):
     meta = {r.get("repo"): r for r in d.get("repos") or [] if r.get("repo")}
     groups = {}
     for s in seats:
-        groups.setdefault(s.get("repo") or "repo not reported", []).append(s)
+        groups.setdefault(s.get("repo") or "unknown", []).append(s)
 
     def key(repo):
         m = meta.get(repo) or {}
@@ -437,7 +466,7 @@ def now_section(d, state, now, c):
             sentence, elapsed = seat_status(s, state, now, d.get("last_event_ts"))
             role = (s.get("now") or {}).get("role") if isinstance(s.get("now"), dict) else None
             role = role or s.get("agent") or "seat"
-            rows.append(fit_row([repo, role, (iss, True, None, 12), (task, True, None, 28),
+            rows.append(fit_row([s.get("repo") or "repo not reported", role, (iss, True, None, 12), (task, True, None, 28),
                                  (sentence, True, "yellow" if s.get("quiet") is True else None, 18), elapsed],
                                 indent="    ", c=c))
     return Section(header, rows)
@@ -448,11 +477,9 @@ def queue_section(d, state, c):
     header = c("UP NEXT", "bold") + mark
     if state == "replay":
         return Section(header, ["  Not shown on a replay: a historical scrub carries no queue."])
-    queue = d.get("queue")
-    if queue is None:
-        return Section(header, ["  Not in this projection."])
+    queue = d.get("queue") or []
     if not queue:
-        return Section(header, ["  Nothing queued."])
+        return Section(header, ["  Nothing armed. The next dispatch is whatever the operator types."])
     rows = []
     for q in queue:
         issue = q.get("issue") if isinstance(q.get("issue"), dict) else {}
@@ -461,8 +488,53 @@ def queue_section(d, state, c):
         purpose = q.get("purpose") or q.get("plan_basename") or "no purpose declared"
         blocked = q.get("blocked")
         tail = ("blocked: " + str(blocked), True, "yellow", 30) if blocked else "queued"
-        rows.append(fit_row([pos, q.get("repo") or "repo not reported", (iss, True, None, 12),
+        rows.append(fit_row([pos, q.get("repo") or "repo not declared", (iss, True, None, 12),
                              (purpose, True, None, 30), tail], c=c))
+    return Section(header, rows)
+
+
+def initiative_facts(r):
+    """The facts of one row in the page's words: waves landed of planned,
+    open issues, last landed PR, the exit sentence."""
+    bits = []
+    waves = r.get("waves") if isinstance(r.get("waves"), dict) else {}
+    if isinstance(waves.get("planned"), int):
+        bits.append("wave %d of %d" % (waves.get("landed") or 0, waves["planned"]))
+    if isinstance(r.get("open_issues"), int):
+        bits.append(plural(r["open_issues"], "open issue"))
+    ll = r.get("last_landed") if isinstance(r.get("last_landed"), dict) else {}
+    if isinstance(ll.get("number"), int):
+        bits.append("last landed #%d" % ll["number"] + (" " + ll["title"] if ll.get("title") else ""))
+    if r.get("exit"):
+        bits.append("exit: " + str(r["exit"]))
+    if r.get("lookup") == "skipped":
+        bits.append("streams and queue alone, milestone not verified"
+                    + (" (%s)" % r["reason"] if r.get("reason") else ""))
+    elif r.get("exit_lookup") == "skipped":
+        bits.append("exit sentence not verified")
+    return bits
+
+
+def initiatives_section(d, state, c):
+    """Section 4.5: one row per open milestone with recent activity, the
+    same rows and the same empty copy as the page. The row flows like the
+    page's (repo, title, then the facts) and wraps with a hanging indent
+    rather than cutting the exit sentence, which is the answer to question 5.
+    A row is never dropped; only the line budget may trim, and then the
+    footer says how many."""
+    header = c("INITIATIVES", "bold") + section_mark(state)
+    rows = []
+    for r in d.get("initiatives") or []:
+        if not isinstance(r, dict):
+            continue
+        facts = initiative_facts(r)
+        text = norm(r.get("repo") or "repo not reported") + "  " + norm(r.get("title") or "milestone")
+        if facts:
+            text += ": " + ", ".join(facts)
+        lines = wrap(text, WIDTH - 2, indent="  ")
+        rows.append([lines[0]] + ["  " + line for line in lines[1:]])
+    if not rows:
+        rows = ["  No open milestone with recent activity is known to this projection."]
     return Section(header, rows)
 
 
@@ -484,9 +556,7 @@ def today_sections(d, state, c):
     mark = section_mark(state)
     if state == "replay":
         return [Section(c("LANDED today", "bold") + mark, ["  Not shown on a replay: a historical scrub carries no day."])]
-    today = d.get("today")
-    if today is None:
-        return [Section(c("LANDED today", "bold") + mark, ["  Not in this projection."])]
+    today = d.get("today") or []
     failed = [t for t in today if outcome_word(t) in ("failed", "aborted")]
     landed = [t for t in today if outcome_word(t) == "landed"]
     out = []
@@ -513,7 +583,8 @@ def render(d, now=None, colour=False, footer=None):
     c = make_painter(colour)
     state, age = live_state(d, now)
     head = status_lines(d, state, age, c)
-    sections = [needs_section(d, state, c), now_section(d, state, now, c), queue_section(d, state, c)]
+    sections = [needs_section(d, state, c), now_section(d, state, now, c), queue_section(d, state, c),
+                initiatives_section(d, state, c)]
     sections.extend(today_sections(d, state, c))
     budget = LINES - len(head) - len(sections) - (1 if footer else 0)  # blank line before each section
 
@@ -561,9 +632,27 @@ def display_path(path):
     return rel
 
 
+class NotAProjection(ValueError):
+    """The file parsed, but it is not a live/1 projection."""
+
+
 def load(path):
+    """The projection, or an exception. The gate is the page's
+    (experience_build._load_live and floor.js renderAll): anything that is
+    not a JSON object with schema live/1 is refused, never rendered."""
     with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+        d = json.load(fh)
+    if not isinstance(d, dict):
+        kind = {list: "array", str: "string", bool: "boolean", int: "number", float: "number"}.get(type(d), "null")
+        raise NotAProjection("not a live/1 projection (a JSON %s, not an object)" % kind)
+    if d.get("schema") != "live/1":
+        raise NotAProjection("not a live/1 projection (schema %s)" % (json.dumps(d.get("schema")) if "schema" in d else "missing"))
+    return d
+
+
+def why(exc):
+    """The one-line reason a file could not be shown."""
+    return str(exc) if isinstance(exc, NotAProjection) else exc.__class__.__name__
 
 
 def read_key(timeout):
@@ -598,8 +687,10 @@ def watch(path, interval, colour, now_override):
                 lines = render(d, now_override, colour, footer=footer + ", " + shown)
             except FileNotFoundError:
                 lines = ["No %s yet. Run make desk-live (or make desk-live-once) to write it." % shown, footer]
-            except (OSError, ValueError) as exc:
-                lines = ["Could not read %s: %s" % (shown, exc.__class__.__name__), footer]
+            except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
+                # Every frame starts from a cleared screen, so a refused file
+                # leaves no count of an earlier frame behind.
+                lines = ["Could not read %s: %s" % (shown, why(exc)), footer]
             sys.stdout.write("\x1b[H\x1b[2J" + "\n".join(lines) + "\n")
             sys.stdout.flush()
             if tty and old is not None:
@@ -639,7 +730,7 @@ def main(argv=None):
                              % display_path(args.file))
             return 2
         except (OSError, ValueError) as exc:
-            sys.stderr.write("floor_tty: could not read %s: %s\n" % (display_path(args.file), exc.__class__.__name__))
+            sys.stderr.write("floor_tty: could not read %s: %s\n" % (display_path(args.file), why(exc)))
             return 2
         sys.stdout.write("\n".join(render(d, now_override, args.colour)) + "\n")
         return 0
