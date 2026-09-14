@@ -1,0 +1,8 @@
+# Fleet optimization W2: CI fixture fix only. Critic round 2 is SAFE; CI is red because the detached-dispatch test fixture plans carry no TIER header. No third critic round (Tier C cap, orchestrator decision on PR 99). 2026-09-14
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-14-w2-risk-tiers-ci.plan --detach --retries 1
+# FIX-ROUND: 2026-09-14-w2-risk-tiers.plan
+# TIER: C
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | web-frontend | On branch feat/w2-risk-tiers (PR 99), rebase onto origin/main first. In tests/run-detached-dispatch-tests.sh the fixture plans written around line 92 (alpha, beta, held and any other plan the test writes) have no TIER header, so the new TIER check refuses them and the checks child pid and child leads its own process group fail; add a TIER C header line to every fixture plan that test writes, and search every other file under tests for plan fixtures that dispatch.sh reads without a TIER header and add it there too. Never weaken the check. Run only tests/run-detached-dispatch-tests.sh, tests/run-worktree-tests.sh and tests/run-plan-check-tests.sh; nothing else is run. VERIFY: those three files with real exit codes in the PR body under a CI heading. HOUSE STYLE: no long dash anywhere, no AI tool or vendor name, no Co-Authored-By trailer. Commit and push. | feat/w2-risk-tiers
