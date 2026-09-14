@@ -89,6 +89,7 @@ plan() { # <name> <purpose> <branch...>
     local name="$1" purpose="$2"; shift 2
     {
         echo "# $purpose"
+        echo "# TIER: C"
         echo "# DISPATCH: ./scripts/dispatch.sh $ORIGIN wave-plans/$name.plan --auto --retries 0 --skip-auth-preflight"
         local w=1 b
         for b in "$@"; do echo "$w | devops | do the thing | $b"; w=$((w + 1)); done
@@ -225,7 +226,7 @@ echo ""
 echo "== queue runner: starts one queued plan, not a second while it runs =="
 rm -f "$QUEUE_FILE"
 plan delta "Delta: one seat." feat/delta
-printf '# Held: no DISPATCH line on purpose\n1 | devops | do the thing | feat/held\n' > "$FLEET/wave-plans/held.plan"
+printf '# Held: no DISPATCH line on purpose\n# TIER: C\n1 | devops | do the thing | feat/held\n' > "$FLEET/wave-plans/held.plan"
 "$QUEUE" add wave-plans/held.plan other >/dev/null
 "$QUEUE" block wave-plans/held.plan "waiting on a decision" >/dev/null
 "$QUEUE" add wave-plans/gamma.plan product >/dev/null

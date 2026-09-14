@@ -163,6 +163,7 @@ WAVE | AGENT | TASK_DESCRIPTION | BRANCH_NAME
 - **Branch** is optional last field only if it looks like a branch (`contains /`, no spaces); else auto-generated.
 - **Producer + critic same branch → different waves.**
 - **Fix rounds run targeted tests only.** A fix round (a header or task naming a round number above 1, a `FIX-ROUND:` header, or a `-fixN` plan suffix) must VERIFY only the test file or test names that cover the code touched, plus the failing tests the critic wrote. `dispatch.sh` refuses to start a fix-round plan whose task line carries a full-suite VERIFY (`make test`, the whole tests directory runner, or the words "full suite") unless the line also says "final round"; the stop message names the task line and the rule. The full suite runs once, in the final round before merge, or in CI. Owner override: a header line `# ALLOW-FULL-SUITE`.
+- **Every plan declares a risk tier.** A header line `# TIER: A`, `# TIER: B` or `# TIER: C` (tier table: [`docs/risk-tiers.md`](docs/risk-tiers.md)). `dispatch.sh` refuses to start a plan without one, the stop message names the rule, and the dispatch banner names the tier. Owner override: a header line `# ALLOW-NO-TIER`.
 - Lines starting with `#` and blank lines are ignored.
 
 Full grammar: [`docs/plan-file-format.md`](docs/plan-file-format.md).

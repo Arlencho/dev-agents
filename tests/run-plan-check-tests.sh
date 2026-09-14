@@ -278,5 +278,80 @@ gate "$SANDBOX/fix-split-full-suite.plan"
 [ "$GATE_RC" -ne 0 ]; checkf "a 'full suite' split across lines is refused" $?
 
 echo ""
+echo "== risk-tier gate in scripts/dispatch.sh =="
+TIER_BLOCK=$(sed -n '/# ---- tier-gate:begin/,/# ---- tier-gate:end/p' "$DISPATCH")
+if [ -z "$TIER_BLOCK" ]; then
+    echo "  FAIL could not extract the tier-gate block from scripts/dispatch.sh"
+    exit 1
+fi
+
+TIER_HARNESS="$SANDBOX/tier-harness.sh"
+{
+    echo '#!/bin/bash'
+    echo 'set -uo pipefail'
+    echo 'RED= ; GREEN= ; YELLOW= ; BOLD= ; NC='
+    printf '%s\n' "$TIER_BLOCK"
+    cat <<'EOF'
+tier_gate "$1"
+EOF
+} > "$TIER_HARNESS"
+chmod +x "$TIER_HARNESS"
+
+tgate() { # <plan file> -> sets GATE_RC and GATE_OUT
+    GATE_OUT=$("$TIER_HARNESS" "$1" 2>&1)
+    GATE_RC=$?
+}
+
+# A plan with no TIER header is refused, and the stop names the rule.
+cat > "$SANDBOX/no-tier.plan" <<'EOF'
+# Payments W3, round 1
+1 | go-backend | build the refund handler, VERIFY: tests/run-plan-check-tests.sh | feat/payments-w3
+EOF
+tgate "$SANDBOX/no-tier.plan"
+[ "$GATE_RC" -ne 0 ]; checkf "a plan without a TIER header is refused" $?
+printf '%s' "$GATE_OUT" | grep -qi "rule: every plan declares its risk tier"
+checkf "the stop message names the rule" $?
+
+# A plan with TIER: C passes, and the banner names the tier.
+cat > "$SANDBOX/tier-c.plan" <<'EOF'
+# Fleet tooling W5, round 1
+# TIER: C
+1 | devops | patch the notify hook, VERIFY: tests/run-plan-check-tests.sh | feat/notify-hook
+EOF
+tgate "$SANDBOX/tier-c.plan"
+[ "$GATE_RC" -eq 0 ]; checkf "a plan with TIER: C passes" $?
+printf '%s' "$GATE_OUT" | grep -qE 'Plan tier:.*C'
+checkf "the banner names the tier" $?
+
+# Tiers A and B pass the same way.
+for t in A B; do
+    cat > "$SANDBOX/tier-$t.plan" <<EOF
+# Tier $t plan
+# TIER: $t
+1 | go-backend | do the work, VERIFY: tests/run-plan-check-tests.sh | feat/tier-$t
+EOF
+    tgate "$SANDBOX/tier-$t.plan"
+    [ "$GATE_RC" -eq 0 ]; checkf "a plan with TIER: $t passes" $?
+done
+
+# A TIER header with a value outside A, B, C is refused.
+cat > "$SANDBOX/tier-x.plan" <<'EOF'
+# Bad tier plan
+# TIER: X
+1 | devops | do the work | feat/tier-x
+EOF
+tgate "$SANDBOX/tier-x.plan"
+[ "$GATE_RC" -ne 0 ]; checkf "a TIER value outside A, B, C is refused" $?
+
+# The owner override lets a plan dispatch without a TIER header.
+cat > "$SANDBOX/allow-no-tier.plan" <<'EOF'
+# Throwaway experiment
+# ALLOW-NO-TIER
+1 | devops | try the thing, VERIFY: tests/run-plan-check-tests.sh | feat/throwaway
+EOF
+tgate "$SANDBOX/allow-no-tier.plan"
+[ "$GATE_RC" -eq 0 ]; checkf "a plan with ALLOW-NO-TIER passes" $?
+
+echo ""
 echo "== $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]
