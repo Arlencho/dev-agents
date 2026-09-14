@@ -55,6 +55,11 @@
 #      vm_stat raw free sits at 23) and does not hold; memory_pressure absent
 #      falls back to the vm_stat sum; a memory_pressure answer with no
 #      percentage line is an unreadable sensor
+#  13. runner truth, round 2: on the tracking issue a comment names this run
+#      only by 'PR N' (a bare '#N' is an issue reference, and a body naming
+#      any 'PR #M' this PR is not among covers nobody here) or by the branch
+#      as a whole slash-token, never as a substring of a longer slug; the
+#      rule is the one desk_live.critic_record already applies
 #
 # Also: --dry-run writes nothing, and the verdict parser is imported from
 # scripts/desk_live.py, never re-implemented.
@@ -914,6 +919,45 @@ printf '%s\n' "$out" | grep -q "memory guard cleared, starts resume (free 47% of
 printf 'no numbers here at all\n' > "$FAKE_MEM_PRESSURE"
 check "12e a memory_pressure answer with no percentage line is an unreadable sensor" "unreadable" "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import queue_loop as q; m, why = q.read_memory(); print("unreadable" if m is None else "parsed %s" % round(m["free_pct"]))' "$PYLIB")"
 rm -f "$FAKE_MEM_PRESSURE"
+
+echo ""
+echo "== 13. runner truth round 2: whole-token branch, PR-ref rule =="
+
+# 13a. a BLOCK for another PR that mentions this run's branch only as a
+# substring of a longer slug covers nobody; the this-PR SAFE beside it lands
+cp "$FIX/issue-2340-branch-substring.json" "$GH_DIR/issue-2340.json"
+ended_run run-oly-3 oly stream-alpha-landed.jsonl
+before_land13=$(count '^2851 LAND_REPO=acme/product' "$LAND_LOG")
+tick >/dev/null
+check "13a other-PR BLOCK on feat/alpha-fix does not stop the this-PR SAFE" "landed" "$(cut -f1 "$RUNS/run-oly-3.loop")"
+check "13a land.sh called once more for PR 2851" "$((before_land13 + 1))" "$(count '^2851 LAND_REPO=acme/product' "$LAND_LOG")"
+
+# 13b. the same BLOCK alone leaves the seat silent and queues no fix round
+cp "$FIX/issue-2340-branch-substring-only.json" "$GH_DIR/issue-2340.json"
+ended_run run-oly-4 oly stream-alpha-landed.jsonl
+tick >/dev/null
+check "13b the substring BLOCK alone: the seat is silent" "critic_silent" "$(stop_field run-oly-4 kind)"
+check "13b the sentence names the missing heading" "0 of 1 critic seats posted a verdict since the run started; missing: CRITIC OLY" "$(stop_field run-oly-4 sentence)"
+check_true "13b no fix plan was queued" test ! -f "$FLEET/wave-plans/oly-fix1.plan"
+
+# 13c. a bare #2851 beside a PR #997 is an issue reference, not this PR
+cp "$FIX/issue-2340-bare-hash.json" "$GH_DIR/issue-2340.json"
+ended_run run-oly-5 oly stream-alpha-landed.jsonl
+tick >/dev/null
+check "13c bare #2851 beside PR #997: the seat is silent" "critic_silent" "$(stop_field run-oly-5 kind)"
+check_true "13c no fix plan was queued" test ! -f "$FLEET/wave-plans/oly-fix1.plan"
+
+# 13d. the naming rule itself, edge by edge
+check "13d names_run_pr: whole-token branch and PR-ref rule" "ok" "$(python3 -c '
+import sys; sys.path.insert(0, sys.argv[1]); import queue_loop as q
+assert not q.names_run_pr("CRITIC OLY: BLOCK-FIX\nreviews PR #997 on feat/alpha-fix", 2851, "feat/alpha")
+assert not q.names_run_pr("CRITIC OLY\non feat/alpha-fix", 2851, "feat/alpha")
+assert not q.names_run_pr("CRITIC OLY: BLOCK-FIX\nreviews PR #997; blocked on #2851", 2851, "feat/alpha")
+assert not q.names_run_pr("CRITIC OLY\nsee #2851", 2851, "feat/alpha")
+assert q.names_run_pr("CRITIC OLY\non feat/alpha", 2851, "feat/alpha")
+assert q.names_run_pr("CRITIC OLY: SAFE-TO-MERGE\nVerdict for PR #2851.", 2851, "feat/alpha")
+assert q.names_run_pr("CRITIC OLY\nPR #997 and PR 2851 both", 2851, "feat/alpha")
+print("ok")' "$PYLIB")"
 
 echo ""
 echo "== $pass passed, $fail failed =="

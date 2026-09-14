@@ -32,8 +32,8 @@ the bookkeeping around it, in four subcommands the runner calls in order:
               plan may name where its critics post with a header line such
               as '# VERDICTS: owner/repo#2340'; then the comments of that
               issue are read too, keeping only comments at or after the run
-              start whose body names the PR number or the branch. No header
-              keeps the PR-only reading.
+              start whose body names the PR as 'PR N' or the branch as a
+              whole slash-token. No header keeps the PR-only reading.
               Also clears stops whose PR has since merged or closed.
   guard       read the system-wide free percentage the way memory_pressure
               reports it (free plus inactive plus speculative plus purgeable
@@ -251,18 +251,23 @@ def verdicts_issue(value, slug):
 
 
 def names_run_pr(body, number, branch):
-    """True when a comment body names the run's PR ('#2851', 'PR 2851') or its
-    branch. A comment on the tracking issue that speaks of another PR covers
-    nobody on this run."""
+    """True when a comment body names the run's PR ('PR 2851', 'PR #2851') or
+    its branch as a whole slash-token. A bare '#N' is an issue reference, not
+    a PR number, and when the body names any 'PR #M' this PR is not among,
+    the comment speaks of another PR and covers nobody on this run. The PR
+    numbers and the slash-token rule are the ones desk_live.critic_record
+    already applies (PR_REF_RE, _slugs)."""
     text = str(body or "")
     if number:
-        for match in re.finditer(r"#(\d+)", text):
-            if int(match.group(1)) == int(number):
-                return True
-        if re.search(r"\bPR\s+%d\b" % int(number), text, re.IGNORECASE):
+        prs = {int(n) for n in desk_live.PR_REF_RE.findall(text)}
+        if int(number) in prs:
             return True
-    if branch and str(branch) in text:
-        return True
+        if prs:
+            return False
+    if branch:
+        slugs = {tok.strip(".,;:()'\"`") for tok in text.split() if "/" in tok}
+        if str(branch) in slugs:
+            return True
     return False
 
 
