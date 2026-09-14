@@ -10,7 +10,7 @@
 # Owner multi-vendor seats (pair with routing.yaml model_routing):
 #   producers     → grok + CLI default (routing trial 2026-09-13, failover kimi)
 #   web-frontend  → kimi + K3 (CLI default, failover grok)
-#   critics       → claude + claude-fable-5-1 (failover grok)
+#   critics       → claude + claude-opus-5 (failover grok)
 #   plan-critic   → grok + CLI default
 #   devops-critic → grok + CLI default (failover kimi, stays non-Anthropic)
 #   trust seats (security-reviewer, cto, orchestrator, retro) → claude

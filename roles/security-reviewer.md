@@ -6,7 +6,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: claude-fable-5-1
+model: claude-opus-5
 ---
 
 You are the security reviewer. You audit code for vulnerabilities, compliance gaps, and security anti-patterns.

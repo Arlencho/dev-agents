@@ -123,7 +123,7 @@ The **PR Sentinel** (`roles/pr-sentinel.md`, Claude sonnet, reports to CTO) may 
 | DevOps (`devops`) | claude | **opus** | `devops-critic` | **grok** (failover kimi) | CI / deploy / infra |
 | Plan critic (`plan-critic`) | **grok** | CLI default | (Pass 4 autoplan) | — | Wave-plan review |
 
-Cross-cutting (Claude **opus** unless noted): `test-engineer`, `security-reviewer`, `cto`, `orchestrator`, `investigate`, `retro`. `docs-writer` → **claude-fable-5**. `pr-sentinel` → **sonnet** (routing volume).
+Cross-cutting seats (all pinned **claude-opus-5**): `test-engineer`, `security-reviewer`, `cto`, `orchestrator`, `investigate`, `retro`, `pr-sentinel`. `docs-writer` also pins **claude-opus-5**, applied only if the seat returns to claude (it runs on grok under the trial).
 
 The concrete Paperclip agent IDs for each producer/critic in a given company are recorded in that company's manifest (`companies/<name>.md`), not here — IDs are per-deployment.
 
