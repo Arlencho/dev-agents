@@ -41,6 +41,10 @@ Free-form prose is REJECTED.
 ## Absorbed checks (perf + maintainability, lean-roster)
 Performance: N+1 in handlers/services (a query per loop iteration), unbounded result sets, oversized payloads. Maintainability: functions over ~50 lines or cyclomatic complexity over ~10, nesting deeper than 3 (use early returns), more than 5 params (use a struct), unclear names, copy-paste duplication. Cite `file:line`.
 
+## Review rounds above 1: targeted fixtures only
+
+In a review round above 1, re-run only the fixtures of the findings being closed plus one regression check you name. Do not re-run every fixture from earlier rounds unless the diff touches their code.
+
 ## Verdict (fleet rule, identical in every critic charter)
 
 The first line of every review comment carries the word CRITIC and exactly one verdict word, after a colon or closing the line (`CRITIC <seat> ROUND <n>: <verdict>`). The queue runner reads that line by machine. A verdict quoted mid-sentence, two verdict words on the line, or no verdict at all counts as silence and becomes a stop for a person.

@@ -471,6 +471,84 @@ if [ ${#TASKS[@]} -eq 0 ]; then
     exit 0
 fi
 
+# --------------------------------------------------
+# Fix-round gate: no full-suite VERIFY in a fix round
+# --------------------------------------------------
+# ---- fix-round-gate:begin (tests/run-plan-check-tests.sh reads this block) ----
+# Fleet rule (stated in every producer and critic charter): a fix round runs
+# only the tests that cover the code it touched plus the critic's failing
+# tests; the full suite runs once, in the final round before merge, or in CI.
+# This gate is the mechanical half: it refuses to start a fix-round dispatch
+# whose plan still asks a seat for the full suite.
+#
+# A plan is a fix round when any of these hold:
+#   - the plan file's basename carries a fix suffix (w2-fix1.plan)
+#   - a header line opens with FIX-ROUND: (the queue runner writes these)
+#   - the header or a task line names a round number above 1
+# A task line carries a full-suite VERIFY when it says `make test` (any
+# case), names the whole tests directory runner (a tests/ glob), or says
+# "full suite", unless the same line also says "final round". The three
+# phrases are also matched against the joined task text (newlines and
+# backslash continuations collapsed), so a VERIFY split across lines is
+# still caught.
+# Override: a header line opening with ALLOW-FULL-SUITE (owner decision).
+fix_round_plan_p() { # <plan file> -> 0 when the plan is a fix round
+    local plan="$1"
+    case "$(basename "$plan")" in
+        *-fix[0-9]*) return 0 ;;
+    esac
+    [ -f "$plan" ] || return 1
+    grep -qiE '^[[:space:]]*#[[:space:]]*FIX-ROUND:' "$plan" && return 0
+    grep -qiE '(^|[^a-z])round[[:space:]:#-]*([2-9]|[1-9][0-9])([^0-9]|$)' "$plan" && return 0
+    return 1
+}
+
+fix_round_full_suite_verify_p() { # <task line> -> 0 when the line asks for the full suite
+    local line="$1"
+    printf '%s\n' "$line" | grep -qiE 'final[[:space:]-]*round' && return 1
+    printf '%s\n' "$line" | grep -qiE '(^|[^A-Za-z0-9_-])make[[:space:]]+test([^A-Za-z0-9_-]|$)' && return 0
+    printf '%s\n' "$line" | grep -qE 'tests/[^[:space:]]*\*' && return 0
+    printf '%s\n' "$line" | grep -qiE 'full[[:space:]-]*suite' && return 0
+    return 1
+}
+
+fix_round_gate() { # <plan file> <task line>... -> 1 (refused) when a fix round asks for the full suite
+    local plan="$1"; shift
+    fix_round_plan_p "$plan" || return 0
+    if [ -f "$plan" ] && grep -qE '^[[:space:]]*#[[:space:]]*ALLOW-FULL-SUITE([^A-Za-z0-9_-]|$)' "$plan"; then
+        echo -e "${YELLOW}Fix round: ALLOW-FULL-SUITE header set; full-suite VERIFY lines allowed (owner override).${NC}"
+        return 0
+    fi
+    local line
+    for line in "$@"; do
+        if fix_round_full_suite_verify_p "$line"; then
+            echo -e "${RED}ERROR: fix round refused: a task line asks for the full test suite.${NC}" >&2
+            echo -e "  task line: $line" >&2
+            echo -e "  rule: in a fix round, run only the test file or test names that cover the code you touched, plus the failing tests the critic wrote; the full suite runs once, in the final round before merge, or in CI." >&2
+            echo -e "  final round? say 'final round' on the task line. Owner override: add a header line '# ALLOW-FULL-SUITE'." >&2
+            return 1
+        fi
+    done
+    # Per-line matching misses a VERIFY split across lines; re-check the three
+    # phrases against the joined task text with newlines and trailing
+    # backslash continuations collapsed.
+    local joined
+    joined=$(printf '%s\n' "$@" | sed 's/[[:space:]]*\\[[:space:]]*$//' | tr '\n' ' ')
+    if [ -n "$joined" ] && fix_round_full_suite_verify_p "$joined"; then
+        echo -e "${RED}ERROR: fix round refused: a task line asks for the full test suite.${NC}" >&2
+        echo -e "  the full-suite phrase spans a line break: $joined" >&2
+        echo -e "  rule: in a fix round, run only the test file or test names that cover the code you touched, plus the failing tests the critic wrote; the full suite runs once, in the final round before merge, or in CI." >&2
+        echo -e "  final round? say 'final round' on the task line. Owner override: add a header line '# ALLOW-FULL-SUITE'." >&2
+        return 1
+    fi
+    return 0
+}
+# ---- fix-round-gate:end ----
+
+if ! fix_round_gate "$PLAN_SOURCE" ${TASKS[@]+"${TASKS[@]}"}; then
+    exit 1
+fi
+
 echo "Tasks to dispatch: ${#TASKS[@]}"
 echo ""
 

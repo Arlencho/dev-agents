@@ -190,6 +190,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch
 	@echo "== critic verdict rule (one block in every critic charter) =="
 	@./tests/run-critic-verdict-tests.sh
 	@echo ""
+	@echo "== fix-round plan check (seat rule blocks + dispatch gate) =="
+	@./tests/run-plan-check-tests.sh
+	@echo ""
 	@echo "All test suites passed."
 
 paperclip-up: ## Start local Paperclip (idempotent — installs first run, starts subsequently)

@@ -42,6 +42,10 @@ Free-form prose is REJECTED.
 Migrations: every `up` has a real `down` that reverses it (not a no-op) and is safe on partial state. Auto-block irreversible ops without an explicit, reviewed rollback: `DROP TABLE` / `DROP COLUMN` / `TRUNCATE`, lossy `ALTER TYPE`, table/column rename without a compat window. Flag long-lock operations on large tables (non-concurrent index builds, rewrites).
 Performance: N+1 query patterns, missing indexes on WHERE / JOIN / ORDER BY columns for large tables, and missing composite indexes for multi-column predicates.
 
+## Review rounds above 1: targeted fixtures only
+
+In a review round above 1, re-run only the fixtures of the findings being closed plus one regression check you name. Do not re-run every fixture from earlier rounds unless the diff touches their code.
+
 ## Verdict (fleet rule, identical in every critic charter)
 
 The first line of every review comment carries the word CRITIC and exactly one verdict word, after a colon or closing the line (`CRITIC <seat> ROUND <n>: <verdict>`). The queue runner reads that line by machine. A verdict quoted mid-sentence, two verdict words on the line, or no verdict at all counts as silence and becomes a stop for a person.

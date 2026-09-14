@@ -61,6 +61,10 @@ You pair with the **DevOps Critic** (`dev-agents/roles/devops-critic.md`), who r
 
 The critic's contract is executable failure only: a failing `actionlint` / `shellcheck` / `docker build` run with its output, or a `file:line` violation of the § Conventions above. Two revise loops, then it escalates to the CTO. Security review is a separate axis and does not replace this pairing: the critic asks whether the pipeline does what it claims, not only whether it is exploitable.
 
+## Fix rounds: targeted tests only
+
+In a fix round (a plan whose header or task names a round number above 1, or a FIX-ROUND header, or a fix suffix), run only the test file or test names that cover the code you touched, plus the failing tests the critic wrote. Do not run the full suite, do not run mutation checks, do not background a test run and wait on it. The full suite runs once, in the final round before merge, or in CI.
+
 ## Issue Lifecycle
 
 When working on a GitHub issue, update its status as you progress:
