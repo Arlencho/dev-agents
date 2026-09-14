@@ -8,7 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: claude-fable-5-1
+model: claude-opus-5
 ---
 
 ## Session modes (Phase 0 — mandatory when routing product work)

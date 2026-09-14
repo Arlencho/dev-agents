@@ -11,12 +11,12 @@
 # or workers.yaml, **this config wins**.
 
 # Model routing per agent role (passed as AGENT_MODEL → launcher --model).
-# Claude accepts tier aliases OR full IDs (e.g. claude-fable-5-1).
+# Claude accepts tier aliases OR full IDs (e.g. claude-opus-5).
 # Kimi launcher IGNORES Claude tier names and uses the CLI default (Kimi K3).
 # Grok launcher: same. Tier names are not Grok models; leave default unless pinning.
 #
 # Owner multi-vendor seats:
-#   First-party trust seats → claude-fable-5-1
+#   First-party trust seats → claude-opus-5
 #   Kimi web-frontend       → provider kimi + CLI default = K3
 #   Grok trial producers    → provider grok + CLI default (see workers.yaml)
 #   Grok plan/devops critic → provider grok (see workers.yaml)
@@ -27,9 +27,12 @@
 #   (kimi or grok producer x first-party critic) are the source of
 #   independent error detection.
 #
-# Owner decision 2026-09-12: every first-party seat runs the flagship,
-# claude-fable-5-1, producers and critics alike. Tier aliases are no longer
-# used for fleet seats. Haiku is never used for development seats.
+# Owner decision 2026-09-12: every first-party seat runs one pinned model,
+# producers and critics alike. Tier aliases are no longer used for fleet
+# seats. Haiku is never used for development seats.
+#
+# Owner decision 2026-09-14: every first-party seat moves one tier down to
+# claude-opus-5 to save spend. Provider routing is unchanged.
 #
 # Owner decision 2026-09-13: every producer seat except web-frontend moves to
 # grok for a five-task trial; producers never fail over to claude. The model
@@ -37,34 +40,34 @@
 # the kimi and grok launchers ignore it.
 model_routing:
   # Gates / strategy / investigation
-  orchestrator:              claude-fable-5-1
-  cto:                       claude-fable-5-1
-  retro:                     claude-fable-5-1
-  security-reviewer:         claude-fable-5-1
-  investigate:               claude-fable-5-1   # ignored while provider=grok
+  orchestrator:              claude-opus-5
+  cto:                       claude-opus-5
+  retro:                     claude-opus-5
+  security-reviewer:         claude-opus-5
+  investigate:               claude-opus-5   # ignored while provider=grok
 
   # Critics: adversarial review (first-party primary, grok failover)
-  backend-critic:            claude-fable-5-1
-  frontend-critic:           claude-fable-5-1
-  database-critic:           claude-fable-5-1
-  api-critic:                claude-fable-5-1
+  backend-critic:            claude-opus-5
+  frontend-critic:           claude-opus-5
+  database-critic:           claude-opus-5
+  api-critic:                claude-opus-5
 
   # Producers on the grok trial seat; the pin applies only if a seat returns to claude
-  go-backend:                claude-fable-5-1   # ignored while provider=grok
-  web-frontend:              claude-fable-5-1   # ignored when provider=kimi → K3
-  mobile:                    claude-fable-5-1   # ignored while provider=grok
+  go-backend:                claude-opus-5   # ignored while provider=grok
+  web-frontend:              claude-opus-5   # ignored when provider=kimi → K3
+  mobile:                    claude-opus-5   # ignored while provider=grok
 
   # Producer specialists where mistakes are expensive; pin ignored while provider=grok
-  db-architect:              claude-fable-5-1     # irreversible migrations (DB exception)
-  api-designer:              claude-fable-5-1     # OpenAPI contract is product law
-  devops:                    claude-fable-5-1     # CI/deploy/infra blast radius
-  test-engineer:             claude-fable-5-1     # test-first quality bar before producers
+  db-architect:              claude-opus-5     # irreversible migrations (DB exception)
+  api-designer:              claude-opus-5     # OpenAPI contract is product law
+  devops:                    claude-opus-5     # CI/deploy/infra blast radius
+  test-engineer:             claude-opus-5     # test-first quality bar before producers
 
   # High-volume mechanical routing (not code review)
-  pr-sentinel:               claude-fable-5-1
+  pr-sentinel:               claude-opus-5
 
   # docs-writer runs on grok under the trial; pin applies if it returns to claude
-  docs-writer:               claude-fable-5-1
+  docs-writer:               claude-opus-5
 
   # plan-critic is Grok (workers.yaml); no Claude model pin
   # plan-critic:             (omit — vendor default)
@@ -72,7 +75,7 @@ model_routing:
   # and kimi, so no pin here: the launcher uses the vendor default.
   # devops-critic:           (omit, vendor default)
 
-  default:                   claude-fable-5-1
+  default:                   claude-opus-5
 
 # Label-based routing: exact match on GitHub issue labels
 label_routes:
