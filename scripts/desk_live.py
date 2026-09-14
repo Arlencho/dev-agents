@@ -2059,9 +2059,9 @@ def _minutes(seconds):
 #      a fix suffix (x.plan -> x-fix.plan, x-fix2.plan), or the plan header
 #      carries fix-round wording ("fix round", "fix wave") and names the row
 #      by its stem or its branch as a whole token (never a substring:
-#      "feat/track" does not match inside "feat/track-c"), never by a subset
-#      of the row's title words (one-letter track tokens keep "Floor v3-B"
-#      and "Floor v3-C" apart), or
+#      "feat/track" does not match inside "feat/track-c" or "feat/track+c"),
+#      never by a subset of the row's title words (one-letter track tokens
+#      keep "Floor v3-B" and "Floor v3-C" apart), or
 #   3. a dispatch on one of its branches ended landed, or
 #   4. gh says the branch has merged, merged later than the row (optional:
 #      when gh cannot answer the rule does not fire and the merged_branch
@@ -2076,8 +2076,10 @@ FIX_SUFFIX_RE = re.compile(r"^(?:fix|critic|rebase|resume)\d*$")
 
 def whole_token(token, text):
     """The token appears in the text whole, bounded by characters that cannot
-    be part of it: "feat/track" never matches inside "feat/track-c"."""
-    return bool(re.search(r"(?<![\w./-])" + re.escape(token) + r"(?![\w./-])", text))
+    be part of a git branch name (letters, digits, dot, slash, dash,
+    underscore, plus): "feat/track" never matches inside "feat/track-c" or
+    "feat/track+c"."""
+    return bool(re.search(r"(?<![\w./+-])" + re.escape(token) + r"(?![\w./+-])", text))
 
 
 def superseded_dispatch(row, today, live, plan_cache, queue_entries, gh, skip):
@@ -2125,7 +2127,7 @@ def superseded_dispatch(row, today, live, plan_cache, queue_entries, gh, skip):
         """The candidate names this row by its stem or its branch, never by a
         subset of the row's title words: a row branch appears as a whole token
         in its fix-round header ("feat/track" does not match inside
-        "feat/track-c") or among its own branches, or its stem grows out of
+        "feat/track-c" or "feat/track+c") or among its own branches, or its stem grows out of
         the row's stem. Track letters stay whole in stems and branches ("v3b"
         vs "v3c"), so one track's fix round cannot fold another track's
         failure."""

@@ -1037,9 +1037,9 @@ row is superseded when:
    fix suffix (`x.plan` → `x-fix.plan`, `x-fix2.plan`), or the plan header
    carries fix-round wording (`fix round`, `fix wave`, any case) and names the
    row by its stem or its branch (a row branch as a whole token in the header,
-   so `feat/track` does not match inside `feat/track-c`, or among the
-   candidate's own branches, or the candidate stem growing out of the row's
-   stem), never by a subset of the row's title words;
+   so `feat/track` does not match inside `feat/track-c` or `feat/track+c`, or
+   among the candidate's own branches, or the candidate stem growing out of
+   the row's stem), never by a subset of the row's title words;
 3. a dispatch on one of its branches ended `landed`;
 4. gh says the branch has merged (`gh pr list --state merged`), same repo and
    `merged_at` later than the row (`ended_at`, else `started_at`): optional,

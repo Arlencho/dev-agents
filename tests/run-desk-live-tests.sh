@@ -2906,7 +2906,8 @@ echo "== Part M: superseded rule, critic round 2 fixtures (issue 86) =="
 # H2 (a fix-suffix round landed in another repo must not fold it), B2F (a fix
 # round with only dispatch_start and no seat must not fold it), and P/P2 (a
 # row branch that is only a prefix of a header token must not fold it; the
-# whole token must). Stamps use the Part L scheme: relative to now, clamped
+# whole token must). Round 4 adds P4 (plus is a legal git branch character,
+# so feat/track must not fold inside a feat/track+c header token either). Stamps use the Part L scheme: relative to now, clamped
 # past local midnight, so ordering never depends on the wall clock.
 M_Q="$TMP/queue-m.json"
 python3 - "$M_Q" <<'MQ'
@@ -3032,10 +3033,36 @@ json.dump({"schema": "fleet-queue/1", "updated_at": "2026-09-13T00:00:00Z", "ent
      "added_at": "2026-09-13T00:00:00Z", "status": "running",
      "dispatch_id": "m-p-land", "settled_at": None, "settled_status": None},
 ]}, open(os.path.join(out, "queue-m-p.json"), "w"), indent=2)
+# Fixture P4 (round 4, finding 8): the row failed on feat/track, then
+# p4-c-fix.plan landed; its header reads "Track C fix round on feat/track+c".
+# Plus is a legal git branch character, so feat/track is only a prefix of the
+# header token here too, and the row must stay open exactly as in P.
+failed("events-m-p4", "m-p4-fail.jsonl", "p4-b.plan", "feat/track", 900, 600)
+write("events-m-p4", "m-p4-land.jsonl", [
+    {"ts": ts(550), "event": "dispatch_start", "mode": "wave",
+     "repo": "dev-agents", "plan": "p4-c-fix.plan"},
+    {"ts": ts(545), "event": "seat_dispatch", "task_id": "0", "agent": "devops",
+     "branch": "feat/track+c", "wave": 1, "provider": "local"},
+    {"ts": ts(405), "event": "seat_exit", "task_id": "0", "agent": "devops",
+     "branch": "feat/track+c", "wave": 1, "status": "success", "exit": 0, "duration_s": 140},
+    {"ts": ts(400), "event": "dispatch_end", "status": "completed",
+     "total": 1, "succeeded": 1, "failed": 0, "duration_s": 150},
+])
+M_P4_FIX = os.path.join(M_P_PLANS, "p4-c-fix.plan")
+with open(M_P4_FIX, "w", encoding="utf-8") as fh:
+    fh.write("# Track C fix round on feat/track+c\n"
+             "1 | devops | Fix the track C regression. | feat/track+c\n")
+json.dump({"schema": "fleet-queue/1", "updated_at": "2026-09-13T00:00:00Z", "entries": [
+    {"plan": M_P4_FIX, "repo": "dev-agents",
+     "purpose": "Track C fix round on feat/track+c", "issue": 86,
+     "added_at": "2026-09-13T00:00:00Z", "status": "running",
+     "dispatch_id": "m-p4-land", "settled_at": None, "settled_status": None},
+]}, open(os.path.join(out, "queue-m-p4.json"), "w"), indent=2)
 for dirname, latest in (("events-m-g", "m-g-v3c.jsonl"), ("events-m-f", "m-f.jsonl"),
                         ("events-m-h", "m-h-land.jsonl"), ("events-m-b2", "m-b2-live.jsonl"),
                         ("events-m-h2", "m-h2-land.jsonl"), ("events-m-b2f", "m-b2f-live.jsonl"),
-                        ("events-m-p", "m-p-land.jsonl"), ("events-m-p2", "m-p2-land.jsonl")):
+                        ("events-m-p", "m-p-land.jsonl"), ("events-m-p2", "m-p2-land.jsonl"),
+                        ("events-m-p4", "m-p4-land.jsonl")):
     with open(os.path.join(out, dirname, "latest"), "w", encoding="utf-8") as fh:
         fh.write(latest + "\n")
 MFIX
@@ -3128,6 +3155,16 @@ assert_py "P2: a row branch that is a whole token in the header still folds" "$M
   'd["needs_you"]==[] and (lambda s: len(s)==1 and s[0]["plan"]=="p2.plan" '\
 'and s[0]["superseded_by"]["kind"]=="plan" and s[0]["superseded_by"]["plan"]=="p-c-fix.plan")'\
 '(d["needs_you_meta"]["superseded"])'
+
+M_P4_Q="$TMP/queue-m-p4.json"
+M_P4="$TMP/out/live-m-p4.json"
+FLEET_DESK_NO_GH=1 python3 "$DESK_LIVE" --once --events-dir "$TMP/events-m-p4" --queue-file "$M_P4_Q" --out "$M_P4" >/dev/null 2>&1 \
+  && ok "--once exits 0 on critic fixture P4" || bad "--once exits 0 on critic fixture P4"
+assert_py "P4: a row branch glued to the header token by plus does not fold" "$M_P4" \
+  '(lambda e: e["plan"]=="p4-b.plan" and e["branch"]=="feat/track" and "superseded_by" not in e)'\
+'(d["needs_you"][0]) and d["needs_you_meta"]["count"]==1 and d["needs_you_meta"]["superseded"]==[]'
+assert_py "P4: the fix-round header was really read from the plan file" "$M_P4" \
+  'd["plan_context"]["purpose"]=="Track C fix round on feat/track+c"'
 
 echo ""
 echo "----------------------------------------"
