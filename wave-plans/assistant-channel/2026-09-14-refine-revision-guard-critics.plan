@@ -1,0 +1,8 @@
+# Refine revision guard round 2 critics: the code seat finished; both critics died on the monthly limit of the old tier. PR 2850. 2026-09-14
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/olympus-platform.git wave-plans/assistant-channel/2026-09-14-refine-revision-guard-critics.plan --detach --retries 1
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | backend-critic | READ-ONLY REVIEW ROUND 2 of PR 2850. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Re-run only window (c) from the comment on issue 2340 whose first line starts with CRITIC REFINE REVISION GUARD, plus one regression check each on windows (a) and (b); confirm no error-level log and the web scope unchanged. Post ONE comment on issue 2340 whose first line reads CRITIC REFINE REVISION GUARD ROUND 2 with SAFE-TO-MERGE, BLOCK-FIX or BLOCK-ESCALATE and citations, and a last line TRIAL: producer rounds to SAFE so far <n>. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/ac-refine-revision-guard
+
+2 | api-critic | READ-ONLY REVIEW ROUND 2 of the api.yaml diff on PR 2850. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Confirm F1 and F2 are closed and the runtime matches the spec. Post ONE comment on issue 2340 whose first line reads API CRITIC REFINE REVISION GUARD ROUND 2 with SAFE-TO-MERGE, BLOCK-FIX or BLOCK-ESCALATE and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/ac-refine-revision-guard

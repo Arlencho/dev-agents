@@ -1,0 +1,6 @@
+# Floor needs-you cleanup: rebase onto main and merge on the round 4 decision (PR 89 comment ORCHESTRATOR DECISION 09:18). 2026-09-14
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-14-floor-needs-you-rebase.plan --detach --retries 1
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | web-frontend | On branch feat/floor-needs-you-superseded (PR 89, conflicting with main): rebase onto origin/main, resolve conflicts in scripts/desk_live.py, docs/experience-data.md and tests keeping both sides, force-push. This is a rebase round: run only tests/run-desk-live-tests.sh; no full-suite run, no mutation run. VERIFY: that test file with its real exit code in the PR body under a Rebase heading. HOUSE STYLE: no long dash anywhere, no AI tool or vendor name, no Co-Authored-By trailer. | feat/floor-needs-you-superseded
