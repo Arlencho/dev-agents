@@ -21,6 +21,9 @@ override: a header line `# ALLOW-NO-TIER`.
 
 Notes:
 
+- **Scope overlap:** when a plan matches more than one Scope cell it takes the
+  higher-risk tier (A before B before C), and the critic set and round cap of
+  that tier apply.
 - **Round cap** counts producer-critic rounds on one PR. At the cap the PR stops
   for a recorded merge-or-stop decision by a person; it does not keep cycling.
 - **Blocking finding** is what a critic verdict of BLOCK-FIX may rest on. On

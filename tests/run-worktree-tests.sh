@@ -247,9 +247,9 @@ for cand in "${BASH:-}" /opt/homebrew/bin/bash /usr/local/bin/bash; do
 done
 if [ -n "$BASH4" ]; then
     echo "== two real dispatches on the same repo: different branches run concurrently =="
-    printf '1 | devops | do the thing | feat/da\n' > "$FLEET/wave-plans/da.plan"
-    printf '1 | devops | do the thing | feat/db\n' > "$FLEET/wave-plans/db.plan"
-    printf '1 | devops | do the thing | feat/da\n' > "$FLEET/wave-plans/da2.plan"
+    printf '# TIER: C\n1 | devops | do the thing | feat/da\n' > "$FLEET/wave-plans/da.plan"
+    printf '# TIER: C\n1 | devops | do the thing | feat/db\n' > "$FLEET/wave-plans/db.plan"
+    printf '# TIER: C\n1 | devops | do the thing | feat/da\n' > "$FLEET/wave-plans/da2.plan"
     disp() { # <plan> <tag> <exit file>
         ( cd "$FLEET" && SHIM_WORK_TAG="$2" SHIM_WORK_SLEEP=8 "$BASH4" scripts/dispatch.sh "$ORIGIN" "wave-plans/$1.plan" \
               --auto --retries 0 --skip-auth-preflight ) > "$SANDBOX/disp-$1.log" 2>&1
