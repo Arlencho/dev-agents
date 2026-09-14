@@ -1307,6 +1307,7 @@ class Renderer:
             "failed_dispatch": "failed runs",
             "prd_proposed": "PRD sign-offs",
             "missing_variable": "repository variables",
+            "merged_branch": "merged branches",
         }
         items = live.get("needs_you") or []
         meta = live.get("needs_you_meta") or {}
@@ -1383,10 +1384,48 @@ class Renderer:
                          + ".</li>")
         else:
             rows_html = '<li class="muted">Nothing needs you.</li>'
+
+        # Superseded failures (issue 86): dropped from the list because a
+        # later round replaced them, never hidden. The fold names what
+        # replaced each and keeps its action reachable.
+        superseded = meta.get("superseded") or []
+
+        def by_label(it: Dict[str, Any]) -> str:
+            by = it.get("superseded_by") or {}
+            if by.get("kind") == "merge":
+                pr = f"PR {by['pr']}" if isinstance(by.get("pr"), int) else "a merged PR"
+                return f"the merge of {by['branch']} ({pr})" if by.get("branch") else pr
+            if by.get("kind") == "landed":
+                if by.get("branch"):
+                    return f"the landed run on {by['branch']}"
+                return by.get("plan") or "a later run"
+            return by.get("plan") or "a later run"
+
+        if superseded:
+            sup_rows = []
+            for it in superseded:
+                action = esc(it.get("action") or "look")
+                act = f'<a class="act" href="{esc(act_href(it))}">{action}</a>'
+                sup_rows.append(
+                    '<li class="nrow sup"><span class="nbody">'
+                    + (f'<span class="rname">{esc(it["repo"])}</span> ' if it.get("repo") else "")
+                    + esc(it.get("text") or "item without text")
+                    + f' <span class="faint">· superseded by {esc(by_label(it))}</span>'
+                    + f"</span>{act}</li>"
+                )
+            sup_html = (
+                f'<details class="supfold" id="floor-superseded"><summary>'
+                f'{len(superseded)} superseded {"dispatch" if len(superseded) == 1 else "dispatches"} today'
+                f'</summary><ol class="nlist" id="floor-superseded-list">{"".join(sup_rows)}</ol>'
+                "</details>"
+            )
+        else:
+            sup_html = ""
         return f"""
     <div class="card mt" id="floor-needs-card">
       <div class="cardhead"><h2>Needs you</h2>{note_html}</div>
       <ol class="nlist" id="floor-needs-list">{rows_html}</ol>
+      {sup_html}
     </div>
 """
 

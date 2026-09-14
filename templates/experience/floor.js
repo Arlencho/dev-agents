@@ -315,6 +315,7 @@
     failed_dispatch: "failed runs",
     prd_proposed: "PRD sign-offs",
     missing_variable: "repository variables",
+    merged_branch: "merged branches",
   };
 
   function renderNeeds(d) {
@@ -328,34 +329,49 @@
         return CHECK_WORDS[c.check] || c.check;
       }).join(", ");
     };
+    /* Superseded failures (issue 86): dropped from the list because a later
+       round replaced them, never hidden. The fold names what replaced each
+       and keeps its action reachable. Rendered even when the list is empty. */
+    var renderSuperseded = function (meta, actHref) {
+      var card = box.parentNode;
+      if (!card) return;
+      var fold = $("floor-superseded");
+      var sup = meta.superseded || [];
+      if (!sup.length) {
+        if (fold && card.contains(fold)) card.removeChild(fold);
+        return;
+      }
+      var byLabel = function (it) {
+        var by = it.superseded_by || {};
+        if (by.kind === "merge") {
+          var pr = typeof by.pr === "number" ? "PR " + by.pr : "a merged PR";
+          return by.branch ? "the merge of " + by.branch + " (" + pr + ")" : pr;
+        }
+        if (by.kind === "landed") {
+          return by.branch ? "the landed run on " + by.branch : (by.plan || "a later run");
+        }
+        return by.plan || "a later run";
+      };
+      var rows = sup.map(function (it) {
+        var act = '<a class="act" href="' + esc(actHref(it)) + '">' +
+          esc(it.action || "look") + "</a>";
+        return '<li class="nrow sup"><span class="nbody">' +
+          (it.repo ? '<span class="rname">' + esc(it.repo) + "</span> " : "") +
+          esc(it.text || "item without text") +
+          ' <span class="faint">· superseded by ' + esc(byLabel(it)) + "</span>" +
+          "</span>" + act + "</li>";
+      }).join("");
+      if (!fold) {
+        fold = document.createElement("details");
+        fold.className = "supfold";
+        fold.id = "floor-superseded";
+        card.appendChild(fold);
+      }
+      fold.innerHTML = "<summary>" + sup.length + " superseded " +
+        (sup.length === 1 ? "dispatch" : "dispatches") + " today</summary>" +
+        '<ol class="nlist" id="floor-superseded-list">' + rows + "</ol>";
+    };
     var note = $("floor-needs-note");
-    if (note) {
-      if (skipped.length) {
-        var reason = skipped[0].reason ? " (" + skipped[0].reason + ")" : "";
-        note.textContent = "not checked: " + skippedNames() + reason;
-        note.hidden = false;
-      } else {
-        note.textContent = "";
-        note.hidden = true;
-      }
-    }
-    if (!items.length) {
-      if (skipped.length) {
-        /* A skipped check means "unknown", never "nothing": when the checks
-           that matter did not run, the empty row itself says so, in words,
-           instead of claiming an all-clear (docs/experience-data.md). */
-        var reasons = [];
-        skipped.forEach(function (c) {
-          if (c.reason && reasons.indexOf(c.reason) < 0) reasons.push(c.reason);
-        });
-        box.innerHTML = '<li class="muted">Nothing found in the checks that ran; ' +
-          esc(skippedNames()) + " not checked" +
-          (reasons.length ? " (" + esc(reasons.join("; ")) + ")" : "") + ".</li>";
-      } else {
-        box.innerHTML = '<li class="muted">Nothing needs you.</li>';
-      }
-      return;
-    }
     /* Every row carries one reachable action: the source url when there is
        one, else the place on this page that answers it. A failed run's
        action opens the replay of its own stream; a PRD sign-off or a missing
@@ -385,6 +401,35 @@
       }
       return "#floor-needs-card";
     };
+    if (note) {
+      if (skipped.length) {
+        var reason = skipped[0].reason ? " (" + skipped[0].reason + ")" : "";
+        note.textContent = "not checked: " + skippedNames() + reason;
+        note.hidden = false;
+      } else {
+        note.textContent = "";
+        note.hidden = true;
+      }
+    }
+    if (!items.length) {
+      if (skipped.length) {
+        /* A skipped check means "unknown", never "nothing": when the checks
+           that matter did not run, the empty row itself says so, in words,
+           instead of claiming an all-clear (docs/experience-data.md). */
+        var reasons = [];
+        skipped.forEach(function (c) {
+          if (c.reason && reasons.indexOf(c.reason) < 0) reasons.push(c.reason);
+        });
+        box.innerHTML = '<li class="muted">Nothing found in the checks that ran; ' +
+          esc(skippedNames()) + " not checked" +
+          (reasons.length ? " (" + esc(reasons.join("; ")) + ")" : "") + ".</li>";
+      } else {
+        box.innerHTML = '<li class="muted">Nothing needs you.</li>';
+      }
+      renderSuperseded(meta, actHref);
+      return;
+    }
+    renderSuperseded(meta, actHref);
     /* File sources publish only what the redaction law allows: the checkout
        name, the path relative to it, and the line. */
     var srcCite = function (it) {
