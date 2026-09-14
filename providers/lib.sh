@@ -116,9 +116,18 @@ run_and_classify() {
     elapsed=$(( $(date +%s) - start_ts ))
 
     # A seat the watchdog stopped for going quiet is hung, whatever its last
-    # lines say (usually thinking-token ticks, which match nothing below).
+    # lines say (usually thinking-token ticks, which match nothing below). A
+    # stop for a tool call past the tool ceiling names the tool: the
+    # watchdog's own stop line is in the log, pass its reason through.
     if [ "$cmd_exit" -eq "$EXIT_HUNG" ]; then
-        echo "HUNG seat: no model event for ${SEAT_QUIET_AFTER_S:-1800}s (exit $EXIT_HUNG)" >&2
+        local hung_note
+        hung_note=$(grep '^seat-watchdog: ' "$tmp" 2>/dev/null | tail -1 || true)
+        case "$hung_note" in
+            *" tool ceiling;"*)
+                echo "HUNG seat: ${hung_note#seat-watchdog: }" >&2 ;;
+            *)
+                echo "HUNG seat: no model event for ${SEAT_QUIET_AFTER_S:-1800}s (exit $EXIT_HUNG)" >&2 ;;
+        esac
         rm -f "$tmp"
         return "$EXIT_HUNG"
     fi

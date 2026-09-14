@@ -23,6 +23,13 @@ Never a model event:
   - spinner / wait tickers ("Waiting 0s / 10m", "background task still
     running"): a seat that only ticks is quiet by definition
 
+A tool call still open is work in flight, not quiet: an assistant tool_use
+opens the call and its tool_result (a user event) closes it. While any call
+is open the quiet timer uses the tool ceiling SEAT_TOOL_CEILING_S instead of
+the quiet period, so a long test run or a wait loop that prints nothing is
+not stopped as hung. A call open past the ceiling is hung: the seat is
+stopped and the stop line names the tool.
+
 The child runs in its own session so the quiet kill can take the whole tree
 without touching the launcher. Signals aimed at the watchdog (a dispatcher
 Ctrl-C reaches the pipeline's process group) are forwarded to the child tree
@@ -31,6 +38,8 @@ first, so no seat is orphaned.
 Env in (all optional):
   SEAT_QUIET_AFTER_S      quiet period in seconds (default 1800; 0 disables:
                           the CLI is exec'd directly, no wrapper at all)
+  SEAT_TOOL_CEILING_S     ceiling in seconds for one open tool call (default
+                          5400; 0 means a tool in flight is never stopped)
   SEAT_QUIET_POLL_S       how often the quiet check runs (default 5)
   SEAT_QUIET_KILL_GRACE_S TERM-to-KILL grace on a quiet stop (default 5)
 
@@ -59,6 +68,7 @@ def env_float(name, default):
 
 
 QUIET_AFTER_S = env_float("SEAT_QUIET_AFTER_S", 1800)
+TOOL_CEILING_S = env_float("SEAT_TOOL_CEILING_S", 5400)
 POLL_S = max(0.2, env_float("SEAT_QUIET_POLL_S", 5))
 KILL_GRACE_S = max(0.2, env_float("SEAT_QUIET_KILL_GRACE_S", 5))
 
@@ -92,16 +102,58 @@ def is_model_event(raw):
     return True
 
 
+def tool_deltas(raw):
+    """(opens, closes) of stream-json tool calls on one output line.
+
+    opens: (id, name) of each tool_use block on an assistant line; closes:
+    tool_use_id of each tool_result block on a user line. Anything that is
+    not a parseable stream-json event with a content list opens and closes
+    nothing.
+    """
+    line = raw.strip()
+    if not line.startswith(b"{"):
+        return (), ()
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return (), ()
+    if not isinstance(event, dict):
+        return (), ()
+    message = event.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return (), ()
+    opens, closes = [], []
+    if event.get("type") == "assistant":
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                opens.append((str(block.get("id") or ""),
+                              str(block.get("name") or "tool")))
+    elif event.get("type") == "user":
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                closes.append(str(block.get("tool_use_id") or ""))
+    return opens, closes
+
+
 class Watchdog(object):
     def __init__(self, cmd):
         self.cmd = cmd
         self.proc = None
         self.last_event = time.monotonic()
+        self.open_tools = {}
         self.lock = threading.Lock()
         self.done = threading.Event()
         self.killed_for_quiet = False
 
     def note(self, raw):
+        opens, closes = tool_deltas(raw)
+        if opens or closes:
+            with self.lock:
+                for tool_id, name in opens:
+                    self.open_tools[tool_id] = name
+                for tool_id in closes:
+                    self.open_tools.pop(tool_id, None)
         if is_model_event(raw):
             with self.lock:
                 self.last_event = time.monotonic()
@@ -109,6 +161,17 @@ class Watchdog(object):
     def quiet_for(self):
         with self.lock:
             return time.monotonic() - self.last_event
+
+    def quiet_limit(self):
+        """Seconds of silence allowed now, or None for never stop.
+
+        A tool call in flight is work: the quiet period does not apply, the
+        longer tool ceiling does (0 = no ceiling while a tool is open).
+        """
+        with self.lock:
+            if self.open_tools:
+                return TOOL_CEILING_S or None
+            return QUIET_AFTER_S
 
     def signal_child(self, sig):
         try:
@@ -120,12 +183,23 @@ class Watchdog(object):
         while not self.done.wait(POLL_S):
             if self.proc.poll() is not None:
                 return
-            if self.quiet_for() < QUIET_AFTER_S:
+            limit = self.quiet_limit()
+            if limit is None or self.quiet_for() < limit:
                 continue
             self.killed_for_quiet = True
-            sys.stderr.write(
-                "seat-watchdog: no model event for %ds; stopping the seat (exit %d)\n"
-                % (int(QUIET_AFTER_S), EXIT_HUNG))
+            with self.lock:
+                names = sorted(set(self.open_tools.values()))
+            if names:
+                what = ("tool %s" % names[0]) if len(names) == 1 \
+                    else ("tools %s" % ", ".join(names))
+                sys.stderr.write(
+                    "seat-watchdog: %s still running past the %ds tool ceiling;"
+                    " stopping the seat (exit %d)\n"
+                    % (what, int(limit), EXIT_HUNG))
+            else:
+                sys.stderr.write(
+                    "seat-watchdog: no model event for %ds; stopping the seat (exit %d)\n"
+                    % (int(limit), EXIT_HUNG))
             sys.stderr.flush()
             self.signal_child(signal.SIGTERM)
             deadline = time.monotonic() + KILL_GRACE_S

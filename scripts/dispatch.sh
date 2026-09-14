@@ -414,12 +414,17 @@ resolve_provider() {
 # --------------------------------------------------
 # A seat that emits no model event for the quiet period is stopped by the
 # launcher's watchdog with exit 124 and retried once, and a stop row names the
-# seat and the quiet period. A seat that exits 78 hit the provider's spend or
+# seat and the quiet period. A tool call still open is work in flight: the
+# watchdog holds the quiet period and applies the longer tool ceiling
+# instead; a seat stopped on the ceiling gets a stop row naming the tool
+# (run-remote leaves the reason in a file next to the hold files). A seat
+# that exits 78 hit the provider's spend or
 # session limit: it is marked held, not failed, the retry is not burned, and a
 # stop row carries the provider and the reset time from the message. No seat
 # starts on a held provider and model until a probe call succeeds; a passed
 # probe releases the hold.
 SEAT_QUIET_AFTER_S="${SEAT_QUIET_AFTER_S:-1800}"
+SEAT_TOOL_CEILING_S="${SEAT_TOOL_CEILING_S:-5400}"
 PROVIDER_STATE_DIR="$REPO_DIR/logs/provider-state"
 FLEET_STOPS_FILE="${FLEET_STOPS_FILE:-$LOGS_DIR/fleet-stops.jsonl}"
 declare -A STOP_OPENED=()   # stop key -> 1: one open row per state change per run
@@ -1077,6 +1082,7 @@ dispatch_task() {
         AGENT_MODEL="$model" AGENT_PROVIDER="$provider" AGENT_WAVE="${CURRENT_WAVE:-1}" \
             AGENT_TASK_ID="$idx" \
             SEAT_QUIET_AFTER_S="$SEAT_QUIET_AFTER_S" \
+            SEAT_TOOL_CEILING_S="$SEAT_TOOL_CEILING_S" \
             FLEET_EVENTS_FILE="${FLEET_EVENTS_FILE:-}" \
             FLEET_DISPATCH_ID="${FLEET_DISPATCH_ID:-}" \
             "$SCRIPT_DIR/run-remote.sh" "$whost" "$REPO_URL" "$agent" "$task" "$branch"
@@ -1432,14 +1438,21 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             emit_seat_exit "$idx" held "$status" "$duration"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true
         elif [ $status -eq 124 ]; then
-            # Hung seat (issue #92): no model event for the quiet period. It
-            # goes to the retry loop like a failure but is retried exactly once.
+            # Hung seat (issue #92): no model event for the quiet period, or a
+            # tool call that ran past the tool ceiling. It goes to the retry
+            # loop like a failure but is retried exactly once.
             RESULT_STATUS[$idx]="hung"
             FAILED_TASKS[$idx]=0
             HUNG_TASKS[$idx]=1
-            echo -e "  ${YELLOW}⏳${NC} ${TASK_AGENT[$idx]} emitted no model event for ${SEAT_QUIET_AFTER_S}s, stopped after ${duration}s, will retry once"
+            hung_why="emitted no model event for ${SEAT_QUIET_AFTER_S}s"
+            hung_reason_f="$PROVIDER_STATE_DIR/seat-hung-$idx.reason"
+            if [ -f "$hung_reason_f" ]; then
+                hung_why="$(head -1 "$hung_reason_f")"
+                rm -f "$hung_reason_f"
+            fi
+            echo -e "  ${YELLOW}⏳${NC} ${TASK_AGENT[$idx]} $hung_why, stopped after ${duration}s, will retry once"
             stop_open_once "seat-hung-${FLEET_DISPATCH_ID:-run}-$idx" seat_hung \
-                "seat ${TASK_AGENT[$idx]} (task $idx, ${TASK_BRANCH[$idx]}) emitted no model event for ${SEAT_QUIET_AFTER_S}s; stopped and retried once" \
+                "seat ${TASK_AGENT[$idx]} (task $idx, ${TASK_BRANCH[$idx]}) $hung_why; stopped and retried once" \
                 "check the log"
             emit_seat_exit "$idx" hung "$status" "$duration"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true

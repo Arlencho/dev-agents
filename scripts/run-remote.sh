@@ -339,6 +339,7 @@ RUNTIME_DIR="$RUNTIME_DIR"
 KEEP_FAILED=$(printf '%q' "${FLEET_KEEP_FAILED_WORKTREES:-0}")
 SEAT_WAIT_POLL_S=$(printf '%q' "${SEAT_WAIT_POLL_S:-5}")
 export SEAT_QUIET_AFTER_S=$(printf '%q' "${SEAT_QUIET_AFTER_S:-1800}")
+export SEAT_TOOL_CEILING_S=$(printf '%q' "${SEAT_TOOL_CEILING_S:-5400}")
 export SEAT_QUIET_POLL_S=$(printf '%q' "${SEAT_QUIET_POLL_S:-5}")
 export SEAT_QUIET_KILL_GRACE_S=$(printf '%q' "${SEAT_QUIET_KILL_GRACE_S:-5}")
 FULL_TASK_B64=$(printf '%q' "$FULL_TASK_B64")
@@ -680,6 +681,26 @@ if [ "$REMOTE_EXIT" -eq 78 ]; then
     echo "PROVIDER_LIMIT recorded for $PROVIDER (${MODEL:-default}), resets $LIMIT_RESET, dispatch will hold, not retry"
 fi
 
+# Hung sentinel (exit 124): when the watchdog stopped the seat for a tool
+# call past the tool ceiling, its stop line in the seat log names the tool.
+# Leave the reason where dispatch.sh reads it, so the stop row can name the
+# tool too. A plain quiet stop leaves no file and gets the generic row.
+if [ "$REMOTE_EXIT" -eq 124 ]; then
+    STATE_DIR="$SCRIPT_DIR/../logs/provider-state"
+    mkdir -p "$STATE_DIR"
+    if [ "$IS_LOCAL" -eq 1 ]; then
+        HUNG_TAIL=$(tail -40 "$REMOTE_LOG_PATH" 2>/dev/null || true)
+    else
+        HUNG_TAIL=$(ssh "$HOST" "tail -40 $REMOTE_LOG_PATH" 2>/dev/null || true)
+    fi
+    HUNG_WHY=$(printf '%s\n' "$HUNG_TAIL" \
+        | grep -oE 'tools? [A-Za-z0-9_,. -]+ still running past the [0-9]+s tool ceiling' \
+        | tail -1 || true)
+    if [ -n "$HUNG_WHY" ]; then
+        printf '%s\n' "$HUNG_WHY" > "$STATE_DIR/seat-hung-${AGENT_TASK_ID:-0}.reason"
+    fi
+fi
+
 # On other failures, auto-record a learning (skip 75, logged high above).
 # The summary is a fixed code plus facts, never a line of agent output: a
 # learning is injected into later prompts, and a raw cap or auth phrase in it
@@ -691,7 +712,8 @@ if [ "$REMOTE_EXIT" -ne 0 ] && [ "$REMOTE_EXIT" -ne 75 ] && [ -x "$SCRIPT_DIR/le
         69) FAIL_CODE="UNAVAILABLE: $PROVIDER launcher exit 69 (CLI missing or session invalid)" ;;
         77) FAIL_CODE="BLOCKED: guardrails stopped the seat (exit 77)" ;;
         78) FAIL_CODE="PROVIDER_LIMIT: $PROVIDER account ceiling (exit 78); seat held until a probe passes" ;;
-        124) FAIL_CODE="HUNG: no model event for ${SEAT_QUIET_AFTER_S:-1800}s; the watchdog stopped the seat (exit 124)" ;;
+        124) FAIL_CODE="HUNG: no model event for ${SEAT_QUIET_AFTER_S:-1800}s; the watchdog stopped the seat (exit 124)"
+             [ -n "${HUNG_WHY:-}" ] && FAIL_CODE="HUNG: $HUNG_WHY; the watchdog stopped the seat (exit 124)" ;;
         *)  FAIL_CODE="TASK_FAIL: seat exit $REMOTE_EXIT" ;;
     esac
     "$SCRIPT_DIR/learnings.sh" add "$REPO_NAME" "$AGENT" failure \

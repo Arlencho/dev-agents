@@ -2,7 +2,7 @@
 # Shared fake-CLI behavior for launcher tests. Symlinked as claude/kimi/grok.
 # Driven by SHIM_MODE (or the contents of SHIM_MODE_FILE when set):
 # success | fail | ratecap | noauth | work | quiet | heartbeat | chatty |
-# limit | slow-limit | quiet-once
+# limit | slow-limit | quiet-once | tool-open | tool-hung | tool-hung-once
 #   work: behaves like a seat that did something. Writes one file in the
 #   current directory (a seat worktree under run-remote), commits it, records
 #   its real cwd to $SHIM_CWD_LOG, prints two stream-json tool_use lines (an
@@ -20,6 +20,14 @@
 #   slow-limit: the same stream after a sleep, past the limit gate window.
 #   quiet-once: quiet on the first invocation (marker in SHIM_STATE_DIR),
 #   then re-execs in work mode, so a retried seat succeeds.
+#   tool-open: a tool_use stream-json line, silence past the quiet period
+#   (SHIM_TOOL_SLEEP, default 6), then the matching tool_result and exit 0.
+#   A working seat with a tool in flight: the watchdog must not stop it.
+#   tool-hung: a tool_use line, then silence (SHIM_QUIET_SLEEP, default 120)
+#   with no tool_result ever. The tool ceiling, not the quiet period, stops
+#   the seat and the stop line names the tool.
+#   tool-hung-once: tool-hung on the first invocation (marker in
+#   SHIM_STATE_DIR), then re-execs in work mode, so a retried seat succeeds.
 # Records the received argv to $SHIM_ARGV_LOG (if set) so tests can assert
 # charter injection.
 VENDOR="$(basename "$0")"
@@ -147,6 +155,30 @@ case "$MODE" in
         if [ ! -f "$marker" ]; then
             : > "$marker"
             printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"starting the work now"}]}}\n'
+            sleep "${SHIM_QUIET_SLEEP:-120}"
+            exit 0
+        fi
+        SHIM_MODE=work SHIM_MODE_FILE= exec bash "$0" "$@" ;;
+    tool-open)
+        # A tool call opens, stays silent past the quiet period, then its
+        # result lands: a working seat the watchdog must never stop.
+        printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make test"}}]}}\n'
+        sleep "${SHIM_TOOL_SLEEP:-6}"
+        printf '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"tests passed"}]}}\n'
+        exit 0 ;;
+    tool-hung)
+        # A tool call opens and its result never comes: the tool ceiling,
+        # not the quiet period, is what stops the seat, naming the tool.
+        printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make test"}}]}}\n'
+        sleep "${SHIM_QUIET_SLEEP:-120}"
+        exit 0 ;;
+    tool-hung-once)
+        # First seat hangs on an open tool and is stopped on the ceiling;
+        # the retried seat does the work.
+        marker="${SHIM_STATE_DIR:?tool-hung-once needs SHIM_STATE_DIR}/tool-hung-once-fired"
+        if [ ! -f "$marker" ]; then
+            : > "$marker"
+            printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make test"}}]}}\n'
             sleep "${SHIM_QUIET_SLEEP:-120}"
             exit 0
         fi

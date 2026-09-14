@@ -4,7 +4,10 @@
 #   #92  a seat with no model event for the quiet period is stopped with exit
 #        124 by the watchdog, retried once by dispatch.sh, and a stop row
 #        names the seat and the quiet period; thinking-token ticks and
-#        wait-ticker lines never count as model events
+#        wait-ticker lines never count as model events; a tool call still
+#        open is work in flight and gets the tool ceiling (default 90
+#        minutes, SEAT_TOOL_CEILING_S) instead of the quiet period, and a
+#        stop on the ceiling names the tool in the stop row
 #   #84  the fast spend/session-limit exit (the real 2026-09-13 log) is exit
 #        78: dispatch.sh holds the seat instead of failing it, does not burn
 #        the retry, writes a stop row with the provider and the reset time,
@@ -56,6 +59,17 @@ got=$(run_launcher claude chatty "${WDOG[@]}" SHIM_CHATTY_LINES=12 SHIM_CHATTY_S
 check "a seat emitting model events is never stopped" "0" "$got"
 got=$(run_launcher claude quiet SEAT_QUIET_AFTER_S=0 SHIM_QUIET_SLEEP=1)
 check "SEAT_QUIET_AFTER_S=0 disables the watchdog" "0" "$got"
+
+echo ""
+echo "== a tool call in flight uses the tool ceiling, not the quiet period =="
+got=$(run_launcher claude tool-open "${WDOG[@]}" SEAT_TOOL_CEILING_S=20 SHIM_TOOL_SLEEP=6)
+check "tool_use, silence past the quiet period, then tool_result" "0" "$got"
+got=$(run_launcher claude tool-hung "${WDOG[@]}" SEAT_TOOL_CEILING_S=3 SHIM_QUIET_SLEEP=30)
+check "a tool call open past the tool ceiling is stopped" "124" "$got"
+err=$(env SHIM_MODE=tool-hung "${WDOG[@]}" SEAT_TOOL_CEILING_S=3 SHIM_QUIET_SLEEP=30 PATH="$SHIMS:$PATH" \
+    "$REPO_DIR/providers/claude/launch.sh" web-frontend "do the thing" 2>&1 >/dev/null)
+printf '%s' "$err" | grep -q "tool Bash still running past the 3s tool ceiling"
+check "the stop names the tool and the ceiling" "0" "$?"
 
 echo ""
 echo "== issue 84: the fast spend-limit exit is 78, a slow one is not =="
@@ -156,6 +170,19 @@ else
     check "the stop is cleared when the retry succeeds" "1" \
           "$(grep -c '"state":"cleared","reason":"the retry did the work"' "$STOPS")"
     check "worktrees after the hung dispatch" "0" "$(seat_trees)"
+
+    echo ""
+    echo "== a seat hung on an open tool is stopped on the ceiling, naming the tool =="
+    plan_one toolhung feat/tool-hung-seat
+    check "tool-hung-seat dispatch exit" "0" "$(SHIM_MODE=tool-hung-once SEAT_TOOL_CEILING_S=3 disp toolhung)"
+    EV1B="$(events_now)"
+    check "the seat was dispatched exactly twice (stop, then one retry)" "2" \
+          "$(grep -c '"event":"seat_dispatch"' "$EV1B")"
+    check "the stop row names the tool and the ceiling" "1" \
+          "$(grep '"kind":"seat_hung"' "$STOPS" | grep -c 'tool Bash still running past the 3s tool ceiling')"
+    check "the stop is cleared when the retry succeeds" "2" \
+          "$(grep -c '"state":"cleared","reason":"the retry did the work"' "$STOPS")"
+    check "worktrees after the tool-hung dispatch" "0" "$(seat_trees)"
 
     echo ""
     echo "== issue 84 end to end: a limit exit is held, the retry is not burned =="
