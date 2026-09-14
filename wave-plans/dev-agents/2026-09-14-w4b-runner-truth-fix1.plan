@@ -1,0 +1,10 @@
+# Fleet optimization W4b round 2: two findings from CRITIC W4B RUNNER TRUTH ROUND 1 on PR 97. Tier C, final round. 2026-09-14
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-14-w4b-runner-truth-fix1.plan --detach --retries 1
+# FIX-ROUND: 2026-09-14-w4b-runner-truth.plan
+# TIER: C
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | web-frontend | On branch feat/w4b-runner-truth (PR 97), rebase onto origin/main first. Fix the two findings of the comment on PR 97 whose first line reads CRITIC W4B RUNNER TRUTH ROUND 1: BLOCK-FIX: ONE, a tracking-issue comment counts for this run only when it names this PR number explicitly as PR followed by the number, or names the branch as a whole token (never as a substring of a longer branch); TWO, a bare hash number is not this PR when the same comment names a different PR number; reuse the rule desk_live.critic_record already applies instead of writing a second one. This is a fix round: run only tests/run-queue-loop-tests.sh with a fixture per finding; no full suite. VERIFY: that test file real exit code in the PR body under a Round 2 heading. HOUSE STYLE: no long dash anywhere, no AI tool or vendor name, no Co-Authored-By trailer. Commit and push. | feat/w4b-runner-truth
+
+2 | plan-critic | READ-ONLY REVIEW ROUND 2 of PR 97. Tier C, final round. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Re-run only the fixtures of the two round 1 findings plus one regression check that the memory reading still matches memory_pressure within two points. Report only a finding that makes the runner land, hold or stop on a wrong reading. Post ONE comment on PR 97 whose first line reads CRITIC W4B RUNNER TRUTH ROUND 2 with SAFE-TO-MERGE, BLOCK-FIX or BLOCK-ESCALATE and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/w4b-runner-truth
