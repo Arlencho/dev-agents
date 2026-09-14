@@ -28,8 +28,17 @@ the bookkeeping around it, in four subcommands the runner calls in order:
               no SAFE. A draft is marked ready only with landing on, and the
               pass that marked ready never lands: the next tick re-reads the
               PR and re-runs the named rollup on the head.
+              Critic verdicts are read from the PR's comments and reviews. A
+              plan may name where its critics post with a header line such
+              as '# VERDICTS: owner/repo#2340'; then the comments of that
+              issue are read too, keeping only comments at or after the run
+              start whose body names the PR number or the branch. No header
+              keeps the PR-only reading.
               Also clears stops whose PR has since merged or closed.
-  guard       read free memory and swap; say once per change of state whether
+  guard       read the system-wide free percentage the way memory_pressure
+              reports it (free plus inactive plus speculative plus purgeable
+              pages from vm_stat when that tool is absent, /proc/meminfo
+              last) and the swap used; say once per change of state whether
               starts are held, and write that into the queue (hold) and the
               stops file so the Floor shows why nothing starts.
   candidates  the queued, unblocked plans in declared order, minus those whose
@@ -103,6 +112,9 @@ HEAD_CHECKS_QUERY = (
 AFTER_RE = re.compile(r"^#\s*AFTER:\s*(\S+)", re.IGNORECASE)
 FIX_ROUND_RE = re.compile(r"^#\s*FIX-ROUND:\s*(\d+)\s+of\s+(\S+)", re.IGNORECASE)
 DISPATCH_RE = re.compile(r"^#\s*DISPATCH:\s*(.*)$", re.IGNORECASE)
+VERDICTS_RE = re.compile(r"^#\s*VERDICTS:\s*(.+?)\s*$", re.IGNORECASE)
+VERDICTS_ISSUE_RE = re.compile(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)")
+VERDICTS_NUMBER_RE = re.compile(r"(?:issue\s+)?#(\d+)|\bissue\s+(\d+)", re.IGNORECASE)
 MAX_STOP_CHECKS_PER_TICK = 10
 
 # One action per stop kind: the words the Floor's NEEDS YOU row ends with.
@@ -191,8 +203,10 @@ def run(cmd, timeout=GH_TIMEOUT_S, env=None):
 # ── plan header ──────────────────────────────────────────────────────────────
 
 def plan_header(path):
-    """(after, fix_round, dispatch_line, purpose) from a plan's comment lines."""
-    after = fix_round = dispatch = None
+    """(after, fix_round, dispatch_line, purpose, verdicts) from a plan's
+    comment lines. verdicts is the VERDICTS header value (where the plan's
+    critics post, for example 'owner/repo#2340'), else None."""
+    after = fix_round = dispatch = verdicts = None
     purpose = ""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -209,12 +223,47 @@ def plan_header(path):
                 m = DISPATCH_RE.match(stripped)
                 if m and dispatch is None:
                     dispatch = m.group(1).strip()
+                m = VERDICTS_RE.match(stripped)
+                if m:
+                    if verdicts is None:
+                        verdicts = m.group(1)
+                    continue
                 body = stripped.lstrip("#").strip()
                 if not purpose and body and not desk_live.is_machine_header(body):
                     purpose = desk_live.scrub_text(body)
     except OSError:
         pass
-    return after, fix_round, dispatch, purpose
+    return after, fix_round, dispatch, purpose, verdicts
+
+
+def verdicts_issue(value, slug):
+    """(slug, number) a VERDICTS header value names: 'owner/repo#2340' pins
+    the repo; '#2340' and 'issue 2340' read against the run's own repo. None
+    when the value names no issue."""
+    text = str(value or "")
+    match = VERDICTS_ISSUE_RE.search(text)
+    if match:
+        return match.group(1), int(match.group(2))
+    match = VERDICTS_NUMBER_RE.search(text)
+    if match and slug:
+        return slug, int(match.group(1) or match.group(2))
+    return None
+
+
+def names_run_pr(body, number, branch):
+    """True when a comment body names the run's PR ('#2851', 'PR 2851') or its
+    branch. A comment on the tracking issue that speaks of another PR covers
+    nobody on this run."""
+    text = str(body or "")
+    if number:
+        for match in re.finditer(r"#(\d+)", text):
+            if int(match.group(1)) == int(number):
+                return True
+        if re.search(r"\bPR\s+%d\b" % int(number), text, re.IGNORECASE):
+            return True
+    if branch and str(branch) in text:
+        return True
+    return False
 
 
 def dispatch_parts(dispatch_line):
@@ -415,6 +464,18 @@ class Gh(object):
         if data is None:
             return None, why
         return data, None
+
+    def issue_comments(self, slug, number):
+        """The comments of the issue a plan's VERDICTS header names."""
+        data, why = self.json(
+            ["issue", "view", str(number), "-R", slug, "--json", "comments"],
+            "gh issue view %s#%s" % (slug, number))
+        if data is None:
+            return None, why
+        comments = data.get("comments") if isinstance(data, dict) else None
+        if not isinstance(comments, list):
+            return None, "gh issue view returned an unexpected payload"
+        return [c for c in comments if isinstance(c, dict)], None
 
     def head_checks(self, slug, head):
         """The head commit's own check rollup from GitHub, each run naming the
@@ -632,10 +693,12 @@ def escalation_reason(body):
     return match.group(1) if match else None
 
 
-def critic_threads(pr, since):
+def critic_threads(pr, since, extra=None):
     """The newest record of every critic thread (thread = first-line heading)
     among the PR's comments and reviews posted at or after ``since`` (the
-    dispatch start), newest first.
+    dispatch start), newest first. ``extra`` carries the comments of the issue
+    a VERDICTS header names, already filtered to the ones that name this run;
+    they parse under the same rules as a PR comment.
 
     A comment whose first line carries CRITIC and no single verdict word is
     silence (the fleet rule). Silence never opens a thread; but a later
@@ -666,7 +729,7 @@ def critic_threads(pr, since):
         if commit:
             commits[cid] = str(commit)
 
-    for c in pr.get("comments") or []:
+    for c in list(pr.get("comments") or []) + list(extra or []):
         if isinstance(c, dict):
             add(c.get("id"), c.get("url"), c.get("createdAt"), c.get("body"), "comment")
     for r in pr.get("reviews") or []:
@@ -767,7 +830,7 @@ def fix_plan_path(plan):
 
 def write_fix_plan(plan, header, producer, critic, comment_body, dry_run):
     """Write <plan>-fix1.plan next to the original. Returns (path, purpose, why)."""
-    after, _fix_round, dispatch_line, purpose = header
+    after, _fix_round, dispatch_line, purpose, _verdicts = header
     url, flags = dispatch_parts(dispatch_line)
     if not url:
         return None, None, "the original plan has no DISPATCH line to copy"
@@ -897,7 +960,24 @@ def settle_one(args, gh, pid_path, info, stream_path):
             mark = "stop:pr_closed"
             continue
 
-        threads = critic_threads(pr, summary.get("started_at"))
+        # Critic verdicts come from the PR. A plan with a VERDICTS header
+        # also reads the issue it names, keeping only comments whose body
+        # names this PR or this branch (critic_threads applies the run-start
+        # filter; names_run_pr applies the naming filter). A gh failure here
+        # is transient, like a failed pr list: look again next tick.
+        extra = []
+        if header[4]:
+            ref = verdicts_issue(header[4], slug)
+            if ref is None:
+                say("%s: VERDICTS header names no issue (%s); reading the PR only"
+                    % (dispatch_id, stop_text(header[4], 80)))
+            else:
+                comments, why = gh.issue_comments(ref[0], ref[1])
+                if comments is None:
+                    say("%s: %s; will look again next tick" % (dispatch_id, why))
+                    return None
+                extra = [c for c in comments if names_run_pr(c.get("body"), number, branch)]
+        threads = critic_threads(pr, summary.get("started_at"), extra)
         verdicts = [t["verdict"] for t in threads]
         sentence = threads[0]["_line"] if threads else "no critic verdict since the run started"
 
@@ -1248,11 +1328,56 @@ def _size_gb(number, unit):
     return float(number) * scale.get(unit.upper(), 1.0 / 1024)
 
 
+MEM_PRESSURE_RE = re.compile(r"System-wide memory free percentage:\s*([0-9]+(?:\.[0-9]+)?)\s*%")
+
+
+def _sysctl_numbers():
+    """(total_bytes, swap_used_gb, None) from sysctl, else (None, None, why)."""
+    rc, mem, _err = run(["sysctl", "-n", "hw.memsize"])
+    try:
+        total = int(mem.strip())
+    except ValueError:
+        return None, None, "sysctl hw.memsize gave no number"
+    if total <= 0:
+        return None, None, "sysctl hw.memsize gave 0"
+    rc, swap, _err = run(["sysctl", "-n", "vm.swapusage"])
+    m = re.search(r"used\s*=\s*([0-9.]+)\s*([KMGT])", swap or "")
+    if not m:
+        return None, None, "sysctl vm.swapusage unreadable"
+    return total, _size_gb(m.group(1), m.group(2)), None
+
+
+def _reading(free_pct, total, swap_gb, source):
+    """The reading dict, or (None, reason) when the numbers are impossible:
+    a sensor that answers garbage is an unreadable sensor, not a reading."""
+    if not 0.0 <= free_pct <= 100.0 or swap_gb < 0:
+        return None, "%s gave an impossible reading (free %.0f%% of %.0f GB, swap %.1f GB)" % (
+            source, free_pct, total / (1024.0 ** 3), swap_gb)
+    return {"free_pct": free_pct, "swap_used_gb": swap_gb,
+            "detail": "free %.0f%% of %.0f GB, swap used %.1f GB" % (
+                free_pct, total / (1024.0 ** 3), swap_gb)}, None
+
+
 def read_memory():
-    """{free_pct, swap_used_gb, detail} or (None, reason). macOS first; the
-    /proc/meminfo fallback is for a machine with no vm_stat at all. A vm_stat
-    that answers garbage is an unreadable sensor, not a reading: the guard
-    cannot judge and says so."""
+    """{free_pct, swap_used_gb, detail} or (None, reason).
+
+    The free percentage is the number the fleet reads by hand: the
+    system-wide free percentage memory_pressure reports. When that tool is
+    absent, the vm_stat sum of free, inactive, speculative and purgeable
+    pages; macOS keeps raw free pages low by design and reclaims the rest on
+    demand, so a guard on raw free holds a healthy machine. The
+    /proc/meminfo fallback is for a machine with neither tool. A sensor that
+    answers garbage is an unreadable sensor, not a reading: the guard cannot
+    judge and says so."""
+    rc, out, _err = run(["memory_pressure"])
+    if rc == 0:
+        m = MEM_PRESSURE_RE.search(out)
+        if not m:
+            return None, "memory_pressure answered but its output is unreadable"
+        total, swap_gb, why = _sysctl_numbers()
+        if why:
+            return None, why
+        return _reading(float(m.group(1)), total, swap_gb, "memory_pressure")
     rc, out, _err = run(["vm_stat"])
     if rc == 0 and "Pages free" in out:
         page = re.search(r"page size of (\d+) bytes", out)
@@ -1264,25 +1389,10 @@ def read_memory():
 
         available = (pages("free") + pages("inactive") + pages("speculative")
                      + pages("purgeable")) * page_size
-        rc, mem, _err = run(["sysctl", "-n", "hw.memsize"])
-        try:
-            total = int(mem.strip())
-        except ValueError:
-            return None, "sysctl hw.memsize gave no number"
-        if total <= 0:
-            return None, "sysctl hw.memsize gave 0"
-        rc, swap, _err = run(["sysctl", "-n", "vm.swapusage"])
-        m = re.search(r"used\s*=\s*([0-9.]+)\s*([KMGT])", swap or "")
-        if not m:
-            return None, "sysctl vm.swapusage unreadable"
-        swap_gb = _size_gb(m.group(1), m.group(2))
-        free_pct = 100.0 * available / total
-        if not 0.0 <= free_pct <= 100.0 or swap_gb < 0:
-            return None, "vm_stat gave an impossible reading (free %.0f%% of %.0f GB, swap %.1f GB)" % (
-                free_pct, total / (1024.0 ** 3), swap_gb)
-        return {"free_pct": free_pct, "swap_used_gb": swap_gb,
-                "detail": "free %.0f%% of %.0f GB, swap used %.1f GB" % (
-                    free_pct, total / (1024.0 ** 3), swap_gb)}, None
+        total, swap_gb, why = _sysctl_numbers()
+        if why:
+            return None, why
+        return _reading(100.0 * available / total, total, swap_gb, "vm_stat")
     if rc == 0:
         return None, "vm_stat answered but its output is unreadable"
     try:
@@ -1303,7 +1413,7 @@ def read_memory():
                 "detail": "free %.0f%% of %.0f GB, swap used %.1f GB" % (
                     free_pct, total / (1024.0 * 1024.0), swap_gb)}, None
     except (OSError, KeyError, ValueError):
-        return None, "neither vm_stat nor /proc/meminfo is readable"
+        return None, "neither memory_pressure, vm_stat nor /proc/meminfo is readable"
 
 
 def cmd_guard(args):
@@ -1380,7 +1490,7 @@ def cmd_candidates(args):
         if not repo or not plan:
             continue
         plan_abs = plan if os.path.isabs(plan) else os.path.join(REPO_DIR, plan)
-        after, _fix, _dispatch, _purpose = plan_header(plan_abs)
+        after = plan_header(plan_abs)[0]
         reason = ""
         if after:
             landed, reason = plan_landed(after, args.events_dir)
