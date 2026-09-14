@@ -1,0 +1,22 @@
+# Queue runner settings (scripts/queue-runner.sh). Read on every tick, so a
+# change takes effect within a minute; no restart. Each key can be overridden
+# for one run with the environment variable named beside it.
+#
+# The memory guard: before any start the runner reads free memory and swap
+# (vm_stat and sysctl vm.swapusage on macOS). When free memory is under
+# min_free_percent or swap in use is over max_swap_used_gb it starts nothing,
+# says why once, and writes the reason into the queue so the Floor shows it.
+# It resumes by itself when the numbers recover. It never kills anything.
+#
+# "Free" here is what macOS can hand out without compressing or swapping:
+# free + inactive + speculative + purgeable pages, as a percent of hw.memsize.
+# The bare "Pages free" figure is meaningless on macOS (the file cache hoards
+# it), so it is not used alone.
+memory_guard:
+  min_free_percent: 50      # QUEUE_RUNNER_MIN_FREE_PCT
+  max_swap_used_gb: 3.5     # QUEUE_RUNNER_MAX_SWAP_GB
+
+# Landing is not a yaml key: QUEUE_LOOP_LAND in the environment, off by
+# default. Off, the runner never calls gh pr ready, gh pr merge or land.sh;
+# a PR past every gate becomes a ready_to_merge stop with the action merge.
+# On (1, true, on, yes) only once the landing gate is proven.

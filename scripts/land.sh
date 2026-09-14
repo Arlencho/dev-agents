@@ -31,9 +31,24 @@
 
 set -uo pipefail
 
-REPO="Arlencho/olympus-platform"
-ROOT="/Users/arlenrios/Desktop/dev-projects/AI-Orchestration/olympus-platform"
+# The queue runner (scripts/queue-runner.sh) lands PRs of other repos through
+# this script too: LAND_REPO names the GitHub slug, LAND_ROOT the checkout the
+# fetch and the worktree sweep run in. Defaults stay the product repo.
+REPO="${LAND_REPO:-Arlencho/olympus-platform}"
+ROOT="${LAND_ROOT:-/Users/arlenrios/Desktop/dev-projects/AI-Orchestration/olympus-platform}"
 API_URL=""
+
+# Another repo's PR must never be landed standing in the product checkout: the
+# fetch and the sweep below would run in the wrong tree. A caller that names
+# the repo names the checkout too, or is refused before anything is touched.
+if [ -n "${LAND_REPO:-}" ] && [ -z "${LAND_ROOT:-}" ]; then
+  printf 'land.sh: LAND_REPO=%s given without LAND_ROOT; refusing to stand in the default checkout\n' "$LAND_REPO" >&2
+  exit 2
+fi
+if [ ! -d "$ROOT/.git" ]; then
+  printf 'land.sh: %s is not a git checkout; refusing\n' "$ROOT" >&2
+  exit 2
+fi
 
 cd "$ROOT" || exit 1
 
@@ -249,7 +264,13 @@ sweep_worktrees() {
 
 for pr in "$@"; do land_one "$pr" || { fail "stopping at #$pr"; exit 1; }; done
 main_green
-verify_prod
+# The prod probe knows one service set: the product's. Another repo gets the
+# merge, the main CI read-back and the sweep, and is told plainly what it did
+# not get.
+case "$REPO" in
+  */olympus-platform) verify_prod ;;
+  *) say "prod verification"; echo "  none configured for $REPO (only the product repo is probed)" ;;
+esac
 sweep_worktrees
 
 say "still yours to do by hand"

@@ -49,3 +49,6 @@ logs/dispatch-runs/
 
 # Seat handoff records written by a running seat are runtime artefacts; never add them by directory (2026-09-13).
 wave-plans/*/handoffs/
+
+# Queue runner stops: what it refused to do by itself and why (per-machine runtime)
+logs/fleet-stops.jsonl

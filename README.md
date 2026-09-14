@@ -306,10 +306,101 @@ The tick's own output goes to `~/Library/Logs/queue-runner.log`; the runs it sta
 `logs/dispatch-runs/`. The plist sets `AbandonProcessGroup` as a second guard, but the run
 does not need it: it is a session of its own before the tick ends.
 
+**The loop.** A tick also moves work between waves, so the hop no longer waits for someone to
+notice. The judgment lives in `scripts/queue_loop.py`, which the runner calls three times per
+tick (`settle`, `guard`, `candidates`); the verdict parser is imported from
+`scripts/desk_live.py` (`first_line_verdict`, `critic_record`, `latest_round`), the same one
+the Floor uses, never a second copy.
+
+- *Memory guard.* Before any start the tick reads free memory and swap (`vm_stat` and
+  `sysctl vm.swapusage`; free is free + inactive + speculative + purgeable pages against
+  `hw.memsize`, since the bare "Pages free" figure means nothing on macOS). Under the thresholds
+  in `config/queue-runner.yaml` (defaults 50 percent free, 3.5 GB swap in use; override for one
+  run with `QUEUE_RUNNER_MIN_FREE_PCT`, `QUEUE_RUNNER_MAX_SWAP_GB`) it starts nothing, logs the
+  reason once per change of state, writes it into the queue as `hold:` (shown by
+  `make queue-list` and the Floor) and into the stops file, and resumes by itself when the
+  numbers recover. A sensor that cannot be read, or reads an impossible number (free share
+  under 0 or over 100 percent), is not a recovery: the last state stands, a hold included.
+  It never kills anything; a running dispatch is not its business.
+- *AFTER.* A plan whose header carries `# AFTER: <plan>` waits until the named plan has a
+  `dispatch_end` with outcome landed (every seat success). The reason is written into the
+  queue entry as `waiting:` and cleared by the runner itself; a named plan whose last run
+  failed keeps the waiter waiting and says so. Format: `docs/plan-file-format.md` § Header lines.
+- *One fix round.* When a detached run has ended and a critic seat's PR comment carries
+  `BLOCK-FIX` on its first line, the runner writes `<plan>-fix1.plan` next to the original:
+  one producer seat of the same role and branch whose task is the critic comment quoted in
+  full plus "fix every finding and add a test per finding", then the same critic seat for
+  round 2, with `# AFTER:` the original, and queues it first. One round per plan: the runner
+  remembers in its own marks (`<id>.loop` reading `fix-round`) which plans it fired for, so a
+  second `BLOCK-FIX` on the fix plan, on the original dispatched again, or on any plan whose
+  fix plan already exists queues nothing and becomes a stop. `BLOCK-ESCALATE`, `BLOCK-CLOSE`,
+  a bare `BLOCK`, a `BLOCK-FIX` whose body carries an escalation word or one of the five
+  escalation reasons (`scope grew`, `PRD is wrong or silent`, `pre-existing defect found`,
+  `cheaper path exists`, `security judgment`: that is a judgment case and reads as
+  `BLOCK-ESCALATE`), a verdict only quoted mid-sentence, a verdict word carried only by a body
+  line (the rule reads first lines only), or a critic that posted nothing
+  since the run started: nothing queued, a stop each. A critic's newest comment decides: a
+  later `BLOCK` takes an earlier `SAFE` back whatever `ROUND` either carries, and a later first
+  line with two verdict words or none is silence that replaces the earlier verdict and stops
+  for a person, never a landing on the old `SAFE`. The vocabulary itself, and when a critic
+  picks each word, is the rule block in `docs/org-chart.md` § Verdict; the same block sits in
+  every critic charter and in `CLAUDE.md`.
+- *Landing.* Landing sits behind `QUEUE_LOOP_LAND` and is off by default, until the
+  landing gate is proven: off, the runner makes no write call at all (no `gh pr ready`,
+  no `gh pr merge`, no land.sh) and a PR that passes every gate below becomes a stop of
+  kind `ready_to_merge` with the action `merge`, so the Floor's NEEDS YOU shows it. The
+  gates, in this order, each a stop when it fails: the head is green (a run that
+  names another commit is stale, a run whose workflow was cancelled is not green, zero checks
+  is not green, and a PR GitHub gives no `headRefOid` has no head a check or a SAFE can
+  bind to and never lands); every assigned critic seat posted `SAFE-TO-MERGE` or `APPROVE-MERGE` since
+  the run started under its own heading, on the head that is about to merge (the seat's plan
+  line names it, "first line reads CRITIC ZETA"; a seat the plan does not name takes a heading
+  that shares a word with a heading the run did name, never a word of the plan filename; any
+  other stem covers nobody, so a second `SAFE` under a strange heading never stands in for a
+  silent seat; and a `SAFE` that names an earlier head stops counting the moment the head
+  moves, so a push after `SAFE` returns the PR to waiting for critics); the merge state is
+  `CLEAN`. Then, because `gh pr list`'s rollup names no
+  commit per run, the runner reads the head commit's own checks once more (one GraphQL call,
+  bound to the head oid) and judges them the same way. With landing on, this machine must
+  also hold a checkout of the repo
+  (`$FLEET_HOME/<repo>` or this repo itself; without one the landing is refused and stopped,
+  land.sh never stands in another repo's tree), a draft is marked ready, and the checks and
+  the merge state are re-read on the head: the pass that marked ready never lands, because
+  marking ready starts new runs and the re-read cannot tell the pre-ready green from them,
+  so the next tick re-reads the PR and re-runs the named rollup on the head; only then
+  `scripts/land.sh <PR>` runs with `LAND_REPO` and `LAND_ROOT` (land.sh refuses one without
+  the other). Pending checks and an unreachable GitHub are looked at again next tick. Red or
+  stale checks, `BEHIND`, `DIRTY`, `BLOCKED`, a refused merge: a stop, never a merge.
+- *Stops.* Every stop is one line in `logs/fleet-stops.jsonl` (gitignored): key, kind, the
+  critic sentence (the verdict line as parsed, heading, round and verdict, never the raw first
+  line and never the body), the PR, the plan basename and one action. Every text field goes
+  through the Floor's task-line law (`desk_live.first_sentence`): first sentence only, a slash
+  token outside this worktree reads `outside-repo`, secret shapes redacted, capped. `make stops-list` prints the open ones; `desk_live.py` folds them into
+  `live.json` as `stops[]` for the Floor's NEEDS YOU section. A stop clears itself when its PR
+  merges or closes or its plan leaves the queue; the guard's clears when memory recovers.
+
+Ended runs the runner looks at are the detached ones (a pid file under `logs/dispatch-runs/`);
+each is decided once and marked `<id>.loop`. `--dry-run` reads everything and writes nothing:
+it says what it would settle, hold, write and land.
+
+```bash
+make stops-list                # what needs a person, one action each
+make queue-runner-install-dry  # lint the plist, say what install would do
+```
+
 Ground Truth: `tests/run-detached-dispatch-tests.sh` starts a detached run from a shell in
 its own process group, kills that group, and shows the run finishing with its events, queue
 marks and lock release intact; then the status and wait exit codes, and the runner starting
-one plan and not a second while the first runs.
+one plan and not a second while the first runs. `tests/run-queue-loop-tests.sh` covers the
+loop against fixtures (`tests/fixtures/loop/`): a fake `vm_stat` under and over the
+thresholds, a plan with `AFTER` against a failed and a landed run, a `BLOCK-FIX` comment and
+the fix plan it produces, a second `BLOCK-FIX`, escalations, all-safe-and-green with a draft, a
+silent critic, a stale comment, a red check, a refused merge, and the stops file the desk reads;
+then one test per gate above: a `SAFE` under a strange heading, checks on the previous push,
+a cancelled workflow, no checkout, an escalation reason in a `BLOCK-FIX`, the original plan
+dispatched again after its fix round, a later `BLOCK` after a `ROUND 2 SAFE`, a two-word
+verdict line, an unreadable and an impossible memory reading after a hold, and a verdict line
+carrying a prompt, a home path and a secret.
 
 ### workers.yaml provider_preferences + routing.yaml provider_failover
 

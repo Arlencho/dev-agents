@@ -618,6 +618,11 @@ scripts/dispatch.sh ─┘         │                start / settle, best effor
 | `dispatch_id` | Set when a dispatch claims the plan; matches the event-stream id |
 | `settled_at`, `settled_status` | Written at `dispatch_end` (`completed` · `aborted`) |
 | `blocked` | Optional. A reason set by `queue.sh block <plan> <reason>` (the queue runner sets it when a plan cannot start, an operator can too); `queue.sh unblock` clears it. The projection shows it as `queue[].blocked` and the runner skips the plan while it is set |
+| `waiting` | Why the runner is not starting the plan yet: its `# AFTER:` header names a plan that has not landed. Written and cleared by the runner itself (`queue.sh wait`) |
+
+Top level, beside `entries`: `hold` is the queue-wide reason nothing starts
+(the runner's memory guard writes it with `queue.sh hold` and clears it with
+`queue.sh release`); empty or absent when starts are free.
 
 `entries` is **ordered**: position 1 is next. Order is intent, never motion.
 
@@ -629,6 +634,11 @@ scripts/dispatch.sh ─┘         │                start / settle, best effor
 ./scripts/queue.sh mv <plan> <position>          # reorder (1-based)
 ./scripts/queue.sh start <plan> [dispatch_id]    # mark running (dispatch.sh calls this)
 ./scripts/queue.sh settle <plan> [status]        # mark settled (dispatch.sh calls this)
+./scripts/queue.sh block <plan> <reason>         # hold a plan back; the runner skips it
+./scripts/queue.sh unblock <plan>
+./scripts/queue.sh wait <plan> [reason]          # AFTER bookkeeping (the runner calls this)
+./scripts/queue.sh hold <reason>                 # queue-wide hold (the memory guard calls this)
+./scripts/queue.sh release
 ./scripts/queue.sh list                          # print the order
 make queue-add PLAN=wave-plans/x.plan REPO=olympus-platform PURPOSE="one line"
 make queue-list
@@ -665,8 +675,10 @@ missing.
 
 | Key | Type | Meaning |
 |-----|------|---------|
-| `queue[]` | array | Entries with status `queued`, **in declared order**: `position`, `plan`, `plan_basename`, `repo`, `purpose`, `added_at`, `status` (always `queued`) |
-| `queue_meta` | object | `{source, declared, declared_at, total, queued, running, settled}`. `declared_at` is the `added_at` of the **newest** entry and stamps the Floor block |
+| `queue[]` | array | Entries with status `queued`, **in declared order**: `position`, `plan`, `plan_basename`, `repo`, `purpose`, `added_at`, `status` (always `queued`), `blocked` (reason or `null`), `waiting` (the runner's AFTER reason or `null`) |
+| `queue_meta` | object | `{source, declared, declared_at, total, queued, running, settled, hold}`. `declared_at` is the `added_at` of the **newest** entry and stamps the Floor block; `hold` is the runner's queue-wide reason nothing starts (memory guard), else `null` |
+| `stops[]` | array | The queue runner's **open** stops, newest first, from `logs/fleet-stops.jsonl` (see below): `key`, `kind`, `at`, `repo`, `plan` (basename), `dispatch_id`, `pr`, `pr_url`, `branch`, `verdict`, `sentence`, `action`. `[]` on a replay |
+| `stops_meta` | object | `{source, open, total}`: the file (repo-relative), how many keys are open, how many keys the file holds |
 | `today[]` | array | One entry per dispatch whose **`dispatch_end` falls on the local calendar day**: `dispatch_id`, `source`, `plan`, `plan_basename`, `repo`, `purpose` (+ `purpose_source`: `queue` or `none`), `status` (`settled` · `aborted`, kept for compatibility), `outcome` (`landed` · `failed` · `aborted`, see below), `end_status`, `duration_s`, `started_at`, `ended_at`, `seats`, `succeeded`, `failed`, `branches[]` |
 | `today_meta` | object | `{date, streams_read, live[], ended}`: the local day, how many streams were read, which dispatch ids are still live (no `dispatch_end` yet, started on this local date or the one before) |
 | `multi_dispatch` | object | Present only when a second dispatch is live on the day: `{live[], followed, merged_seats}` |
@@ -688,6 +700,36 @@ seat exits can, so `outcome` is derived from both (a seat's **last**
   close-out with a failure counted is `failed` too;
 * `aborted`: anything else: the dispatcher was stopped while a seat was still
   in flight, or before the normal close-out with nothing having failed.
+
+
+### Runner stops (`logs/fleet-stops.jsonl`, schema `fleet-stops/1`)
+
+What the queue runner (`scripts/queue-runner.sh`, `scripts/queue_loop.py`)
+refused to do by itself, so a person can. Append-only JSONL, per machine,
+gitignored. One line per stop, one per clearance, folded by `key`: the newest
+line for a key decides, and only keys whose newest `state` is `open` reach the
+Floor. `make stops-list` prints them.
+
+```json
+{"schema":"fleet-stops/1","ts":"2026-09-13T14:02:11Z","key":"20260913-134500-product-1234","state":"open",
+ "kind":"second_block","repo":"product","plan":"w2b-fix1.plan","dispatch_id":"20260913-134500-product-1234",
+ "pr":2841,"pr_url":"https://github.com/you/repo/pull/2841","branch":"feat/w2b","verdict":"BLOCK-FIX",
+ "sentence":"CRITIC W2B ROUND 2: BLOCK-FIX","action":"open the comment; the runner fired its one fix round"}
+{"schema":"fleet-stops/1","ts":"2026-09-13T15:10:00Z","key":"20260913-134500-product-1234","state":"cleared","reason":"PR #2841 is merged"}
+```
+
+| Field | Notes |
+|-------|-------|
+| `key` | The dispatch id the stop belongs to; `memory-guard` for the guard |
+| `state` | `open` · `cleared` |
+| `kind` | `guard` · `second_block` · `escalate` · `close` · `unparsed` · `critic_silent` · `red_checks` · `not_clean` · `merge_refused` · `no_pr` · `pr_closed` · `no_producer` |
+| `sentence` | The critic's verdict line **as parsed** (heading, round, verdict: `CRITIC W2B ROUND 2: BLOCK-FIX`), or the runner's own one-line reason. Never the raw first line, **never the body**. Every text field of a record goes through the task-line law of `seats[].task_line` (`desk_live.first_sentence`): first sentence only, a slash token outside this worktree reads `outside-repo`, secret shapes redacted, capped at 200 |
+| `action` | One action per kind, the words the NEEDS YOU row ends with |
+| `plan` | Basename only. No absolute path ever enters the file, in this or any other field |
+
+Clearance is automatic: the guard's stop clears when memory recovers; a
+dispatch stop clears when its PR merges or closes (one `gh pr view` per open
+stop per tick, at most ten) or when its plan is removed from the queue.
 
 ### The now view (`seats[]` additions + `plan_context`)
 

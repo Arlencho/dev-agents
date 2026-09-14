@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch dispatch-detach dispatch-status dispatch-wait queue-runner queue-runner-dry queue-runner-install queue-runner-uninstall queue-runner-status queue-block queue-unblock bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once desk-follow floor experience-live queue-add queue-list queue-rm
+.PHONY: help sync status dispatch dispatch-detach dispatch-status dispatch-wait queue-runner queue-runner-dry queue-runner-install queue-runner-install-dry queue-runner-uninstall queue-runner-status stops-list queue-block queue-unblock bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once desk-follow floor experience-live queue-add queue-list queue-rm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -90,6 +90,16 @@ queue-runner-dry: ## Show what the next queue runner tick would start, start not
 queue-runner-install: ## Install the queue runner as a background macOS service (launchd, every minute; pause with launchctl setenv QUEUE_RUNNER_PAUSE 1)
 	@./scripts/queue-runner-install.sh
 
+queue-runner-install-dry: ## Check the queue runner plist and say what install would do, without installing
+	@./scripts/queue-runner-install.sh --dry-run
+
+stops-list: ## Show the queue runner's open stops (logs/fleet-stops.jsonl): what needs a person, and the one action each
+	@python3 -c 'import sys; sys.path.insert(0, "scripts"); import desk_live; \
+	  stops, meta, warnings = desk_live.read_stops(desk_live.DEFAULT_STOPS_FILE); \
+	  print("%s  %d open stop%s" % (meta["source"] or "no stops file", meta["open"], "" if meta["open"] == 1 else "s")); \
+	  [print("  %s  %-14s %s%s\n      %s\n      action: %s" % (s.get("at") or "?", s.get("kind"), s.get("plan") or s.get("key"), "  PR #%s" % s["pr"] if s.get("pr") else "", s.get("sentence") or "", s.get("action") or "")) for s in stops]; \
+	  [print("  warning: %s" % w) for w in warnings]'
+
 queue-runner-uninstall: ## Remove the queue runner background service
 	@./scripts/queue-runner-uninstall.sh
 
@@ -131,7 +141,7 @@ lint: ## Check sync + validate YAML
 	@echo "Validating workers.yaml structure..."
 	@grep -q "machines:" config/workers.yaml && echo "  workers.yaml: OK" || (echo "  workers.yaml: MISSING machines: key" && exit 1)
 
-test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch lock, seat worktrees, autoplan fail-closed, vendor-auth, detached dispatch)
+test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch lock, seat worktrees, autoplan fail-closed, vendor-auth, detached dispatch, orchestrator loop, critic verdict rule)
 	@echo "== launcher contract =="
 	@./tests/run-launcher-tests.sh
 	@echo ""
@@ -173,6 +183,12 @@ test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch
 	@echo ""
 	@echo "== detached dispatch (session leader, status, wait, queue runner) =="
 	@./tests/run-detached-dispatch-tests.sh
+	@echo ""
+	@echo "== orchestrator loop (memory guard, AFTER, one fix round, landing, stops) =="
+	@./tests/run-queue-loop-tests.sh
+	@echo ""
+	@echo "== critic verdict rule (one block in every critic charter) =="
+	@./tests/run-critic-verdict-tests.sh
 	@echo ""
 	@echo "All test suites passed."
 

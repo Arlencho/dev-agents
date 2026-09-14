@@ -46,6 +46,9 @@ export SHIM_MODE=work SEAT_WAIT_POLL_S=1 DISPATCH_LOCK_POLL_S=1 FLEET_HEARTBEAT_
 # A suite launched from inside a seat inherits that seat's env; the rows below
 # choose their own provider and event stream.
 unset AGENT_PROVIDER AGENT_MODEL FLEET_EVENTS_FILE FLEET_EVENTS_DIR
+# This suite may itself run inside a dispatched seat: its dispatch id and detached
+# marker must not leak into the dispatches started here.
+unset DISPATCH_DETACHED DISPATCH_RUN_LOG FLEET_DISPATCH_ID
 
 seat() { # <task-id> <branch> [dispatch-id]   env: SHIM_WORK_SLEEP SHIM_WORK_TAG AGENT_PROVIDER
     AGENT_PROVIDER="${AGENT_PROVIDER:-claude}" AGENT_WAVE=1 AGENT_TASK_ID="$1" FLEET_DISPATCH_ID="${3:-d1}" \
