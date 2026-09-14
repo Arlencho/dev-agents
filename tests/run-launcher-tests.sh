@@ -25,8 +25,13 @@ run_launcher() { # <vendor> <role> <task>  — shims on PATH
 }
 
 echo "== rows 1-12: each launcher × {success, fail, ratecap, noauth} =="
+# noauth note: kimi's shim says "HTTP 401 unauthorized", and a fast 401 is a
+# provider-limit signature since issue #84 (exit 78, hold + probe). claude's
+# and grok's noauth text carries no 401, so they stay 69.
 for vendor in claude kimi grok; do
-    for pair in "success 0" "fail 1" "ratecap 75" "noauth 69"; do
+    noauth_want=69
+    [ "$vendor" = "kimi" ] && noauth_want=78
+    for pair in "success 0" "fail 1" "ratecap 75" "noauth $noauth_want"; do
         mode="${pair% *}"; want="${pair#* }"
         got=$(SHIM_MODE="$mode" run_launcher "$vendor" web-frontend "do the thing")
         check "$vendor / $mode" "$want" "$got"
@@ -51,10 +56,12 @@ QUOTED_PROMPT="## Relevant Learnings
 - HTTP 429 Too Many Requests, quota exceeded
 YOUR TASK: do the thing"
 for vendor in claude kimi grok; do
+    noauth_want=69
+    [ "$vendor" = "kimi" ] && noauth_want=78
     got=$(SHIM_MODE=success run_launcher "$vendor" web-frontend "$QUOTED_PROMPT")
     check "$vendor / quoted phrases in prompt, success" 0 "$got"
     got=$(SHIM_MODE=noauth run_launcher "$vendor" web-frontend "$QUOTED_PROMPT")
-    check "$vendor / quoted phrases in prompt, real noauth" 69 "$got"
+    check "$vendor / quoted phrases in prompt, real noauth" "$noauth_want" "$got"
     got=$(SHIM_MODE=ratecap run_launcher "$vendor" web-frontend "$QUOTED_PROMPT")
     check "$vendor / quoted phrases in prompt, real ratecap" 75 "$got"
 done

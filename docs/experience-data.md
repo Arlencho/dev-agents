@@ -386,6 +386,7 @@ One JSON object per line, appended, never rewritten. Every line carries:
 | `seat_dispatch` | a seat goes out (first try or retry) | `task_id`, `agent`, `branch`, `wave`, `provider`, `model`, `worker`, `attempt` |
 | `seat_exit` | a seat finishes | `task_id`, `agent`, `branch`, `wave`, `provider`, `worker`, `status`, `exit`, `duration_s`, `attempt`, optional `reason` |
 | `ratecap` | vendor returned exit 75 | `task_id`, `agent`, `wave`, `provider`, `worker`, `cooldown_minutes` |
+| `provider_limit` | a seat exited 78 (spend/session limit), or a start was refused by the hold | `task_id`, `agent`, `wave`, `provider`, `model`, `reset` (the reset time from the provider's message) |
 | `failover` | a retry landed on a different vendor | `task_id`, `agent`, `branch`, `from_provider`, `to_provider`, `attempt` |
 | `human_wait` | dispatcher blocks on the operator | `kind` (`wave_gate`\|`failure_gate`), `wave`, `next_wave`, `waiting_on` (short label) |
 | `human_resume` | the operator answered | `kind`, `wave`, `answer` (`continue`\|`abort`) |
@@ -395,7 +396,9 @@ One JSON object per line, appended, never rewritten. Every line carries:
 | `dispatch_end` | run closes (also on Ctrl-C, via trap) | `status` (`completed`\|`aborted`), `total`, `succeeded`, `failed`, `duration_s` |
 
 `seat_exit.status` ∈ `success` · `failed` · `blocked` (guardrails, exit 77) ·
-`ratecap` (exit 75) · `unavailable` (exit 69).
+`ratecap` (exit 75) · `unavailable` (exit 69) · `held` (provider spend/session
+limit, exit 78; no retry, a probe releases the hold) · `hung` (no model event
+for the quiet period, exit 124; retried once).
 
 ### Redaction law (writer-enforced)
 
@@ -722,7 +725,7 @@ Floor. `make stops-list` prints them.
 |-------|-------|
 | `key` | The dispatch id the stop belongs to; `memory-guard` for the guard |
 | `state` | `open` · `cleared` |
-| `kind` | `guard` · `second_block` · `escalate` · `close` · `unparsed` · `critic_silent` · `red_checks` · `not_clean` · `merge_refused` · `no_pr` · `pr_closed` · `no_producer` |
+| `kind` | `guard` · `second_block` · `escalate` · `close` · `unparsed` · `critic_silent` · `red_checks` · `not_clean` · `merge_refused` · `no_pr` · `pr_closed` · `no_producer` · `seat_hung` · `provider_limit` |
 | `sentence` | The critic's verdict line **as parsed** (heading, round, verdict: `CRITIC W2B ROUND 2: BLOCK-FIX`), or the runner's own one-line reason. Never the raw first line, **never the body**. Every text field of a record goes through the task-line law of `seats[].task_line` (`desk_live.first_sentence`): first sentence only, a slash token outside this worktree reads `outside-repo`, secret shapes redacted, capped at 200 |
 | `action` | One action per kind, the words the NEEDS YOU row ends with |
 | `plan` | Basename only. No absolute path ever enters the file, in this or any other field |
