@@ -45,6 +45,21 @@
 #      marks a draft ready never lands, not on pending, not on the pre-ready
 #      named SUCCESS, not on an unnamed SUCCESS; an empty headRefOid never
 #      lands and binds no SAFE
+#  11. VERDICTS header: a plan naming where its critics post (for example
+#      VERDICTS: acme/product#2340) has its verdicts read from that issue as
+#      well as the PR, keeping only comments at or after the run start whose
+#      body names the PR number or the branch; a comment for another PR is
+#      ignored; no header keeps the PR-only reading
+#  12. memory truth: the guard reads the system-wide free percentage from
+#      memory_pressure (the 2026-09-14 02:58 reading, 47 percent, while
+#      vm_stat raw free sits at 23) and does not hold; memory_pressure absent
+#      falls back to the vm_stat sum; a memory_pressure answer with no
+#      percentage line is an unreadable sensor
+#  13. runner truth, round 2: on the tracking issue a comment names this run
+#      only by 'PR N' (a bare '#N' is an issue reference, and a body naming
+#      any 'PR #M' this PR is not among covers nobody here) or by the branch
+#      as a whole slash-token, never as a substring of a longer slug; the
+#      rule is the one desk_live.critic_record already applies
 #
 # Also: --dry-run writes nothing, and the verdict parser is imported from
 # scripts/desk_live.py, never re-implemented.
@@ -91,8 +106,15 @@ mkdir -p "$RUNS" "$EVENTS"
 RUNNER="$FLEET/scripts/queue-runner.sh"; QUEUE="$FLEET/scripts/queue.sh"
 ORIGIN="git@github.com:acme/product.git"
 
-# Fake memory readers: vm_stat and sysctl answer from files the tests point at.
+# Fake memory readers: vm_stat and sysctl answer from files the tests point
+# at; memory_pressure answers from its own file when one is pointed at, else
+# fails like a machine without the tool.
 export FAKE_VM_STAT="$SANDBOX/vm_stat.txt" FAKE_SWAP="$SANDBOX/swap.txt"
+export FAKE_MEM_PRESSURE="$SANDBOX/memory_pressure.txt"
+cat > "$FLEET/bin/memory_pressure" <<'STUB'
+#!/bin/sh
+if [ -f "$FAKE_MEM_PRESSURE" ]; then cat "$FAKE_MEM_PRESSURE"; else exit 1; fi
+STUB
 cat > "$FLEET/bin/vm_stat" <<'STUB'
 #!/bin/sh
 cat "$FAKE_VM_STAT"
@@ -107,7 +129,8 @@ esac
 STUB
 # Fake gh: records every call, answers `pr list` from the scenario file, `pr
 # view N` from view-N.json when present (else an open clean PR), `pr ready` ok,
-# `api graphql` (the head's own checks) from graphql.json when present, else
+# `issue view N` from issue-N.json when present (else no comments), `api
+# graphql` (the head's own checks) from graphql.json when present, else
 # it fails like a network that is down.
 export GH_LOG="$SANDBOX/gh.log" GH_SCENARIO="$SANDBOX/gh.scenario" GH_DIR="$SANDBOX/gh"
 mkdir -p "$GH_DIR"; cp "$FIX"/pr-*.json "$GH_DIR/"
@@ -118,6 +141,7 @@ case "$1 $2" in
   "pr list") cat "$GH_DIR/$(cat "$GH_SCENARIO").json" ;;
   "pr view") if [ -f "$GH_DIR/view-$3.json" ]; then cat "$GH_DIR/view-$3.json"; else echo '{"state":"OPEN","isDraft":false,"mergeStateStatus":"CLEAN"}'; fi ;;
   "pr ready") exit 0 ;;
+  "issue view") if [ -f "$GH_DIR/issue-$3.json" ]; then cat "$GH_DIR/issue-$3.json"; else echo '{"comments":[]}'; fi ;;
   "api graphql") if [ -f "$GH_DIR/graphql.json" ]; then cat "$GH_DIR/graphql.json"; else exit 1; fi ;;
   *) exit 1 ;;
 esac
@@ -838,6 +862,102 @@ before_land77=$(count '^77 LAND_REPO=acme/product' "$LAND_LOG")
 tick >/dev/null
 check "10e switch on: the same green PR lands" "landed" "$(cut -f1 "$RUNS/run-theta-on.loop")"
 check "10e land.sh called for 77" "$((before_land77 + 1))" "$(count '^77 LAND_REPO=acme/product' "$LAND_LOG")"
+
+echo ""
+echo "== 11. VERDICTS header: verdicts read from the named issue =="
+{
+    echo "# oly: verdicts land on the tracking issue."
+    echo "# DISPATCH: ./scripts/dispatch.sh $ORIGIN wave-plans/oly.plan --retries 0 --skip-auth-preflight"
+    echo "# VERDICTS: acme/product#2340"
+    echo "1 | devops | build the thing | feat/alpha"
+    echo "2 | devops-critic | READ-ONLY REVIEW of the PR on feat/alpha. Post ONE comment whose first line reads CRITIC OLY with SAFE-TO-MERGE or BLOCK-FIX. | feat/alpha"
+} > "$FLEET/wave-plans/oly.plan"
+cp "$FIX/issue-2340.json" "$GH_DIR/issue-2340.json"
+ended_run run-oly-1 oly stream-alpha-landed.jsonl
+echo pr-issue-verdicts > "$GH_SCENARIO"
+before_land=$(count . "$LAND_LOG")
+tick >/dev/null
+check "11a verdicts on the named issue: the run lands, not silent" "landed" "$(cut -f1 "$RUNS/run-oly-1.loop")"
+check "11a the issue was read" "1" "$(count 'issue view 2340' "$GH_LOG")"
+check "11a land.sh called for PR 2851" "1" "$(count '^2851 LAND_REPO=acme/product' "$LAND_LOG")"
+ended_run run-oly-2 oly stream-alpha-landed.jsonl
+cp "$FIX/issue-2340-other-pr.json" "$GH_DIR/issue-2340.json"
+tick >/dev/null
+check "11b only a comment for another PR on the issue: the seat is silent" "critic_silent" "$(stop_field run-oly-2 kind)"
+check "11b the sentence names the missing heading" "0 of 1 critic seats posted a verdict since the run started; missing: CRITIC OLY" "$(stop_field run-oly-2 sentence)"
+check "11b land.sh not called again" "$((before_land + 1))" "$(count . "$LAND_LOG")"
+check "11c plan_header reads the VERDICTS header, None without one" "acme/product#2340,None" "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import queue_loop as q; print("%s,%s" % (q.plan_header(sys.argv[2])[4], q.plan_header(sys.argv[3])[4]))' "$PYLIB" "$FLEET/wave-plans/oly.plan" "$FLEET/wave-plans/alpha.plan")"
+check "11c verdicts_issue and names_run_pr" "ok" "$(python3 -c '
+import sys; sys.path.insert(0, sys.argv[1]); import queue_loop as q
+assert q.verdicts_issue("acme/product#2340", "other/repo") == ("acme/product", 2340)
+assert q.verdicts_issue("#2340", "acme/product") == ("acme/product", 2340)
+assert q.verdicts_issue("issue 2340", "acme/product") == ("acme/product", 2340)
+assert q.verdicts_issue("somewhere", "acme/product") is None
+assert q.names_run_pr("CRITIC OLY: SAFE-TO-MERGE\nVerdict for PR #2851.", 2851, "feat/alpha")
+assert q.names_run_pr("CRITIC OLY\nVerdict for PR 2851.", 2851, "feat/alpha")
+assert q.names_run_pr("CRITIC OLY\non feat/alpha, see #99", 2851, "feat/alpha")
+assert not q.names_run_pr("CRITIC OLY: BLOCK-FIX\nreviews PR #997", 2851, "feat/alpha")
+assert not q.names_run_pr("CRITIC OLY: BLOCK-FIX\nreviews PR #285", 2851, "feat/alpha")
+assert not q.names_run_pr("CRITIC OLY: BLOCK-FIX\nreviews PR #28510", 2851, "feat/alpha")
+print("ok")' "$PYLIB")"
+
+echo ""
+echo "== 12. memory truth: memory_pressure first, vm_stat when absent =="
+cp "$FIX/memory_pressure-47.txt" "$FAKE_MEM_PRESSURE"
+cp "$FIX/vm_stat-raw-free-23.txt" "$FAKE_VM_STAT"; cp "$FIX/swap-ok.txt" "$FAKE_SWAP"
+check "12a the 2026-09-14 02:58 memory_pressure reading wins over vm_stat raw free 23" "47" "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import queue_loop as q; m, why = q.read_memory(); print(round(m["free_pct"]) if m else "unreadable: %s" % why)' "$PYLIB")"
+before_hold=$(count 'memory guard: starts held' "$RUNNER_LOG")
+out=$(QUEUE_RUNNER_MIN_FREE_PCT=40 tick); check "12b tick exit" "0" "$?"
+printf '%s\n' "$out" | grep -q "memory guard clear (free 47% of 32 GB, swap used 1.0 GB"; check "12b reads as 47 and does not hold" "0" "$?"
+check "12b no new hold logged" "$before_hold" "$(count 'memory guard: starts held' "$RUNNER_LOG")"
+rm -f "$FAKE_MEM_PRESSURE"
+out=$(QUEUE_RUNNER_MIN_FREE_PCT=40 tick)
+printf '%s\n' "$out" | grep -q "memory guard: starts held, free memory 26% is under 40%"; check "12c memory_pressure absent: the vm_stat sum reads 26 and holds" "0" "$?"
+cp "$FIX/memory_pressure-47.txt" "$FAKE_MEM_PRESSURE"
+out=$(QUEUE_RUNNER_MIN_FREE_PCT=40 tick)
+printf '%s\n' "$out" | grep -q "memory guard cleared, starts resume (free 47% of 32 GB"; check "12d recovery reads 47 again" "0" "$?"
+printf 'no numbers here at all\n' > "$FAKE_MEM_PRESSURE"
+check "12e a memory_pressure answer with no percentage line is an unreadable sensor" "unreadable" "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import queue_loop as q; m, why = q.read_memory(); print("unreadable" if m is None else "parsed %s" % round(m["free_pct"]))' "$PYLIB")"
+rm -f "$FAKE_MEM_PRESSURE"
+
+echo ""
+echo "== 13. runner truth round 2: whole-token branch, PR-ref rule =="
+
+# 13a. a BLOCK for another PR that mentions this run's branch only as a
+# substring of a longer slug covers nobody; the this-PR SAFE beside it lands
+cp "$FIX/issue-2340-branch-substring.json" "$GH_DIR/issue-2340.json"
+ended_run run-oly-3 oly stream-alpha-landed.jsonl
+before_land13=$(count '^2851 LAND_REPO=acme/product' "$LAND_LOG")
+tick >/dev/null
+check "13a other-PR BLOCK on feat/alpha-fix does not stop the this-PR SAFE" "landed" "$(cut -f1 "$RUNS/run-oly-3.loop")"
+check "13a land.sh called once more for PR 2851" "$((before_land13 + 1))" "$(count '^2851 LAND_REPO=acme/product' "$LAND_LOG")"
+
+# 13b. the same BLOCK alone leaves the seat silent and queues no fix round
+cp "$FIX/issue-2340-branch-substring-only.json" "$GH_DIR/issue-2340.json"
+ended_run run-oly-4 oly stream-alpha-landed.jsonl
+tick >/dev/null
+check "13b the substring BLOCK alone: the seat is silent" "critic_silent" "$(stop_field run-oly-4 kind)"
+check "13b the sentence names the missing heading" "0 of 1 critic seats posted a verdict since the run started; missing: CRITIC OLY" "$(stop_field run-oly-4 sentence)"
+check_true "13b no fix plan was queued" test ! -f "$FLEET/wave-plans/oly-fix1.plan"
+
+# 13c. a bare #2851 beside a PR #997 is an issue reference, not this PR
+cp "$FIX/issue-2340-bare-hash.json" "$GH_DIR/issue-2340.json"
+ended_run run-oly-5 oly stream-alpha-landed.jsonl
+tick >/dev/null
+check "13c bare #2851 beside PR #997: the seat is silent" "critic_silent" "$(stop_field run-oly-5 kind)"
+check_true "13c no fix plan was queued" test ! -f "$FLEET/wave-plans/oly-fix1.plan"
+
+# 13d. the naming rule itself, edge by edge
+check "13d names_run_pr: whole-token branch and PR-ref rule" "ok" "$(python3 -c '
+import sys; sys.path.insert(0, sys.argv[1]); import queue_loop as q
+assert not q.names_run_pr("CRITIC OLY: BLOCK-FIX\nreviews PR #997 on feat/alpha-fix", 2851, "feat/alpha")
+assert not q.names_run_pr("CRITIC OLY\non feat/alpha-fix", 2851, "feat/alpha")
+assert not q.names_run_pr("CRITIC OLY: BLOCK-FIX\nreviews PR #997; blocked on #2851", 2851, "feat/alpha")
+assert not q.names_run_pr("CRITIC OLY\nsee #2851", 2851, "feat/alpha")
+assert q.names_run_pr("CRITIC OLY\non feat/alpha", 2851, "feat/alpha")
+assert q.names_run_pr("CRITIC OLY: SAFE-TO-MERGE\nVerdict for PR #2851.", 2851, "feat/alpha")
+assert q.names_run_pr("CRITIC OLY\nPR #997 and PR 2851 both", 2851, "feat/alpha")
+print("ok")' "$PYLIB")"
 
 echo ""
 echo "== $pass passed, $fail failed =="
