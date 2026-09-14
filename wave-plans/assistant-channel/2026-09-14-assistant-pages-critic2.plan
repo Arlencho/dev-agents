@@ -1,0 +1,6 @@
+# Connector pages round 2 frontend critic: the seat died on the spend limit; backend critic round 2 is SAFE on PR 2849. 2026-09-14
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/olympus-platform.git wave-plans/assistant-channel/2026-09-14-assistant-pages-critic2.plan --detach --retries 1
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | frontend-critic | READ-ONLY REVIEW ROUND 2 of the pages on PR 2849, branch feat/ac-pages-styling. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Re-measure the alert contrast at 400 light and dark, re-run the round 1 passed checks from the comment whose first line starts with FRONTEND CRITIC ASSISTANT PAGES on this head. Post ONE comment on issue 2340 whose first line reads FRONTEND CRITIC ASSISTANT PAGES ROUND 2 with SAFE-TO-MERGE, BLOCK-FIX or BLOCK-ESCALATE and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/ac-pages-styling

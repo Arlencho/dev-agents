@@ -1,0 +1,8 @@
+# Floor needs-you round 4: one character class. Round 3 cleared all seven earlier findings; the only open item is a plus sign in a branch name. PR 89. 2026-09-14
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-14-floor-needs-you-fix3.plan --detach --retries 1
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | web-frontend | On branch feat/floor-needs-you-superseded (PR 89), in scripts/desk_live.py whole_token: bound a branch by the full set of characters legal in a git ref name (letters, digits, dot, slash, dash, underscore, plus), per item 8 of the comment on PR 89 whose first line reads CRITIC FLOOR NEEDS YOU ROUND 3 BLOCK-FIX; add the feat/track versus feat/track+c fixture as a test; keep every test green. VERIFY: the desk test suite with real exit codes in the PR body under a Round 4 heading. HOUSE STYLE: no long dash anywhere, no AI tool or vendor name, no Co-Authored-By trailer. Commit and push. | feat/floor-needs-you-superseded
+
+2 | plan-critic | READ-ONLY REVIEW ROUND 4 of PR 89. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Confirm item 8 is closed and items 1 to 7 still hold. This is the last round on this PR: report only a finding that makes NEEDS YOU hide a failure a person must see. Post ONE comment on PR 89 whose first line reads CRITIC FLOOR NEEDS YOU ROUND 4 with SAFE-TO-MERGE, BLOCK-FIX or BLOCK-ESCALATE and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/floor-needs-you-superseded
