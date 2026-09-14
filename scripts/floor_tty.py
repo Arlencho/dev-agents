@@ -507,6 +507,20 @@ def initiative_facts(r):
         bits.append("last landed #%d" % ll["number"] + (" " + ll["title"] if ll.get("title") else ""))
     if r.get("exit"):
         bits.append("exit: " + str(r["exit"]))
+    # Fleet optimization W1: the ledger line; cost unknown is said, never zero.
+    lg = r.get("ledger") if isinstance(r.get("ledger"), dict) else None
+    if lg:
+        if lg.get("cost_known"):
+            bits.append("cost $%.2f" % (lg.get("cost_usd") or 0))
+        elif (lg.get("cost_usd") or 0) > 0:
+            bits.append("cost $%.2f + %s cost unknown"
+                        % (lg["cost_usd"], plural(lg.get("cost_unknown_seats") or 0, "seat")))
+        else:
+            bits.append("cost unknown")
+        if isinstance(lg.get("elapsed_s"), (int, float)) and lg["elapsed_s"] > 0:
+            bits.append("elapsed " + fmt_min(lg["elapsed_s"]))
+        if isinstance(lg.get("work_share"), (int, float)):
+            bits.append("work %d%%" % round(lg["work_share"] * 100))
     if r.get("lookup") == "skipped":
         bits.append("streams and queue alone, milestone not verified"
                     + (" (%s)" % r["reason"] if r.get("reason") else ""))

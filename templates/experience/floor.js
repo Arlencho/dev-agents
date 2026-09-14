@@ -768,6 +768,26 @@
       bits.push("last landed #" + ll.number + (ll.title ? " " + ll.title : ""));
     }
     if (r.exit) bits.push("exit: " + r.exit);
+    /* Fleet optimization W1: the ledger line. Cost unknown is said, never
+       painted as zero. */
+    var lg = r.ledger;
+    if (lg) {
+      if (lg.cost_known) {
+        bits.push("cost $" + Number(lg.cost_usd || 0).toFixed(2));
+      } else if ((lg.cost_usd || 0) > 0) {
+        bits.push("cost $" + Number(lg.cost_usd).toFixed(2) + " + " +
+          lg.cost_unknown_seats + " seat" + (lg.cost_unknown_seats === 1 ? "" : "s") +
+          " cost unknown");
+      } else {
+        bits.push("cost unknown");
+      }
+      if (typeof lg.elapsed_s === "number" && lg.elapsed_s > 0) {
+        bits.push("elapsed " + fmtDur(lg.elapsed_s));
+      }
+      if (typeof lg.work_share === "number") {
+        bits.push("work " + Math.round(lg.work_share * 100) + "%");
+      }
+    }
     return bits;
   }
 

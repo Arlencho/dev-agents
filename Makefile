@@ -1,4 +1,4 @@
-.PHONY: help sync status dispatch dispatch-detach dispatch-status dispatch-wait queue-runner queue-runner-dry queue-runner-install queue-runner-install-dry queue-runner-uninstall queue-runner-status stops-list queue-block queue-unblock bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once desk-follow floor experience-live queue-add queue-list queue-rm
+.PHONY: help sync status dispatch dispatch-detach dispatch-status dispatch-wait queue-runner queue-runner-dry queue-runner-install queue-runner-install-dry queue-runner-uninstall queue-runner-status stops-list queue-block queue-unblock bootstrap setup lint test evidence learnings learnings-stats preamble review autoplan retro paperclip-up paperclip-down paperclip-status paperclip-refresh paperclip-sync paperclip-check paperclip-safe-defaults paperclip-agent-status paperclip-agent-on paperclip-agent-off fleet-status scorecard vendor-auth experience experience-data experience-snapshot experience-open desk desk-live desk-live-once desk-follow floor experience-live queue-add queue-list queue-rm ledger ledger-orchestrator
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -53,6 +53,12 @@ desk-live-once: ## Write site/experience/data/live.json once from the newest eve
 
 floor: ## Floor in the terminal: render live.json as plain text every 5 s, q quits (FLOOR_FLAGS=--once or --color)
 	@python3 ./scripts/floor_tty.py $(FLOOR_FLAGS)
+
+ledger: ## Fleet ledger: rebuild logs/fleet-ledger.jsonl from logs, print rollups, write logs/ledger.json (LEDGER_FLAGS=--no-gh)
+	@python3 ./scripts/ledger.py build $(LEDGER_FLAGS)
+
+ledger-orchestrator: ## Append a manual orchestrator reading (usage: make ledger-orchestrator DATE=2026-09-14 USD=12.34 NOTE="provider page reading")
+	@python3 ./scripts/ledger.py orchestrator --date "$(DATE)" --usd "$(USD)" --note "$(NOTE)"
 
 queue-add: ## Arm a plan on the Ops Floor queue (usage: make queue-add PLAN=path REPO=name PURPOSE="one line")
 	@./scripts/queue.sh add "$(PLAN)" "$(REPO)" "$(PURPOSE)"
@@ -192,6 +198,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch
 	@echo ""
 	@echo "== fix-round plan check (seat rule blocks + dispatch gate) =="
 	@./tests/run-plan-check-tests.sh
+	@echo ""
+	@echo "== fleet ledger (W1: seat records, rollups, manual readings) =="
+	@./tests/run-ledger-tests.sh
 	@echo ""
 	@echo "All test suites passed."
 

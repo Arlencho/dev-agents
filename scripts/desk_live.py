@@ -66,6 +66,11 @@ DEFAULT_QUEUE_FILE = os.environ.get(
 DEFAULT_STOPS_FILE = os.environ.get(
     "FLEET_STOPS_FILE", os.path.join(REPO_DIR, "logs", "fleet-stops.jsonl"))
 STOPS_SCHEMA = "fleet-stops/1"
+# The W1 fleet ledger rollup (logs/ledger.json, written by make ledger):
+# per-initiative cost, elapsed and work share. Optional like gh; when it is
+# missing the Floor says so instead of painting zero.
+DEFAULT_LEDGER_FILE = os.environ.get(
+    "FLEET_LEDGER_FILE", os.path.join(REPO_DIR, "logs", "ledger.json"))
 DEFAULT_SITE_DIR = os.path.join(REPO_DIR, "site", "experience")
 DEFAULT_PORT = 8777
 DEFAULT_INTERVAL = 2.0
@@ -2614,6 +2619,71 @@ def attach_v3(proj, queue_entries, plan_cache, gh, now, live_summaries=None):
     return proj
 
 
+def read_ledger(path):
+    """The W1 fleet ledger rollup (logs/ledger.json), optional like gh.
+
+    Returns (data, meta); meta says ok or skipped with the reason, so the
+    Floor can say cost unknown instead of painting zero.
+    """
+    try:
+        with open(path, errors="replace") as fh:
+            data = json.load(fh)
+    except OSError:
+        return None, {"lookup": "skipped", "reason": "no ledger.json (run make ledger)"}
+    except ValueError:
+        return None, {"lookup": "skipped", "reason": "ledger.json is not valid JSON"}
+    if not isinstance(data, dict) or not str(data.get("schema") or "").startswith("fleet-ledger-rollup/"):
+        return None, {"lookup": "skipped", "reason": "ledger.json is not a fleet ledger rollup"}
+    return data, {"lookup": "ok", "reason": None}
+
+
+def attach_ledger(proj, ledger_file=None):
+    """One ledger line per initiative (fleet optimization W1): cost, elapsed
+    and work share from logs/ledger.json, joined on the plan basenames the
+    initiative row already names. Never fatal: a missing or unreadable
+    ledger leaves every row with ledger=None and initiatives_meta.ledger
+    says why. The manual orchestrator readings in the ledger are not shown
+    here: they are their own rollup lines and nothing reads them to cap,
+    warn or throttle."""
+    path = DEFAULT_LEDGER_FILE if ledger_file is None else ledger_file
+    if proj.get("view") == "replay":
+        meta_out = dict(proj.get("initiatives_meta") or {})
+        meta_out["ledger"] = {"lookup": "skipped", "reason": "replay carries no ledger"}
+        proj["initiatives_meta"] = meta_out
+        return
+    data, meta = read_ledger(path)
+    by_plan = {}
+    if data:
+        for entry in data.get("initiatives") or []:
+            for plan in entry.get("plans") or []:
+                by_plan.setdefault(plan, []).append(entry)
+    for row in proj.get("initiatives") or []:
+        matched = []
+        for plan in row.get("plans") or []:
+            for entry in by_plan.get(plan, []):
+                if entry not in matched:
+                    matched.append(entry)
+        if not matched:
+            row["ledger"] = None
+            continue
+        cost = sum(e.get("cost_usd") or 0 for e in matched)
+        unknown = sum(e.get("cost_unknown_seats") or 0 for e in matched)
+        active = sum(e.get("active_s") or 0 for e in matched)
+        elapsed = sum(e.get("elapsed_s") or 0 for e in matched)
+        row["ledger"] = {
+            "cost_usd": round(cost, 2),
+            "cost_known": unknown == 0,
+            "cost_unknown_seats": unknown,
+            "active_s": active,
+            "elapsed_s": elapsed,
+            "work_share": round(active / elapsed, 4) if elapsed else None,
+            "source": "logs/ledger.json",
+        }
+    meta_out = dict(proj.get("initiatives_meta") or {})
+    meta_out["ledger"] = meta
+    proj["initiatives_meta"] = meta_out
+
+
 # ── the plain sentence (one per live seat) + the top line ────────────────────
 #
 # Issue 69: the Floor must read like sentences, not like a schema. The page
@@ -3081,6 +3151,8 @@ def attach_queue_and_day(proj, events_dir, queue_file, now, gh=None):
     attach_context(proj, entries, live, plan_cache, gh)
     # Floor v3: NEEDS YOU, the blocked reasons on the queue, INITIATIVES.
     attach_v3(proj, entries, plan_cache, gh, now, live)
+    # Fleet optimization W1: the ledger line on each initiative row.
+    attach_ledger(proj)
     # Last: the sentence needs the queue, the plan context and every live seat.
     attach_now(proj, entries)
     return proj

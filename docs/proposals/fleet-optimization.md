@@ -118,9 +118,9 @@ Two weeks of normal work after W1 to W4 are merged, compared with the baseline i
 
 ## 8. Decisions for the owner, one at a time
 
-1. Approve this proposal as the programme, or change the order.
-2. The round cap for Tier C: two rounds proposed.
-3. Whether the ledger includes the orchestrator session cost, which may need reading the provider usage page by hand once a day until it can be automated.
+1. Approve this proposal as the programme, or change the order. TAKEN 2026-09-14 10:20: approved as written.
+2. The round cap for Tier C: two rounds proposed. TAKEN 2026-09-14 10:25: the cap is two rounds.
+3. Whether the ledger includes the orchestrator session cost, which may need reading the provider usage page by hand once a day until it can be automated. TAKEN 2026-09-14 10:30: the orchestrator session cost is recorded in the ledger as a manual daily reading (make ledger-orchestrator), shown as its own line and never used to cap, warn or throttle.
 
 ## 9. Not in scope
 
