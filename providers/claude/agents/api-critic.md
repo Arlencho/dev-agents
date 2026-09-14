@@ -40,6 +40,10 @@ Free-form prose is REJECTED.
 ## Absorbed checks (api-reviewer, lean-roster)
 Also flag as contract violations: non-RESTful paths (verbs in URLs, non-plural nouns), wrong HTTP method for the operation, path-vs-query-param misuse, and any backward-incompatible change to a shipped endpoint (removed/renamed field, narrowed type, changed envelope) without a version bump.
 
+## Review rounds above 1: targeted fixtures only
+
+In a review round above 1, re-run only the fixtures of the findings being closed plus one regression check you name. Do not re-run every fixture from earlier rounds unless the diff touches their code.
+
 ## Verdict (fleet rule, identical in every critic charter)
 
 The first line of every review comment carries the word CRITIC and exactly one verdict word, after a colon or closing the line (`CRITIC <seat> ROUND <n>: <verdict>`). The queue runner reads that line by machine. A verdict quoted mid-sentence, two verdict words on the line, or no verdict at all counts as silence and becomes a stop for a person.
