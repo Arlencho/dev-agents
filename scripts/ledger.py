@@ -29,7 +29,8 @@ SCHEMA = "fleet-ledger/1"
 RESULT_MARKER = '"type":"result"'
 ISSUE_RE = re.compile(r"\bissue #?(\d{1,7})\b", re.IGNORECASE)
 TIER_RE = re.compile(r"^#*\s*TIER:\s*([A-Za-z0-9_-]+)", re.IGNORECASE | re.MULTILINE)
-FIX_ROUND_RE = re.compile(r"^#*\s*FIX-ROUND:\s*(\d+)", re.IGNORECASE | re.MULTILINE)
+FIX_ROUND_RE = re.compile(r"^#*\s*FIX-ROUND:\s*(\d+)\s+of\s+", re.IGNORECASE | re.MULTILINE)
+FIX_ROUND_ANY_RE = re.compile(r"^#*\s*FIX-ROUND:", re.IGNORECASE | re.MULTILINE)
 ROUND_RE = re.compile(r"\bROUND\s+(\d{1,3})\b", re.IGNORECASE)
 FIX_NAME_RE = re.compile(r"-fix(\d*)\.plan$")
 R_NAME_RE = re.compile(r"-r(\d+)\.plan$")
@@ -135,6 +136,10 @@ def parse_run_log(path):
                 current["log_path"] = m.group(1)
                 continue
             if RESULT_MARKER in line:
+                # Only a first-party seat emits stream-json; a kimi or grok
+                # seat that quotes a result line is narrating, not recording.
+                if (current["provider"] or "").lower() != "claude":
+                    continue
                 try:
                     ev = json.loads(line)
                 except ValueError:
@@ -198,11 +203,14 @@ def plan_facts(path):
     if m:
         facts["round"] = int(m.group(1)) + 1
         facts["round_source"] = "fix-round header"
+    if facts["round"] is None and FIX_ROUND_ANY_RE.search(header):
+        facts["round"] = 2
+        facts["round_source"] = "fix-round header"
     if facts["round"] is None:
-        rounds = [int(n) for n in ROUND_RE.findall(text)]
-        if rounds:
-            facts["round"] = max(rounds)
-            facts["round_source"] = "plan text"
+        m = ROUND_RE.search(header)
+        if m:
+            facts["round"] = int(m.group(1))
+            facts["round_source"] = "plan header"
     if facts["round"] is None:
         m = FIX_NAME_RE.search(basename)
         if m:
@@ -275,31 +283,79 @@ def result_facts(result):
     }
 
 
-def seat_log_result(logs_dir, log_path, expected_sessions=1):
-    """Fallback: the seat's own log file, only when attribution is unambiguous."""
-    if not log_path:
+def log_results(path):
+    """All result lines in one log file."""
+    results = []
+    try:
+        fh = open(path, errors="replace")
+    except OSError:
+        return results
+    with fh:
+        for line in fh:
+            if RESULT_MARKER not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if ev.get("type") == "result":
+                results.append(ev)
+    return results
+
+
+def branch_slug(repo, branch):
+    if not repo or not branch:
         return None
-    candidates = [os.path.join(logs_dir, os.path.basename(log_path)), log_path]
-    for path in candidates:
-        if not os.path.isfile(path):
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", branch).strip("-")
+    return "%s-%s-" % (repo, slug) if slug else None
+
+
+def seat_log_result(logs_dir, seat_logs_dir, log_path, repo, branch, duration_s):
+    """Fallback: read the seat's result line from wherever it was written.
+
+    Candidates are the log the dispatch named for the seat and every seat log
+    filed under the seat's repo and branch (the collected copies in logs/ and
+    the seat log directory the launchers write to). A dispatch can name the
+    wrong file (for example the later critic seat's log, stamped onto every
+    task), so the named file is only one candidate. One result line across
+    all candidates is used directly; with several, the line whose duration_ms
+    matches the seat's recorded duration wins. Anything ambiguous stays cost
+    unknown: the ledger never guesses.
+    """
+    candidates = []
+    if log_path:
+        candidates.append(os.path.join(logs_dir, os.path.basename(log_path)))
+        candidates.append(log_path)
+    prefix = branch_slug(repo, branch)
+    for directory in (logs_dir, seat_logs_dir):
+        if not prefix or not directory:
             continue
-        results = []
-        with open(path, errors="replace") as fh:
-            for line in fh:
-                if RESULT_MARKER not in line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except ValueError:
-                    continue
-                if ev.get("type") == "result":
-                    results.append(ev)
-        if len(results) == expected_sessions:
-            return results[-1]
-    return None
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            continue
+        for name in names:
+            if name.startswith(prefix) and name.endswith(".log"):
+                candidates.append(os.path.join(directory, name))
+    results = []
+    seen = set()
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        results.extend(log_results(path))
+    if len(results) == 1:
+        return results[0]
+    if duration_s is None:
+        return None
+    tolerance = max(15.0, duration_s * 0.05)
+    matches = [ev for ev in results
+               if isinstance(ev.get("duration_ms"), (int, float))
+               and abs(ev["duration_ms"] / 1000.0 - duration_s) <= tolerance]
+    return matches[0] if len(matches) == 1 else None
 
 
-def build_records(logs_dir, wave_plans_dir, use_gh):
+def build_records(logs_dir, wave_plans_dir, use_gh, seat_logs_dir=None):
     events_dir = os.path.join(logs_dir, "fleet-events")
     runs_dir = os.path.join(logs_dir, "dispatch-runs")
     streams = load_streams(events_dir)
@@ -434,7 +490,8 @@ def build_records(logs_dir, wave_plans_dir, use_gh):
                 result = section["results"][-1]
             elif provider == "claude" or (section or {}).get("provider") == "claude":
                 log_path = (section or {}).get("log_path") or seat_log_names.get(tid)
-                result = seat_log_result(logs_dir, log_path)
+                result = seat_log_result(logs_dir, seat_logs_dir, log_path,
+                                         repo, sd.get("branch"), active_s)
             if result is not None:
                 record.update(result_facts(result))
                 record["cost_known"] = record["cost_usd"] is not None
@@ -485,8 +542,8 @@ def write_ledger(logs_dir, records):
 
 def bucket():
     return {"seats": 0, "cost_usd": 0.0, "cost_unknown_seats": 0,
-            "active_s": 0, "waiting_s": 0, "start": None, "end": None,
-            "failed": 0}
+            "active_s": 0, "waiting_s": 0, "seat_elapsed_s": 0,
+            "start": None, "end": None, "failed": 0}
 
 
 def fold(b, r):
@@ -495,11 +552,15 @@ def fold(b, r):
         b["cost_usd"] += r["cost_usd"]
     else:
         b["cost_unknown_seats"] += 1
-    b["active_s"] += r.get("active_s") or 0
+    active = r.get("active_s") or 0
+    b["active_s"] += active
     b["waiting_s"] += r.get("waiting_s") or 0
+    s, e = r.get("start"), r.get("end")
+    start, end = parse_ts(s), parse_ts(e)
+    seat_elapsed = int((end - start).total_seconds()) if start and end else active
+    b["seat_elapsed_s"] += max(seat_elapsed, active)
     if r.get("outcome") not in ("success", None):
         b["failed"] += 1
-    s, e = r.get("start"), r.get("end")
     if s and (b["start"] is None or s < b["start"]):
         b["start"] = s
     if e and (b["end"] is None or e > b["end"]):
@@ -512,7 +573,17 @@ def elapsed_s(b):
     return max(0, int((e - s).total_seconds())) if s and e else 0
 
 
+def work_share(b):
+    """Active time over seat time, seat by seat. Parallel seats add seat
+    hours, not share, so this can never pass 100%."""
+    if not b["seat_elapsed_s"]:
+        return None
+    return min(1.0, b["active_s"] / b["seat_elapsed_s"])
+
+
 def money(b):
+    if b["cost_unknown_seats"] >= b["seats"] and b["seats"]:
+        return "cost unknown"
     if b["cost_unknown_seats"]:
         return "$%.2f + %d unknown" % (b["cost_usd"], b["cost_unknown_seats"])
     return "$%.2f" % b["cost_usd"]
@@ -553,13 +624,14 @@ def print_rollup(roll, out):
     w("=" * 72)
     w()
     w("PER INITIATIVE")
-    w("%-34s %5s %22s %9s %9s %7s" % ("initiative", "seats", "cost", "active", "elapsed", "work"))
+    w("%-33s %5s %22s %9s %9s %9s %7s" %
+      ("initiative", "seats", "cost", "active", "seat", "wall", "work"))
     for (name, issue), b in sorted(per_init.items(), key=lambda kv: (kv[0][0], kv[0][1] or 0)):
         label = name + (" #%d" % issue if issue else "")
-        el = elapsed_s(b)
-        share = ("%d%%" % (100 * b["active_s"] / el)) if el else "n/a"
-        w("%-34.34s %5d %22.22s %9s %9s %7s" %
-          (label, b["seats"], money(b), dur(b["active_s"]), dur(el), share))
+        share = work_share(b)
+        w("%-33.33s %5d %22.22s %9s %9s %9s %7s" %
+          (label, b["seats"], money(b), dur(b["active_s"]), dur(b["seat_elapsed_s"]),
+           dur(elapsed_s(b)), ("%d%%" % (100 * share)) if share is not None else "n/a"))
     w()
     w("PER ROUND")
     w("%-30s %5s %5s %22s %9s %9s" % ("initiative", "round", "seats", "cost", "active", "waiting"))
@@ -570,20 +642,25 @@ def print_rollup(roll, out):
           (label, rnd, b["seats"], money(b), dur(b["active_s"]), dur(b["waiting_s"])))
     w()
     w("PER PR (verified gh lookups only)")
-    w("%-34s %5s %22s %9s %9s" % ("pr", "seats", "cost", "active", "elapsed"))
+    w("%-33s %5s %22s %9s %9s %9s %7s" %
+      ("pr", "seats", "cost", "active", "seat", "wall", "work"))
     for (repo, pr), b in sorted(per_pr.items()):
-        w("%-34.34s %5d %22.22s %9s %9s" %
-          ("%s PR %d" % (repo, pr), b["seats"], money(b), dur(b["active_s"]), dur(elapsed_s(b))))
+        share = work_share(b)
+        w("%-33.33s %5d %22.22s %9s %9s %9s %7s" %
+          ("%s PR %d" % (repo, pr), b["seats"], money(b), dur(b["active_s"]),
+           dur(b["seat_elapsed_s"]), dur(elapsed_s(b)),
+           ("%d%%" % (100 * share)) if share is not None else "n/a"))
     if not per_pr:
         w("  (no verified PR lookups; skipped lookups are marked unverified in the ledger)")
     w()
     w("PER DAY (UTC)")
-    w("%-12s %5s %22s %9s %9s %7s" % ("day", "seats", "cost", "active", "elapsed", "work"))
+    w("%-12s %5s %22s %9s %9s %9s %7s" %
+      ("day", "seats", "cost", "active", "seat", "wall", "work"))
     for day, b in sorted(per_day.items()):
-        el = elapsed_s(b)
-        share = ("%d%%" % (100 * b["active_s"] / el)) if el else "n/a"
-        w("%-12s %5d %22.22s %9s %9s %7s" %
-          (day, b["seats"], money(b), dur(b["active_s"]), dur(el), share))
+        share = work_share(b)
+        w("%-12s %5d %22.22s %9s %9s %9s %7s" %
+          (day, b["seats"], money(b), dur(b["active_s"]), dur(b["seat_elapsed_s"]),
+           dur(elapsed_s(b)), ("%d%%" % (100 * share)) if share is not None else "n/a"))
         for r in manual:
             if (r.get("date") or "") == day:
                 note = ("  " + r["note"]) if r.get("note") else ""
@@ -598,7 +675,8 @@ def print_rollup(roll, out):
         fold(total, r)
     w("TOTAL seats %d, cost %s, active %s" %
       (total["seats"], money(total), dur(total["active_s"])))
-    w("Work share can pass 100% when seats run in parallel.")
+    w("Work share is active time over seat time, seat by seat: never over 100%.")
+    w("Seat hours next to wall hours show how parallel the seats ran.")
     if manual:
         w("Manual orchestrator readings are their own lines above; nothing sums,")
         w("caps, warns or throttles on them.")
@@ -608,7 +686,7 @@ def write_ledger_json(logs_dir, roll):
     initiatives = []
     for (name, issue), b in sorted(per_init_items(roll),
                                    key=lambda kv: (kv[0][0], kv[0][1] or 0)):
-        el = elapsed_s(b)
+        share = work_share(b)
         initiatives.append({
             "initiative": name,
             "issue": issue,
@@ -618,18 +696,21 @@ def write_ledger_json(logs_dir, roll):
             "cost_known": b["cost_unknown_seats"] == 0,
             "cost_unknown_seats": b["cost_unknown_seats"],
             "active_s": b["active_s"],
-            "elapsed_s": el,
-            "work_share": round(b["active_s"] / el, 4) if el else None,
+            "seat_elapsed_s": b["seat_elapsed_s"],
+            "elapsed_s": elapsed_s(b),
+            "work_share": round(share, 4) if share is not None else None,
         })
     days = []
     for day, b in sorted(roll["per_day"].items()):
-        el = elapsed_s(b)
+        share = work_share(b)
         days.append({"date": day, "seats": b["seats"],
                      "cost_usd": round(b["cost_usd"], 4),
                      "cost_known": b["cost_unknown_seats"] == 0,
                      "cost_unknown_seats": b["cost_unknown_seats"],
-                     "active_s": b["active_s"], "elapsed_s": el,
-                     "work_share": round(b["active_s"] / el, 4) if el else None})
+                     "active_s": b["active_s"],
+                     "seat_elapsed_s": b["seat_elapsed_s"],
+                     "elapsed_s": elapsed_s(b),
+                     "work_share": round(share, 4) if share is not None else None})
     payload = {
         "schema": "fleet-ledger-rollup/1",
         "generated_at": fmt_ts(datetime.now(timezone.utc)),
@@ -653,7 +734,8 @@ def per_init_items(roll):
 
 
 def cmd_build(args):
-    records = build_records(args.logs_dir, args.wave_plans_dir, use_gh=not args.no_gh)
+    records = build_records(args.logs_dir, args.wave_plans_dir, use_gh=not args.no_gh,
+                            seat_logs_dir=args.seat_logs_dir)
     records = records + load_manual(args.logs_dir)
     path = write_ledger(args.logs_dir, records)
     roll = rollups(records)
@@ -700,6 +782,8 @@ def main(argv=None):
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--logs-dir", default="logs")
         p.add_argument("--wave-plans-dir", default="wave-plans")
+        p.add_argument("--seat-logs-dir", default=os.path.expanduser("~/dev/agent-logs"),
+                       help="directory the launchers write seat logs to (cost fallback)")
         p.add_argument("--no-gh", action="store_true",
                        help="skip the gh PR lookup (marked unverified)")
         p.add_argument("--date", default=None)

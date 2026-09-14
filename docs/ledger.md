@@ -17,7 +17,10 @@ Data roots on this machine:
 
 A finished seat ends its log with one stream-json line `"type":"result"`.
 Real example: `~/dev/agent-logs/dev-agents-feat-detached-dispatch-20260913-103620.log`,
-line 786 (also embedded in `logs/dispatch-runs/20260913-132942-dev-agents-32845.log`).
+line 786. This seat's dispatch (`20260913-083601-dev-agents`) wrote no run log
+under `logs/dispatch-runs/`, and its `seat_log` event names the later critic
+seat's file, so the line lives only in the seat's own log; the ledger reads it
+from there (the fallback below).
 
 That line records:
 
@@ -33,11 +36,13 @@ That line records:
 | Model | `modelUsage.<id>` per model used, with per-model `inputTokens`, `outputTokens`, `cacheReadInputTokens`, `cacheCreationInputTokens`, `costUSD`, `provider:"firstParty"` (example: `claude-fable-5-1` plus a small `claude-haiku-4-5-20251001` share) |
 | Outcome | `subtype` (`success`) and `is_error` (false) |
 
-The same result line appears in three places: the seat's own file in
+A result line can appear in up to three places: the seat's own file in
 `~/dev/agent-logs/`, its copy collected into `logs/` of the dispatching
 checkout, and inline in `logs/dispatch-runs/<dispatch id>.log` between the
 seat's `Starting claude launcher for agent <role>` line and its
-`=== Agent completed on localhost ===` line. The ledger counts it once.
+`=== Agent completed on localhost ===` line. The traced example above exists
+only in the first of the three. Wherever the line is found, the ledger counts
+it once (deduplicated by recorded session).
 
 Where a first-party seat records no cost: a seat that dies mid-stream writes
 no result line at all. Verified on dispatch `20260913-184551-dev-agents-57571`
@@ -112,9 +117,16 @@ Plan headers `wave-plans/<initiative>/<name>.plan`: the header comments name
 the issue as `issue 2340` / `Issue 2800` when there is one (first match
 wins), and carry the `DISPATCH:` line. A `TIER:` header does not exist in any
 plan on disk yet (that is workstream W2), so tier is `unknown` for every
-historical seat. Round is taken from a `FIX-ROUND:` header when present,
-else from a `ROUND n` mention in the plan, else from the plan basename
-(`-fix` means round 2, `-r<n>` means round n), else 1.
+historical seat. Round is the round of the plan itself: a `FIX-ROUND: n of
+<path>` header means round n+1, and a `FIX-ROUND:` header in any other form
+means round 2 (real example: `# FIX-ROUND: 2026-09-14-w1-ledger.plan` names a
+path, not a count; the leading 2026 is a date, never a round), else the first
+`ROUND n` the plan's own header comments declare (real example:
+`wave-plans/assistant-channel/2026-09-13-handover-identity-critics2.plan`
+declares round 2 in its first line; the "round 3 is SAFE" later in the same
+line is about a different seat and is not the plan's round), else the plan
+basename (`-fix` means round 2, `-r<n>` means round n), else 1. A round
+number mentioned anywhere else in the plan text is never the plan's round.
 
 ## Running it
 
@@ -122,7 +134,13 @@ else from a `ROUND n` mention in the plan, else from the plan basename
   a rebuild never duplicates a record), prints the per-round, per-PR,
   per-initiative and per-day rollups, and writes `logs/ledger.json`, which
   the Floor reads to put one ledger line on each INITIATIVES row (cost,
-  elapsed, work share; cost unknown where it is).
+  elapsed, work share; cost unknown where it is). The per-day and per-PR
+  rollups print seat hours (per-seat elapsed, summed) and wall hours (first
+  start to last end) as separate columns; work share is active time over
+  seat time, seat by seat, so parallel seats add seat hours, never share,
+  and the figure cannot pass 100%. A rollup whose seats are all cost unknown
+  prints cost unknown, never a zero; a mixed rollup prints the known sum
+  plus the count unknown.
 - `make ledger-orchestrator DATE=2026-09-14 USD=41.20 NOTE="provider usage
   page"` appends a manual orchestrator reading marked `source: manual`.
   It survives rebuilds, appears in the rollup as its own line, and nothing
@@ -134,9 +152,16 @@ else from a `ROUND n` mention in the plan, else from the plan basename
 
 - Seat identity, times, waves, role, provider, requested model and outcome:
   the event stream, backstopped by the dispatch run log.
-- Cost and tokens: the first-party result line only, parsed from the seat's
-  section of the dispatch run log (fallback: the seat's own log file when it
-  holds exactly one result line). Kimi and grok seats, and first-party seats
+- Cost and tokens: the first-party result line only. In a dispatch run log a
+  result line is read only inside a first-party (`claude`) seat section; a
+  kimi or grok seat that quotes a result line is narrating, not recording,
+  and such a line is never read as a cost. Fallback when the run log is
+  missing or names the wrong file: every seat log filed under the seat's
+  repo and branch, both the collected copies in `logs/` and the seat log
+  directory (`--seat-logs-dir`, default `~/dev/agent-logs`). One result line
+  across all candidates is used directly; with several, the line whose
+  `duration_ms` matches the seat's recorded `duration_s` wins; anything
+  ambiguous stays cost unknown. Kimi and grok seats, and first-party seats
   that died mid-stream, are marked cost unknown and never counted as zero.
 - PR: resolved from the branch with `gh` when available; skipped lookups are
   marked unverified, never guessed.

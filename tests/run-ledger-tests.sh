@@ -2,7 +2,9 @@
 # Fleet optimization W1: the ledger (scripts/ledger.py, docs/ledger.md).
 # No network, no vendor CLIs, no gh: every fixture is a small file shaped
 # like the real logs inventoried in docs/ledger.md (a first-party result
-# line, a kimi text log, a grok text log, event streams, a dispatch run log).
+# line, a kimi text log, a grok text log, event streams, a dispatch run log,
+# a dispatch with no run log whose seat_log names the later critic file, a
+# shared critic log holding two result lines, plans that cite other rounds).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -80,6 +82,8 @@ Starting kimi launcher for agent web-frontend (model: claude-fable-5-1)...
 Logging to: /nonexistent/dev-agents-feat-two-wave-20260913-121215.log
 kimi version 0.42.0
 prose from the seat, no cost anywhere
+the seat quotes a result line it found while reviewing, which is narration, not a record:
+{"duration_api_ms":420000,"session_id":"quoted-not-a-cost","total_cost_usd":9.99,"usage":{"input_tokens":1,"cache_creation_input_tokens":1,"cache_read_input_tokens":1,"output_tokens":1},"modelUsage":{},"is_error":false,"num_turns":1,"subtype":"success","type":"result","duration_ms":60000}
 To resume this session: kimi -r session_fixture
 === Agent completed on localhost ===
 EOF
@@ -94,8 +98,104 @@ Memory flush written: /Users/x/.grok/memory/y/sessions/z.md
 === Agent completed on localhost ===
 EOF
 
+# ── fixture (finding 1): no run log; the seat_log event names the later ──────
+# critic seat's file; the result line lives in the seat's own log under the
+# seat log directory. Shaped like dispatch 20260913-083601-dev-agents.
+SEATLOGS="$SANDBOX/agent-logs"
+mkdir -p "$SEATLOGS"
+
+cat > "$PLANS/dev-agents/2026-09-13-no-runlog.plan" <<'EOF'
+# No-run-log fixture for the ledger. Issue 998.
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-13-no-runlog.plan --detach --retries 1
+
+1 | devops | producer seat | feat/no-runlog
+EOF
+
+cat > "$LOGS/fleet-events/20260913-140000-dev-agents-7777.jsonl" <<'EOF'
+{"schema":"fleet-events/1","seq":1,"ts":"2026-09-13T14:00:00Z","dispatch_id":"20260913-140000-dev-agents-7777","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"2026-09-13-no-runlog.plan"}
+{"schema":"fleet-events/1","seq":2,"ts":"2026-09-13T14:00:10Z","dispatch_id":"20260913-140000-dev-agents-7777","event":"wave_start","wave":1,"seats":1,"mode":"wave"}
+{"schema":"fleet-events/1","seq":3,"ts":"2026-09-13T14:00:10Z","dispatch_id":"20260913-140000-dev-agents-7777","event":"seat_dispatch","task_id":"0","agent":"devops","branch":"feat/no-runlog","wave":1,"provider":"claude","model":"claude-fable-5-1","worker":"localhost","attempt":1}
+{"schema":"fleet-events/1","seq":4,"ts":"2026-09-13T14:26:08Z","dispatch_id":"20260913-140000-dev-agents-7777","event":"seat_exit","task_id":"0","agent":"devops","branch":"feat/no-runlog","wave":1,"provider":"claude","status":"success","exit":0,"duration_s":1558,"attempt":1}
+{"schema":"fleet-events/1","seq":5,"ts":"2026-09-13T14:26:08Z","dispatch_id":"20260913-140000-dev-agents-7777","event":"seat_log","task_id":"0","log":"dev-agents-feat-no-runlog-20260913-142608.log"}
+{"schema":"fleet-events/1","seq":6,"ts":"2026-09-13T14:26:08Z","dispatch_id":"20260913-140000-dev-agents-7777","event":"wave_end","wave":1,"seats":1,"succeeded":1,"failed":0}
+{"schema":"fleet-events/1","seq":7,"ts":"2026-09-13T14:26:10Z","dispatch_id":"20260913-140000-dev-agents-7777","event":"dispatch_end","status":"completed","total":1,"succeeded":1,"failed":0,"duration_s":1570}
+EOF
+
+# The file the seat_log event names is the later critic seat's: no result line.
+cat > "$LOGS/dev-agents-feat-no-runlog-20260913-142608.log" <<'EOF'
+prose from the critic seat, no cost anywhere
+EOF
+
+# The result line lives only in the seat's own log in the seat log directory
+# (durations match the real seat: duration_s 1558, duration_ms 1551113).
+cat > "$SEATLOGS/dev-agents-feat-no-runlog-20260913-140010.log" <<'EOF'
+stream lines from the seat
+{"duration_api_ms":876451,"session_id":"fixture-claude-seat-0002","total_cost_usd":8.221354,"usage":{"input_tokens":738,"cache_creation_input_tokens":183295,"cache_read_input_tokens":2793104,"output_tokens":76938},"modelUsage":{"claude-fable-5-1":{"inputTokens":738,"outputTokens":76938,"cacheReadInputTokens":2793104,"cacheCreationInputTokens":183295,"costUSD":8.221354,"provider":"firstParty"}},"is_error":false,"num_turns":52,"subtype":"success","type":"result","duration_ms":1551113}
+EOF
+
+# ── fixture (findings 1 and 5): two parallel first-party seats whose dispatch ──
+# stamps the same later log onto every task_id; that log holds both result
+# lines, so the seats are told apart by duration. Parallel seats also make
+# seat hours pass wall hours, where the old work share passed 100%.
+cat > "$PLANS/dev-agents/2026-09-13-shared-log.plan" <<'EOF'
+# Shared-log fixture for the ledger. Issue 997.
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-13-shared-log.plan --detach --retries 1
+
+1 | devops | first seat | feat/shared-log
+1 | devops | second seat | feat/shared-log
+EOF
+
+cat > "$LOGS/fleet-events/20260913-150000-dev-agents-6666.jsonl" <<'EOF'
+{"schema":"fleet-events/1","seq":1,"ts":"2026-09-13T15:00:00Z","dispatch_id":"20260913-150000-dev-agents-6666","event":"dispatch_start","mode":"wave","repo":"dev-agents","plan":"2026-09-13-shared-log.plan"}
+{"schema":"fleet-events/1","seq":2,"ts":"2026-09-13T15:00:05Z","dispatch_id":"20260913-150000-dev-agents-6666","event":"wave_start","wave":1,"seats":2,"mode":"wave"}
+{"schema":"fleet-events/1","seq":3,"ts":"2026-09-13T15:00:05Z","dispatch_id":"20260913-150000-dev-agents-6666","event":"seat_dispatch","task_id":"0","agent":"devops","branch":"feat/shared-log","wave":1,"provider":"claude","model":"claude-fable-5-1","worker":"localhost","attempt":1}
+{"schema":"fleet-events/1","seq":4,"ts":"2026-09-13T15:00:05Z","dispatch_id":"20260913-150000-dev-agents-6666","event":"seat_dispatch","task_id":"1","agent":"devops","branch":"feat/shared-log","wave":1,"provider":"claude","model":"claude-fable-5-1","worker":"localhost","attempt":1}
+{"schema":"fleet-events/1","seq":5,"ts":"2026-09-13T15:10:07Z","dispatch_id":"20260913-150000-dev-agents-6666","event":"seat_exit","task_id":"1","agent":"devops","branch":"feat/shared-log","wave":1,"provider":"claude","status":"success","exit":0,"duration_s":602,"attempt":1}
+{"schema":"fleet-events/1","seq":6,"ts":"2026-09-13T15:21:36Z","dispatch_id":"20260913-150000-dev-agents-6666","event":"seat_exit","task_id":"0","agent":"devops","branch":"feat/shared-log","wave":1,"provider":"claude","status":"success","exit":0,"duration_s":1291,"attempt":1}
+{"schema":"fleet-events/1","seq":7,"ts":"2026-09-13T15:21:36Z","dispatch_id":"20260913-150000-dev-agents-6666","event":"seat_log","task_id":"0","log":"dev-agents-feat-shared-log-20260913-152136.log"}
+{"schema":"fleet-events/1","seq":8,"ts":"2026-09-13T15:21:36Z","dispatch_id":"20260913-150000-dev-agents-6666","event":"seat_log","task_id":"1","log":"dev-agents-feat-shared-log-20260913-152136.log"}
+{"schema":"fleet-events/1","seq":9,"ts":"2026-09-13T15:21:36Z","dispatch_id":"20260913-150000-dev-agents-6666","event":"wave_end","wave":1,"seats":2,"succeeded":2,"failed":0}
+{"schema":"fleet-events/1","seq":10,"ts":"2026-09-13T15:21:40Z","dispatch_id":"20260913-150000-dev-agents-6666","event":"dispatch_end","status":"completed","total":2,"succeeded":2,"failed":0,"duration_s":1300}
+EOF
+
+cat > "$LOGS/dev-agents-feat-shared-log-20260913-152136.log" <<'EOF'
+{"duration_api_ms":700000,"session_id":"fixture-claude-seat-0003","total_cost_usd":4.02941825,"usage":{"input_tokens":100,"cache_creation_input_tokens":1000,"cache_read_input_tokens":9000,"output_tokens":2000},"modelUsage":{"claude-fable-5-1":{"inputTokens":100,"outputTokens":2000,"cacheReadInputTokens":9000,"cacheCreationInputTokens":1000,"costUSD":4.02941825,"provider":"firstParty"}},"is_error":false,"num_turns":30,"subtype":"success","type":"result","duration_ms":1282044}
+{"duration_api_ms":300000,"session_id":"fixture-claude-seat-0004","total_cost_usd":0.5,"usage":{"input_tokens":50,"cache_creation_input_tokens":500,"cache_read_input_tokens":4500,"output_tokens":1000},"modelUsage":{"claude-fable-5-1":{"inputTokens":50,"outputTokens":1000,"cacheReadInputTokens":4500,"cacheCreationInputTokens":500,"costUSD":0.5,"provider":"firstParty"}},"is_error":false,"num_turns":15,"subtype":"success","type":"result","duration_ms":602000}
+EOF
+
+# ── fixture (finding 2): round is the plan's own round, never the highest ────
+# round number mentioned anywhere in the plan text.
+cat > "$PLANS/dev-agents/p1-critic-round2.plan" <<'EOF'
+# Critic round 2 fixture: the backend critic round 3 is SAFE.
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/p1-critic-round2.plan --detach
+
+1 | plan-critic | READ-ONLY REVIEW ROUND 2 of the thing. | feat/x
+EOF
+
+cat > "$PLANS/dev-agents/p2-first-pass.plan" <<'EOF'
+# First pass fixture, no round declared.
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/p2-first-pass.plan --detach
+
+1 | devops | build the thing; the critic seat follows for round 2 | feat/y
+EOF
+
+cat > "$PLANS/dev-agents/p3-fix1.plan" <<'EOF'
+# FIX-ROUND: 1 of wave-plans/dev-agents/p2-first-pass.plan
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/p3-fix1.plan --detach
+
+1 | devops | fix every finding | feat/y
+EOF
+
+cat > "$PLANS/dev-agents/p4-fix1.plan" <<'EOF'
+# FIX-ROUND: 2026-09-13-p2-first-pass.plan
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/p4-fix1.plan --detach
+
+1 | devops | fix every finding | feat/y
+EOF
+
 # ── build once ───────────────────────────────────────────────────────────────
-python3 "$LEDGER" build --logs-dir "$LOGS" --wave-plans-dir "$PLANS" --no-gh >/dev/null 2>"$SANDBOX/build.err" \
+python3 "$LEDGER" build --logs-dir "$LOGS" --wave-plans-dir "$PLANS" \
+    --seat-logs-dir "$SEATLOGS" --no-gh >/dev/null 2>"$SANDBOX/build.err" \
     || { echo "  FAIL build exited nonzero: $(cat "$SANDBOX/build.err")"; exit 1; }
 
 read_record() { # <dispatch> <task> <python expr on r>
@@ -111,6 +211,8 @@ PY
 
 D1=20260913-120000-dev-agents-9999
 D2=20260913-130000-dev-agents-8888
+D3=20260913-140000-dev-agents-7777
+D4=20260913-150000-dev-agents-6666
 
 echo "== first-party seat: cost and tokens from the result line =="
 check "cost is the recorded 1.50"            "1.5"     "$(read_record $D1 0 "r['cost_usd']")"
@@ -128,6 +230,7 @@ echo "== kimi seat: no cost recorded, never zero =="
 check "kimi cost_known false"                "False"   "$(read_record $D1 1 "r['cost_known']")"
 check "kimi cost is null"                    "None"    "$(read_record $D1 1 "r['cost_usd']")"
 check "kimi tokens null"                     "None"    "$(read_record $D1 1 "r['input_tokens']")"
+check "a result line quoted in a kimi log is not a cost" "None" "$(read_record $D1 1 "r['session_id']")"
 
 echo "== grok seat: no cost recorded, failed outcome =="
 check "grok cost_known false"                "False"   "$(read_record $D2 0 "r['cost_known']")"
@@ -149,20 +252,66 @@ check "wave 1 seat waits from dispatch start" "10"     "$(read_record $D1 0 "r['
 check "wave 2 seat waits 120 s after wave 1"  "120"    "$(read_record $D1 1 "r['waiting_s']")"
 check "waiting is not counted as active"      "600"    "$(read_record $D1 1 "r['active_s']")"
 
+echo "== finding 1: the cost is read from wherever the result line is =="
+check "run log missing, seat_log names a later file: cost found" "8.221354" "$(read_record $D3 0 "r['cost_usd']")"
+check "that seat is cost known"              "True"    "$(read_record $D3 0 "r['cost_known']")"
+check "shared log, two result lines: seat 0 matched by duration" "4.02941825" "$(read_record $D4 0 "r['cost_usd']")"
+check "shared log, two result lines: seat 1 matched by duration" "0.5"  "$(read_record $D4 1 "r['cost_usd']")"
+check "each seat keeps its own session"      "fixture-claude-seat-0003" "$(read_record $D4 0 "r['session_id']")"
+
+echo "== finding 2: round is the plan's own round, never a text mention =="
+plan_round() { # <plan path>
+    python3 - "$REPO_DIR" "$1" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts")
+import ledger
+print(ledger.plan_facts(sys.argv[2])["round"])
+PY
+}
+check "round 2 plan citing round 3 records 2" "2" "$(plan_round "$PLANS/dev-agents/p1-critic-round2.plan")"
+check "first pass citing round 2 records 1"   "1" "$(plan_round "$PLANS/dev-agents/p2-first-pass.plan")"
+check "FIX-ROUND 1 header records 2"          "2" "$(plan_round "$PLANS/dev-agents/p3-fix1.plan")"
+check "FIX-ROUND naming a path records 2, not 2027" "2" "$(plan_round "$PLANS/dev-agents/p4-fix1.plan")"
+
 echo "== manual orchestrator reading, then a rebuild =="
 python3 "$LEDGER" orchestrator --logs-dir "$LOGS" --date 2026-09-13 --usd 9.75 --note "fixture reading" 2>/dev/null
 FIRST_SUM=$(md5 -q "$LOGS/fleet-ledger.jsonl" 2>/dev/null || md5sum < "$LOGS/fleet-ledger.jsonl")
-python3 "$LEDGER" build --logs-dir "$LOGS" --wave-plans-dir "$PLANS" --no-gh >/dev/null 2>&1
+python3 "$LEDGER" build --logs-dir "$LOGS" --wave-plans-dir "$PLANS" \
+    --seat-logs-dir "$SEATLOGS" --no-gh >/dev/null 2>&1
 SECOND_SUM=$(md5 -q "$LOGS/fleet-ledger.jsonl" 2>/dev/null || md5sum < "$LOGS/fleet-ledger.jsonl")
 check "rebuild is byte-identical (no duplicates, manual kept)" "$FIRST_SUM" "$SECOND_SUM"
-check "ledger holds exactly 3 seat records" "3" "$(grep -c '"kind": "seat"' "$LOGS/fleet-ledger.jsonl")"
+check "ledger holds exactly 6 seat records" "6" "$(grep -c '"kind": "seat"' "$LOGS/fleet-ledger.jsonl")"
 check "manual reading survives the rebuild" "1" "$(grep -c '"source": "manual"' "$LOGS/fleet-ledger.jsonl")"
 
 echo "== rollup: the manual reading is its own line, never a cap =="
 ROLL=$(python3 "$LEDGER" rollup --logs-dir "$LOGS" 2>/dev/null)
 check "manual line shown on its day" "1" "$(printf '%s' "$ROLL" | grep -c 'orchestrator session (manual): \$9.75')"
-check "manual cost stays out of seat totals" "1" "$(printf '%s' "$ROLL" | grep -c 'TOTAL seats 3, cost \$1.50 + 2 unknown')"
+check "manual cost stays out of seat totals" "1" "$(printf '%s' "$ROLL" | grep -c 'TOTAL seats 6, cost \$14.25 + 2 unknown')"
 check "unknown cost is said, not zeroed (initiative and round rows)" "2" "$(printf '%s' "$ROLL" | grep -c 'dev-agents #999 .*+ 1 unknown')"
+
+echo "== finding 3: an all-unknown rollup prints cost unknown, never a zero =="
+check "all-unknown initiative row says cost unknown" "1" "$(printf '%s' "$ROLL" | grep -cE '^dev-agents +1 +cost unknown ')"
+check "all-unknown round row says cost unknown" "1" "$(printf '%s' "$ROLL" | grep -cE '^dev-agents +2 +1 +cost unknown ')"
+check "no rollup prints \$0.00 for unknown seats" "0" "$(printf '%s' "$ROLL" | grep -c '\$0.00')"
+
+echo "== finding 5: seat hours and wall hours, work share never over 100% =="
+check "day rollup prints seat and wall columns" "1" "$(printf '%s' "$ROLL" | grep -cE '^day +seats +cost +active +seat +wall +work')"
+check "parallel seats: 100% work, seat hours over wall hours" "ok" "$(python3 -c "
+import json
+d = json.load(open('$LOGS/ledger.json'))
+i = next(x for x in d['initiatives'] if x['issue'] == 997)
+assert i['active_s'] == 1893 and i['seat_elapsed_s'] == 1893 and i['elapsed_s'] == 1291, i
+assert i['work_share'] == 1.0, i
+print('ok')")"
+check "no rollup work share above 100 percent" "0" "$(python3 -c "
+import json
+d = json.load(open('$LOGS/ledger.json'))
+print(sum(1 for x in d['initiatives'] + d['days'] if (x['work_share'] or 0) > 1))")"
+check "parallel initiative row shows 100% (old rule said 147%)" "1" "$(printf '%s' "$ROLL" | grep -c 'dev-agents #997 .*100%')"
+
+echo "== finding 4: the docs name the file each traced line really comes from =="
+check "8.22 example cites its own seat log" "1" "$(grep -c 'dev-agents-feat-detached-dispatch-20260913-103620.log' "$REPO_DIR/docs/ledger.md")"
+check "no trace to the wrong dispatch run log" "0" "$(grep -c '20260913-132942-dev-agents-32845' "$REPO_DIR/docs/ledger.md")"
 
 echo "== ledger.json the desk reads =="
 check "ledger.json written" "fleet-ledger-rollup/1" "$(python3 -c "import json; print(json.load(open('$LOGS/ledger.json'))['schema'])")"

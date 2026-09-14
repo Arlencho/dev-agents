@@ -2670,13 +2670,16 @@ def attach_ledger(proj, ledger_file=None):
         unknown = sum(e.get("cost_unknown_seats") or 0 for e in matched)
         active = sum(e.get("active_s") or 0 for e in matched)
         elapsed = sum(e.get("elapsed_s") or 0 for e in matched)
+        seat_elapsed = sum(e.get("seat_elapsed_s") or e.get("elapsed_s") or 0
+                           for e in matched)
         row["ledger"] = {
             "cost_usd": round(cost, 2),
             "cost_known": unknown == 0,
             "cost_unknown_seats": unknown,
             "active_s": active,
             "elapsed_s": elapsed,
-            "work_share": round(active / elapsed, 4) if elapsed else None,
+            "seat_elapsed_s": seat_elapsed,
+            "work_share": round(min(1.0, active / seat_elapsed), 4) if seat_elapsed else None,
             "source": "logs/ledger.json",
         }
     meta_out = dict(proj.get("initiatives_meta") or {})
