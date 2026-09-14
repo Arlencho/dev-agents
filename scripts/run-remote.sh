@@ -262,6 +262,7 @@ ship_runtime_once() {
         [ -f "$RUNTIME_SRC/config/ratecap-patterns.conf" ] && cp "$RUNTIME_SRC/config/ratecap-patterns.conf" "$stage/config/"
         [ -f "$RUNTIME_SRC/config/role-skills.yaml" ] && cp "$RUNTIME_SRC/config/role-skills.yaml" "$stage/config/"
         [ -f "$SCRIPT_DIR/seat-progress.py" ] && cp "$SCRIPT_DIR/seat-progress.py" "$stage/scripts/"
+        [ -f "$SCRIPT_DIR/seat-watchdog.py" ] && cp "$SCRIPT_DIR/seat-watchdog.py" "$stage/scripts/"
         [ -f "$SCRIPT_DIR/fleet-events.sh" ] && cp "$SCRIPT_DIR/fleet-events.sh" "$stage/scripts/"
         remote_run "rm -rf $dest.tmp"
         if [ "$IS_LOCAL" -eq 1 ]; then
@@ -337,6 +338,9 @@ SEAT_DIR="$SEAT_DIR"
 RUNTIME_DIR="$RUNTIME_DIR"
 KEEP_FAILED=$(printf '%q' "${FLEET_KEEP_FAILED_WORKTREES:-0}")
 SEAT_WAIT_POLL_S=$(printf '%q' "${SEAT_WAIT_POLL_S:-5}")
+export SEAT_QUIET_AFTER_S=$(printf '%q' "${SEAT_QUIET_AFTER_S:-1800}")
+export SEAT_QUIET_POLL_S=$(printf '%q' "${SEAT_QUIET_POLL_S:-5}")
+export SEAT_QUIET_KILL_GRACE_S=$(printf '%q' "${SEAT_QUIET_KILL_GRACE_S:-5}")
 FULL_TASK_B64=$(printf '%q' "$FULL_TASK_B64")
 $PROGRESS_ENV
 WORKER_ENV
@@ -652,6 +656,30 @@ if [ "$REMOTE_EXIT" -eq 75 ]; then
     echo "RATE_CAP recorded for $PROVIDER — dispatch will fail over"
 fi
 
+# Provider-limit sentinel (exit 78): record the hold where dispatch.sh reads
+# it, with the reset time parsed from the seat's own log (issue #84: the
+# message says when the session limit resets; the Floor stop row shows it).
+# run-remote RECORDS; dispatch.sh holds the seat and probes before any start
+# on this provider and model. No vendor cooldown: a limit is not a rate cap.
+if [ "$REMOTE_EXIT" -eq 78 ]; then
+    STATE_DIR="$SCRIPT_DIR/../logs/provider-state"
+    mkdir -p "$STATE_DIR"
+    if [ "$IS_LOCAL" -eq 1 ]; then
+        LIMIT_LOG_TAIL=$(tail -40 "$REMOTE_LOG_PATH" 2>/dev/null || true)
+    else
+        LIMIT_LOG_TAIL=$(ssh "$HOST" "tail -40 $REMOTE_LOG_PATH" 2>/dev/null || true)
+    fi
+    LIMIT_RESET=$(printf '%s\n' "$LIMIT_LOG_TAIL" \
+        | grep -oiE 'limit resets (at )?[0-9]{1,2}:[0-9]{2} ?(am|pm)' | tail -1 \
+        | grep -oiE '[0-9]{1,2}:[0-9]{2} ?(am|pm)' | tr -d ' ' || true)
+    [ -n "$LIMIT_RESET" ] || LIMIT_RESET="unknown"
+    LIMIT_MODEL=$(printf '%s' "${MODEL:-default}" | tr -c 'A-Za-z0-9._-' '_')
+    printf '%s|%s|%s|%s|%s|%s\n' \
+        "$(date +%s)" "$PROVIDER" "${MODEL:-default}" "$LIMIT_RESET" "$AGENT" "$LOG_FILE" \
+        > "$STATE_DIR/${PROVIDER}-${LIMIT_MODEL}.limit-hold"
+    echo "PROVIDER_LIMIT recorded for $PROVIDER (${MODEL:-default}), resets $LIMIT_RESET, dispatch will hold, not retry"
+fi
+
 # On other failures, auto-record a learning (skip 75, logged high above).
 # The summary is a fixed code plus facts, never a line of agent output: a
 # learning is injected into later prompts, and a raw cap or auth phrase in it
@@ -662,6 +690,8 @@ if [ "$REMOTE_EXIT" -ne 0 ] && [ "$REMOTE_EXIT" -ne 75 ] && [ -x "$SCRIPT_DIR/le
     case "$REMOTE_EXIT" in
         69) FAIL_CODE="UNAVAILABLE: $PROVIDER launcher exit 69 (CLI missing or session invalid)" ;;
         77) FAIL_CODE="BLOCKED: guardrails stopped the seat (exit 77)" ;;
+        78) FAIL_CODE="PROVIDER_LIMIT: $PROVIDER account ceiling (exit 78); seat held until a probe passes" ;;
+        124) FAIL_CODE="HUNG: no model event for ${SEAT_QUIET_AFTER_S:-1800}s; the watchdog stopped the seat (exit 124)" ;;
         *)  FAIL_CODE="TASK_FAIL: seat exit $REMOTE_EXIT" ;;
     esac
     "$SCRIPT_DIR/learnings.sh" add "$REPO_NAME" "$AGENT" failure \
@@ -674,5 +704,5 @@ echo ""
 echo "=== Agent completed on $HOST ==="
 echo "Remote log: $HOST:$REMOTE_LOG_PATH"
 echo "Check: gh pr list -R $(echo $REPO_URL | sed 's/.*://' | sed 's/\.git//')"
-# dispatch.sh classifies the seat by this code (0 / 1 / 69 / 75 / 77).
+# dispatch.sh classifies the seat by this code (0 / 1 / 69 / 75 / 77 / 78 / 124).
 exit "$REMOTE_EXIT"

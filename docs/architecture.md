@@ -34,6 +34,9 @@ dispatch.sh  ── parse waves (see docs/plan-file-format.md)
     ├─ resolve provider: workers.yaml provider_preferences
     │                    + routing.yaml provider_failover
     │                    + logs/provider-state/ cooldown (exit 75 rate-cap)
+    ├─ provider-limit hold: a *.limit-hold file under logs/provider-state/
+    │                    (exit 78) blocks starts on that provider and model
+    │                    until scripts/provider-probe.sh succeeds
     │
     ▼
 run-remote.sh  ── skill-inject.sh → launch on worker
@@ -41,6 +44,7 @@ run-remote.sh  ── skill-inject.sh → launch on worker
     ▼
 providers/<vendor>/launch.sh <role> <task>
     exit 0 ok | 1 fail | 75 rate-capped | 69 unavailable
+    78 provider limit (spend/session) | 124 hung (no model event, watchdog)
 ```
 
 ### Live multi-vendor seats (summary)

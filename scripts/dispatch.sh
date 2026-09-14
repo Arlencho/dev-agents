@@ -410,6 +410,91 @@ resolve_provider() {
 }
 
 # --------------------------------------------------
+# Seat reliability (issues #92 and #84): hung seats and provider limits
+# --------------------------------------------------
+# A seat that emits no model event for the quiet period is stopped by the
+# launcher's watchdog with exit 124 and retried once, and a stop row names the
+# seat and the quiet period. A seat that exits 78 hit the provider's spend or
+# session limit: it is marked held, not failed, the retry is not burned, and a
+# stop row carries the provider and the reset time from the message. No seat
+# starts on a held provider and model until a probe call succeeds; a passed
+# probe releases the hold.
+SEAT_QUIET_AFTER_S="${SEAT_QUIET_AFTER_S:-1800}"
+PROVIDER_STATE_DIR="$REPO_DIR/logs/provider-state"
+FLEET_STOPS_FILE="${FLEET_STOPS_FILE:-$LOGS_DIR/fleet-stops.jsonl}"
+declare -A STOP_OPENED=()   # stop key -> 1: one open row per state change per run
+declare -A HUNG_TASKS=()    # idx -> 1 while a hung seat waits for its one retry
+declare -A LIMIT_PROBE_CACHE=() LIMIT_PROBE_TS=()
+
+# One row in the stops file (schema fleet-stops/1), the file the queue runner
+# writes and the Floor folds by key. Machine-built sentences only, so the
+# redaction law holds by construction; quotes and newlines still go.
+stop_row() { # <key> <state> <kind> <sentence> <action>
+    local key="$1" state="$2" kind="$3" sentence="$4" action="$5"
+    sentence=$(printf '%s' "$sentence" | tr '"\\' '  ' | tr '\n' ' ')
+    printf '{"schema":"fleet-stops/1","key":"%s","state":"%s","kind":"%s","sentence":"%s","action":"%s","ts":"%s"}\n' \
+        "$key" "$state" "$kind" "$sentence" "$action" "$(date -u +%FT%TZ)" \
+        >> "$FLEET_STOPS_FILE" 2>/dev/null || true
+}
+
+stop_open_once() { # <key> <kind> <sentence> <action>
+    [ -n "${STOP_OPENED[$1]:-}" ] && return 0
+    STOP_OPENED[$1]=1
+    stop_row "$1" open "$2" "$3" "$4"
+}
+
+stop_clear() { # <key> <reason>
+    local key="$1" reason="$2"
+    reason=$(printf '%s' "$reason" | tr '"\\' '  ' | tr '\n' ' ')
+    printf '{"schema":"fleet-stops/1","key":"%s","state":"cleared","reason":"%s","ts":"%s"}\n' \
+        "$key" "$reason" "$(date -u +%FT%TZ)" >> "$FLEET_STOPS_FILE" 2>/dev/null || true
+    unset 'STOP_OPENED[$key]'   # a later stop on this key is a new state change
+}
+
+limit_model_key() { # <model>
+    printf '%s' "${1:-default}" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+limit_hold_key() { # <provider> <model>  the stop-row key
+    printf 'provider-limit-%s-%s' "$1" "$(limit_model_key "$2")"
+}
+
+limit_hold_file() { # <provider> <model>  run-remote writes it on exit 78
+    printf '%s/%s-%s.limit-hold' "$PROVIDER_STATE_DIR" "$1" "$(limit_model_key "$2")"
+}
+
+limit_hold_reset() { # <hold file> -> the reset time from the message, or unknown
+    local reset
+    reset=$(cut -d'|' -f4 "$1" 2>/dev/null || true)
+    printf '%s' "${reset:-unknown}"
+}
+
+limit_hold_stop_open() { # <provider> <model> <hold file>
+    stop_open_once "$(limit_hold_key "$1" "$2")" provider_limit \
+        "provider limit reached on $1 (${2:-default}), resets $(limit_hold_reset "$3"); seats on it are held until a probe passes" \
+        "wait for the reset, or raise the limit"
+}
+
+# Probe a held provider+model, at most once a minute per dispatch run.
+limit_probe() { # <provider> <model> -> 0 when the provider answers again
+    local key="$1|${2:-default}" now
+    now=$(date +%s)
+    if [ -n "${LIMIT_PROBE_CACHE[$key]:-}" ] \
+        && [ $(( now - ${LIMIT_PROBE_TS[$key]:-0} )) -lt "${FLEET_LIMIT_PROBE_CACHE_S:-60}" ]; then
+        [ "${LIMIT_PROBE_CACHE[$key]}" = "ok" ]
+        return
+    fi
+    if AGENT_MODEL="${2:-}" "$SCRIPT_DIR/provider-probe.sh" "$1" >/dev/null 2>&1; then
+        LIMIT_PROBE_CACHE[$key]="ok"
+        LIMIT_PROBE_TS[$key]=$now
+        return 0
+    fi
+    LIMIT_PROBE_CACHE[$key]="held"
+    LIMIT_PROBE_TS[$key]=$now
+    return 1
+}
+
+# --------------------------------------------------
 # Load workers
 # --------------------------------------------------
 if [ ! -f "$CONFIG" ]; then
@@ -937,6 +1022,32 @@ dispatch_task() {
 
     local model="${TASK_MODEL[$idx]:-}"
 
+    # Provider-limit hold (issue #84): no seat starts on a held provider and
+    # model until a probe call succeeds. A passed probe releases the hold for
+    # every later seat; a failed one marks this seat held without starting it.
+    local hold_file
+    hold_file="$(limit_hold_file "$provider" "$model")"
+    if [ -f "$hold_file" ]; then
+        if limit_probe "$provider" "$model"; then
+            rm -f "$hold_file"
+            stop_clear "$(limit_hold_key "$provider" "$model")" \
+                "probe passed on $provider (${model:-default}); seats on it resume"
+            echo -e "  ${GREEN}✓${NC} $provider (${model:-default}) answers again, provider-limit hold released" >&2
+        else
+            RESULT_STATUS[$idx]="held($provider/${model:-default})"
+            echo -e "  ${YELLOW}⏸${NC} $agent: $provider (${model:-default}) held for a provider limit (resets $(limit_hold_reset "$hold_file")); seat not started" >&2
+            limit_hold_stop_open "$provider" "$model" "$hold_file"
+            fleet_event provider_limit task_id="$idx" agent="$agent" branch="$branch" \
+                wave="${CURRENT_WAVE:-1}" provider="$provider" model="${model:-default}" \
+                reset="$(limit_hold_reset "$hold_file")"
+            # Keep the "always returns a waitable pid" contract: the wave loop
+            # classifies this exit exactly like a seat that hit the limit.
+            ( exit 78 ) &
+            DISPATCH_PID=$!
+            return 0
+        fi
+    fi
+
     local is_preferred=""
     local preferred
     preferred=$(get_preferred_agents "$wname" || true)
@@ -965,6 +1076,7 @@ dispatch_task() {
     (
         AGENT_MODEL="$model" AGENT_PROVIDER="$provider" AGENT_WAVE="${CURRENT_WAVE:-1}" \
             AGENT_TASK_ID="$idx" \
+            SEAT_QUIET_AFTER_S="$SEAT_QUIET_AFTER_S" \
             FLEET_EVENTS_FILE="${FLEET_EVENTS_FILE:-}" \
             FLEET_DISPATCH_ID="${FLEET_DISPATCH_ID:-}" \
             "$SCRIPT_DIR/run-remote.sh" "$whost" "$REPO_URL" "$agent" "$task" "$branch"
@@ -976,7 +1088,7 @@ dispatch_task() {
 # Seat outcome → event stream
 # --------------------------------------------------
 # fleet_seat_exit <idx> <status> <exit_code> <duration_s>
-# status: success | failed | blocked | ratecap | unavailable
+# status: success | failed | blocked | ratecap | unavailable | held | hung
 emit_seat_exit() {
     local idx="$1" status="$2" code="$3" duration="$4"
     fleet_event seat_exit task_id="$idx" agent="${TASK_AGENT[$idx]}" \
@@ -989,7 +1101,7 @@ emit_seat_exit() {
 # --------------------------------------------------
 # Retry logic with exponential backoff
 # --------------------------------------------------
-BACKOFF_DELAYS=(10 30)
+read -ra BACKOFF_DELAYS <<< "${FLEET_BACKOFF_DELAYS:-10 30}"
 
 retry_task() {
     local idx="$1"
@@ -1305,6 +1417,32 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             echo -e "  ${YELLOW}✗${NC} ${TASK_AGENT[$idx]} — ${RESULT_PROVIDER[$idx]} unavailable on ${RESULT_WORKER[$idx]} after ${duration}s (failing over)"
             emit_seat_exit "$idx" unavailable "$status" "$duration"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true
+        elif [ $status -eq 78 ]; then
+            # Provider spend/session limit (issue #84): held, not failed, and
+            # NOT added to FAILED_TASKS: the retry is not burned. run-remote
+            # already wrote the hold file; the next seat on this provider and
+            # model probes before it starts.
+            limit_hold_f="$(limit_hold_file "${RESULT_PROVIDER[$idx]}" "${TASK_MODEL[$idx]:-}")"
+            RESULT_STATUS[$idx]="held(${RESULT_PROVIDER[$idx]}/${TASK_MODEL[$idx]:-default})"
+            echo -e "  ${YELLOW}⏸${NC} ${TASK_AGENT[$idx]}: ${RESULT_PROVIDER[$idx]} provider limit after ${duration}s (held, resets $(limit_hold_reset "$limit_hold_f"); no retry)"
+            limit_hold_stop_open "${RESULT_PROVIDER[$idx]}" "${TASK_MODEL[$idx]:-}" "$limit_hold_f"
+            fleet_event provider_limit task_id="$idx" agent="${TASK_AGENT[$idx]}" \
+                wave="${TASK_WAVE[$idx]}" provider="${RESULT_PROVIDER[$idx]:-}" \
+                model="${TASK_MODEL[$idx]:-default}" reset="$(limit_hold_reset "$limit_hold_f")"
+            emit_seat_exit "$idx" held "$status" "$duration"
+            [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true
+        elif [ $status -eq 124 ]; then
+            # Hung seat (issue #92): no model event for the quiet period. It
+            # goes to the retry loop like a failure but is retried exactly once.
+            RESULT_STATUS[$idx]="hung"
+            FAILED_TASKS[$idx]=0
+            HUNG_TASKS[$idx]=1
+            echo -e "  ${YELLOW}⏳${NC} ${TASK_AGENT[$idx]} emitted no model event for ${SEAT_QUIET_AFTER_S}s, stopped after ${duration}s, will retry once"
+            stop_open_once "seat-hung-${FLEET_DISPATCH_ID:-run}-$idx" seat_hung \
+                "seat ${TASK_AGENT[$idx]} (task $idx, ${TASK_BRANCH[$idx]}) emitted no model event for ${SEAT_QUIET_AFTER_S}s; stopped and retried once" \
+                "check the log"
+            emit_seat_exit "$idx" hung "$status" "$duration"
+            [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "failure" 2>/dev/null || true
         else
             RESULT_STATUS[$idx]="failed"
             FAILED_TASKS[$idx]=0
@@ -1328,6 +1466,12 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             local_attempts=0
             while [ $local_attempts -lt "$MAX_RETRIES" ]; do
                 local_attempts=$((local_attempts + 1))
+                # A hung seat is retried exactly once, whatever --retries says.
+                if [ -n "${HUNG_TASKS[$idx]:-}" ] && [ "$local_attempts" -gt 1 ]; then
+                    echo -e "  ${RED}✗${NC} ${TASK_AGENT[$idx]}: hung seat already retried once; giving up"
+                    RESULT_STATUS[$idx]="failed (hung, retry used)"
+                    break
+                fi
                 retry_task "$idx" "$local_attempts"
                 retry_pid="$DISPATCH_PID"
 
@@ -1346,6 +1490,24 @@ for wave_num in "${SORTED_WAVES[@]}"; do
                     echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$idx]} succeeded on retry $local_attempts via ${RESULT_PROVIDER[$idx]} in ${duration}s"
                     emit_seat_exit "$idx" success "$retry_status" "$duration"
                     [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "success" 2>/dev/null || true
+                    if [ -n "${HUNG_TASKS[$idx]:-}" ]; then
+                        stop_clear "seat-hung-${FLEET_DISPATCH_ID:-run}-$idx" "the retry did the work"
+                        unset 'HUNG_TASKS[$idx]'
+                    fi
+                    unset 'FAILED_TASKS[$idx]'
+                    break
+                elif [ $retry_status -eq 78 ]; then
+                    # The retry landed on a provider at its spend/session
+                    # limit: the seat is held, not failed, and the retry
+                    # budget is not burned on a limit.
+                    limit_hold_f="$(limit_hold_file "${RESULT_PROVIDER[$idx]}" "${TASK_MODEL[$idx]:-}")"
+                    RESULT_STATUS[$idx]="held(${RESULT_PROVIDER[$idx]}/${TASK_MODEL[$idx]:-default})"
+                    echo -e "  ${YELLOW}⏸${NC} ${TASK_AGENT[$idx]} retry $local_attempts: ${RESULT_PROVIDER[$idx]} provider limit (held, resets $(limit_hold_reset "$limit_hold_f"))"
+                    limit_hold_stop_open "${RESULT_PROVIDER[$idx]}" "${TASK_MODEL[$idx]:-}" "$limit_hold_f"
+                    fleet_event provider_limit task_id="$idx" agent="${TASK_AGENT[$idx]}" \
+                        wave="${TASK_WAVE[$idx]}" provider="${RESULT_PROVIDER[$idx]:-}" \
+                        model="${TASK_MODEL[$idx]:-default}" reset="$(limit_hold_reset "$limit_hold_f")"
+                    emit_seat_exit "$idx" held "$retry_status" "$duration"
                     unset 'FAILED_TASKS[$idx]'
                     break
                 elif [ $retry_status -eq 75 ] || [ $retry_status -eq 69 ]; then
