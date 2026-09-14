@@ -549,6 +549,52 @@ if ! fix_round_gate "$PLAN_SOURCE" ${TASKS[@]+"${TASKS[@]}"}; then
     exit 1
 fi
 
+# --------------------------------------------------
+# Risk-tier gate: every plan declares TIER: A, B or C
+# --------------------------------------------------
+# ---- tier-gate:begin (tests/run-plan-check-tests.sh reads this block) ----
+# Fleet rule (docs/risk-tiers.md, fleet optimization W2): every plan declares
+# its risk tier in a header line '# TIER: A', '# TIER: B' or '# TIER: C'. The
+# tier fixes the critic set, the round cap and what counts as a blocking
+# finding. This gate is the mechanical half: it refuses to start a plan with
+# no valid TIER header, and names the tier in the dispatch banner.
+# Override: a header line opening with ALLOW-NO-TIER (owner decision).
+plan_tier() { # <plan file> -> prints A, B or C; returns 1 when no valid TIER header
+    local plan="$1"
+    [ -f "$plan" ] || return 1
+    local tier
+    tier=$(sed -nE 's/^[[:space:]]*#[[:space:]]*[Tt][Ii][Ee][Rr]:[[:space:]]*([ABCabc])([^A-Za-z0-9].*)?$/\1/p' "$plan" | head -1 | tr '[:lower:]' '[:upper:]')
+    [ -n "$tier" ] || return 1
+    printf '%s\n' "$tier"
+}
+
+tier_gate() { # <plan file> -> 1 (refused) when the plan has no valid TIER header
+    local plan="$1"
+    if [ ! -f "$plan" ]; then
+        # Interactive dispatch has no plan file; nothing to read a header from.
+        echo -e "${YELLOW}No plan file ($plan): the TIER check applies to plan files only.${NC}"
+        return 0
+    fi
+    if grep -qE '^[[:space:]]*#[[:space:]]*ALLOW-NO-TIER([^A-Za-z0-9_-]|$)' "$plan"; then
+        echo -e "${YELLOW}ALLOW-NO-TIER header set: dispatching without a TIER header (owner override).${NC}"
+        return 0
+    fi
+    local tier
+    if tier=$(plan_tier "$plan"); then
+        echo -e "Plan tier: ${BOLD}$tier${NC} (risk tiers: docs/risk-tiers.md)"
+        return 0
+    fi
+    echo -e "${RED}ERROR: dispatch refused: the plan has no TIER header.${NC}" >&2
+    echo -e "  rule: every plan declares its risk tier with a header line '# TIER: A', '# TIER: B' or '# TIER: C' (docs/risk-tiers.md)." >&2
+    echo -e "  Owner override: add a header line '# ALLOW-NO-TIER'." >&2
+    return 1
+}
+# ---- tier-gate:end ----
+
+if ! tier_gate "$PLAN_SOURCE"; then
+    exit 1
+fi
+
 echo "Tasks to dispatch: ${#TASKS[@]}"
 echo ""
 
