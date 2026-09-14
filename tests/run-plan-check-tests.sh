@@ -240,6 +240,43 @@ EOF
 gate "$SANDBOX/fix-tests-glob.plan"
 [ "$GATE_RC" -ne 0 ]; checkf "a fix round asking for the whole tests directory runner is refused" $?
 
+# The make test matcher is case-insensitive: every case variant is refused.
+for variant in "MAKE TEST" "Make Test" "make TEST" "Make test"; do
+    cat > "$SANDBOX/fix-case.plan" <<EOF
+# FIX-ROUND: 1 of wave-plans/payments-w2.plan
+1 | go-backend | patch the checkout handler, VERIFY: $variant | feat/payments-w2-fix
+EOF
+    gate "$SANDBOX/fix-case.plan"
+    [ "$GATE_RC" -ne 0 ]; checkf "a fix round with 'VERIFY: $variant' is refused" $?
+done
+
+# A VERIFY split across two physical lines still names the full suite.
+cat > "$SANDBOX/fix-split-verify.plan" <<'EOF'
+# FIX-ROUND: 1 of wave-plans/payments-w2.plan
+1 | go-backend | patch the checkout handler, VERIFY: make
+test | feat/payments-w2-fix
+EOF
+gate "$SANDBOX/fix-split-verify.plan"
+[ "$GATE_RC" -ne 0 ]; checkf "a VERIFY split across lines ('make' then 'test') is refused" $?
+
+# A backslash continuation does not hide the split either.
+cat > "$SANDBOX/fix-backslash-verify.plan" <<'EOF'
+# FIX-ROUND: 1 of wave-plans/payments-w2.plan
+1 | go-backend | patch the checkout handler, VERIFY: make \
+test | feat/payments-w2-fix
+EOF
+gate "$SANDBOX/fix-backslash-verify.plan"
+[ "$GATE_RC" -ne 0 ]; checkf "a VERIFY split with a backslash continuation is refused" $?
+
+# The words "full suite" split across lines are caught the same way.
+cat > "$SANDBOX/fix-split-full-suite.plan" <<'EOF'
+# FIX-ROUND: 1 of wave-plans/payments-w2.plan
+1 | test-engineer | close the findings, VERIFY: run the full
+suite | feat/payments-w2-fix
+EOF
+gate "$SANDBOX/fix-split-full-suite.plan"
+[ "$GATE_RC" -ne 0 ]; checkf "a 'full suite' split across lines is refused" $?
+
 echo ""
 echo "== $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

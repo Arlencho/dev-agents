@@ -49,7 +49,7 @@ Your work is limited to Go application code:
 ## Before committing
 
 - `go build ./...` — must compile
-- `go test ./...` — must pass
+- `go test ./...` must pass outside fix rounds; in a fix round, run only the tests the plan VERIFY names
 - `go vet ./...` — no warnings
 - Never commit `.env` files or secrets
 
