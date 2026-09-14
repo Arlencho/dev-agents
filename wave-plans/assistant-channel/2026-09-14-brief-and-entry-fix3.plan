@@ -1,0 +1,10 @@
+# Brief and entry round 4: two mechanical findings from CRITIC BRIEF AND ENTRY ROUND 3, then a rebase. API critic and security are SAFE. PR 2851. Olympus work restarted by the owner 2026-09-14 19:10. 2026-09-14
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/olympus-platform.git wave-plans/assistant-channel/2026-09-14-brief-and-entry-fix3.plan --detach --retries 1
+# FIX-ROUND: 2026-09-14-brief-and-entry-fix2.plan
+# TIER: A
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | go-backend | On branch feat/ac-brief-and-entry (PR 2851), rebase onto origin/main first and resolve conflicts keeping both sides. Then fix the two findings of the comment on issue 2340 whose first line reads CRITIC BRIEF AND ENTRY ROUND 3: R3-1, run gofmt on services/iris/internal/tools/brief.go so the stray tab in the doc comment is gone and gofmt -l on that package prints nothing; R3-2, in docs/operations/analytics-events.md and docs/compliance/RETENTION.md add one clause to the handover_reached row saying the field is always false until the web landing reports it, and name the tracking issue you open for that web report (open it with the bug label, refs 2851). This is a fix round: run gofmt -l and go test with the race flag on services/iris/internal/tools only; nothing else is run. VERIFY: both commands with real exit codes in the PR body under a Round 4 heading. HOUSE STYLE: no long dash anywhere, no AI tool or vendor name, no Co-Authored-By trailer. Commit and push. | feat/ac-brief-and-entry
+
+2 | backend-critic | READ-ONLY REVIEW ROUND 4 of PR 2851. Tier A. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Re-run only R3-1 (gofmt clean) and R3-2 (both catalog rows state the always-false clause and name the tracking issue), plus one regression check that the brief still reaches no table on the assistant scope after the rebase. Post ONE comment on issue 2340 whose first line reads CRITIC BRIEF AND ENTRY ROUND 4 with SAFE-TO-MERGE, BLOCK-FIX or BLOCK-ESCALATE and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/ac-brief-and-entry
