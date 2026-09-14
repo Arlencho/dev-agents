@@ -1,0 +1,10 @@
+# Fleet optimization W2 round 2: the tie-break rule from CRITIC W2 RISK TIERS and the worktree tests the new TIER check broke. Tier C, final round. 2026-09-14
+#
+# DISPATCH: ./scripts/dispatch.sh git@github.com:Arlencho/dev-agents.git wave-plans/dev-agents/2026-09-14-w2-risk-tiers-fix1.plan --detach --retries 1
+# FIX-ROUND: 2026-09-14-w2-risk-tiers.plan
+# TIER: C
+# ────────────────────────────────────────────────────────────────────────────
+
+1 | web-frontend | On branch feat/w2-risk-tiers (PR 99), rebase onto origin/main first. ONE, the finding of the comment on PR 99 whose first line reads CRITIC W2 RISK TIERS: BLOCK-FIX: under the table in docs/risk-tiers.md state that a plan matching more than one Scope cell takes the higher-risk tier (A before B before C), and mirror one sentence next to the TIER header in the plan format doc. TWO, the CI failure on PR 99: the new TIER check refuses the plan fixtures used by tests/run-worktree-tests.sh (two seat worktrees alive at once, two runtimes, two branch locks, dispatch on feat/da exit 1); add a TIER header to every test fixture plan that dispatch.sh reads, never weaken the check. This is a fix round: run only tests/run-plan-check-tests.sh and tests/run-worktree-tests.sh; nothing else is run. VERIFY: those two test files with real exit codes in the PR body under a Round 2 heading. HOUSE STYLE: no long dash anywhere, no AI tool or vendor name, no Co-Authored-By trailer. Commit and push. | feat/w2-risk-tiers
+
+2 | plan-critic | READ-ONLY REVIEW ROUND 2 of PR 99. Tier C, final round. No commits, no push, no review, no labels; tmp writes only. Record head SHA at start and at report. Confirm the tie-break sentence resolves the plan the round 1 comment found in two cells, and that the worktree tests pass with the check intact. Report only a finding that makes the tiers ambiguous or the check bypassable. Post ONE comment on PR 99 whose first line reads CRITIC W2 RISK TIERS ROUND 2 with SAFE-TO-MERGE, BLOCK-FIX or BLOCK-ESCALATE and citations. HOUSE STYLE: no long dash, no AI tool or vendor name. | feat/w2-risk-tiers
