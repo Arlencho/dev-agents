@@ -33,10 +33,15 @@ check "kimi + native id" "kimi-for-coding" "$(effective_model kimi kimi-for-codi
 check "grok + sonnet (ignored)" "vendor-default" "$(effective_model grok sonnet)"
 check "grok + empty" "vendor-default" "$(effective_model grok "")"
 
-echo "== routing.yaml: every seat in the model column runs claude-opus-5 (owner decision 2026-09-14) =="
+echo "== routing.yaml: build and gate seats run claude-opus-5 (owner decision 2026-09-14) =="
 for role in db-architect test-engineer api-designer devops go-backend web-frontend \
-            backend-critic frontend-critic security-reviewer cto docs-writer pr-sentinel; do
+            cto docs-writer pr-sentinel; do
   check "$role → claude-opus-5" "claude-opus-5" "$(get_model "$role")"
+done
+
+echo "== routing.yaml: judgment seats run claude-fable-5-1 (owner decision 2026-09-16) =="
+for role in security-reviewer backend-critic frontend-critic database-critic api-critic; do
+  check "$role → claude-fable-5-1" "claude-fable-5-1" "$(get_model "$role")"
 done
 check "unknown role → default claude-opus-5" "claude-opus-5" "$(get_model this-role-does-not-exist-xyz)"
 
