@@ -38,19 +38,25 @@
 # grok for a five-task trial; producers never fail over to claude. The model
 # column below still pins the tier a seat runs when its provider is claude;
 # the kimi and grok launchers ignore it.
+# Owner decision 2026-09-16: Fable is available again. The judgment seats
+# (security reviewer and the four critics) run claude-fable-5-1, because
+# finding what a producer missed is where the strongest model pays for
+# itself. Every other first-party seat stays on claude-opus-5, and
+# producer routing is unchanged.
+#
 model_routing:
   # Gates / strategy / investigation
   orchestrator:              claude-opus-5
   cto:                       claude-opus-5
   retro:                     claude-opus-5
-  security-reviewer:         claude-opus-5
+  security-reviewer:         claude-fable-5-1
   investigate:               claude-opus-5   # ignored while provider=grok
 
   # Critics: adversarial review (first-party primary, grok failover)
-  backend-critic:            claude-opus-5
-  frontend-critic:           claude-opus-5
-  database-critic:           claude-opus-5
-  api-critic:                claude-opus-5
+  backend-critic:            claude-fable-5-1
+  frontend-critic:           claude-fable-5-1
+  database-critic:           claude-fable-5-1
+  api-critic:                claude-fable-5-1
 
   # Producers on the grok trial seat; the pin applies only if a seat returns to claude
   go-backend:                claude-opus-5   # ignored while provider=grok
