@@ -19,7 +19,8 @@
 provider_preferences:
   # Producers (grok trial seats; web-frontend stays on kimi)
   go-backend: grok
-  web-frontend: kimi
+  # kimi weekly quota exhausted 2026-09-18; revert this seat to kimi when it resets
+  web-frontend: grok
   db-architect: grok
   api-designer: grok
   devops: grok

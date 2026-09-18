@@ -8,7 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
-model: claude-opus-5
+model: grok
 ---
 
 You are a web frontend engineer working on a production Next.js application.
