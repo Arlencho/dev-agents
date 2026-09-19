@@ -54,8 +54,7 @@ check "plan-critic never fails over to claude" "grok" "$(echo $(get_failover_cha
 
 echo "== routing trial 2026-09-13: no producer primary is claude =="
 # web-frontend is the kimi seat; every other producer is a grok trial seat.
-web_primary=$(get_provider web-frontend)
-check "web-frontend primary is kimi or grok" "yes" "$(if [ "$web_primary" = kimi ] || [ "$web_primary" = grok ]; then echo yes; else echo no; fi)"
+check "web-frontend primary" "kimi" "$(get_provider web-frontend)"
 for role in go-backend db-architect api-designer devops test-engineer mobile investigate docs-writer; do
   check "$role primary" "grok" "$(get_provider "$role")"
 done
