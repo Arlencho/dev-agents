@@ -688,6 +688,79 @@ fi
 echo "Tasks to dispatch: ${#TASKS[@]}"
 echo ""
 
+# ---- constraints-header:begin (tests/run-constraints-tests.sh reads this block) ----
+# Plan-wide rules belong in the header once, not retyped on every task line
+# (#115). A plan declares them as repeatable header lines:
+#
+#   # CONSTRAINTS: no long dash anywhere, no AI tool or vendor name
+#   # CONSTRAINTS: no Co-Authored-By trailer
+#
+# Every seat of that plan, producer and critic alike, receives them at the
+# front of its task, so one wording reaches every seat and a task line that
+# forgets the clause is no longer a seat running without the rule.
+#
+# Two gates keep the header and the task lines from drifting apart:
+#   * a task line that repeats a rule verbatim stops the dispatch (say it
+#     once, in the header);
+#   * a plan that declares rules whose seats did not receive them stops the
+#     dispatch. Silent injection failure would strip the rule from every
+#     seat at once, so this fails closed, never open.
+plan_constraints() { # <plan file> -> one rule per line, empty when none
+    local plan="$1"
+    [ -n "$plan" ] && [ -f "$plan" ] || return 0
+    sed -nE 's/^[[:space:]]*#[[:space:]]*CONSTRAINTS:[[:space:]]*//p' "$plan" \
+        | sed -E 's/[[:space:]]+$//' | grep -v '^$' || true
+}
+
+constraints_prefix() { # <plan file> -> the block prepended to every task
+    local plan="$1" rule out="" n=1
+    while IFS= read -r rule; do
+        out="$out $n) $rule"
+        n=$((n + 1))
+    done < <(plan_constraints "$plan")
+    [ -n "$out" ] || return 0
+    printf 'CONSTRAINTS (from the plan header, they bind this task as if written in it):%s ----' "$out"
+}
+
+constraints_dup_gate() { # <plan file> <task desc>... -> 1 when a task repeats a rule
+    local plan="$1"; shift
+    local rule desc
+    while IFS= read -r rule; do
+        for desc in "$@"; do
+            case "$desc" in
+                *"$rule"*)
+                    echo -e "${RED}ERROR: dispatch refused: a task line repeats a CONSTRAINTS rule.${NC}" >&2
+                    echo -e "  rule: '$rule'" >&2
+                    echo -e "  it is already in the plan header and reaches every seat from there; two copies drift." >&2
+                    echo -e "  fix: delete the clause from the task line." >&2
+                    return 1
+                    ;;
+            esac
+        done
+    done < <(plan_constraints "$plan")
+    return 0
+}
+
+constraints_delivered() { # <plan file> <task desc>... -> 1 when a seat did not get a rule
+    local plan="$1"; shift
+    local rule desc
+    while IFS= read -r rule; do
+        for desc in "$@"; do
+            case "$desc" in
+                *"$rule"*) ;;
+                *)
+                    echo -e "${RED}ERROR: dispatch refused: a seat did not receive the plan constraints.${NC}" >&2
+                    echo -e "  rule: '$rule'" >&2
+                    echo -e "  every seat of a plan with CONSTRAINTS header lines must carry them; this fails closed." >&2
+                    return 1
+                    ;;
+            esac
+        done
+    done < <(plan_constraints "$plan")
+    return 0
+}
+# ---- constraints-header:end ----
+
 # --------------------------------------------------
 # Parse tasks into waves
 # --------------------------------------------------
@@ -765,6 +838,19 @@ for i in "${!TASKS[@]}"; do
         WAVE_TASKS[$wave]="$i"
     fi
 done
+
+# Plan-wide constraints reach every seat from the header (#115).
+if [ "$PLAN_SOURCE" != "--interactive" ]; then
+    CONSTRAINTS_PREFIX="$(constraints_prefix "$PLAN_SOURCE")"
+    if [ -n "$CONSTRAINTS_PREFIX" ]; then
+        constraints_dup_gate "$PLAN_SOURCE" "${TASK_DESC[@]}" || exit 1
+        for i in "${!TASK_DESC[@]}"; do
+            TASK_DESC[$i]="$CONSTRAINTS_PREFIX ${TASK_DESC[$i]}"
+        done
+        constraints_delivered "$PLAN_SOURCE" "${TASK_DESC[@]}" || exit 1
+        echo -e "Constraints: $(plan_constraints "$PLAN_SOURCE" | wc -l | xargs) from the plan header, on every task."
+    fi
+fi
 
 # Sort wave numbers
 SORTED_WAVES=($(echo "${!WAVE_TASKS[@]}" | tr ' ' '\n' | sort -n))
