@@ -6,24 +6,26 @@
 # Product tasks must not edit skills/ unless the task is an explicit skill-promotion task.
 
 defaults:
-  max_packs: 4
+  # The real budget is max_total_lines; the count cap only stops a runaway list.
+  # It was 4, which silently dropped the fifth pack docs-writer already listed (#116).
+  max_packs: 6
   max_total_lines: 400
 
 # Space-separated pack lists. Order = inject priority (truncate by max_packs).
 roles:
-  web-frontend: evidence-first untrusted-prior handoff-intent git-ship
+  web-frontend: evidence-first untrusted-prior handoff-intent git-ship test-quality
   frontend-critic: evidence-first untrusted-prior git-ship
-  go-backend: evidence-first untrusted-prior handoff-intent git-ship
+  go-backend: evidence-first untrusted-prior handoff-intent git-ship test-quality
   backend-critic: evidence-first untrusted-prior git-ship
-  db-architect: evidence-first untrusted-prior handoff-intent git-ship
+  db-architect: evidence-first untrusted-prior handoff-intent git-ship test-quality
   database-critic: evidence-first untrusted-prior git-ship
-  api-designer: evidence-first untrusted-prior handoff-intent git-ship
+  api-designer: evidence-first untrusted-prior handoff-intent git-ship test-quality
   api-critic: evidence-first untrusted-prior git-ship
-  mobile: evidence-first untrusted-prior handoff-intent git-ship
-  devops: evidence-first untrusted-prior handoff-intent git-ship
-  test-engineer: evidence-first untrusted-prior handoff-intent git-ship
+  mobile: evidence-first untrusted-prior handoff-intent git-ship test-quality
+  devops: evidence-first untrusted-prior handoff-intent git-ship test-quality
+  test-engineer: evidence-first untrusted-prior handoff-intent git-ship test-quality
   docs-writer: evidence-first untrusted-prior handoff-intent git-ship docs-no-hallucinate
-  investigate: evidence-first untrusted-prior handoff-intent git-ship
+  investigate: evidence-first untrusted-prior handoff-intent git-ship test-quality
   plan-critic: evidence-first untrusted-prior git-ship
   devops-critic: evidence-first untrusted-prior git-ship
   security-reviewer: evidence-first untrusted-prior git-ship
