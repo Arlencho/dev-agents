@@ -202,6 +202,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch
 	@echo "== plan constraints header =="
 	@./tests/run-constraints-tests.sh
 	@echo ""
+	@echo "== skill packs =="
+	@./tests/run-skill-pack-tests.sh
+	@echo ""
 	@echo "== fleet ledger (W1: seat records, rollups, manual readings) =="
 	@./tests/run-ledger-tests.sh
 	@echo ""

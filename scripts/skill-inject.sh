@@ -49,6 +49,9 @@ selected=()
 for p in $packs; do
     count=$((count + 1))
     if [ "$count" -gt "$MAX_PACKS" ]; then
+        # Loud, like the line-budget stop below: a pack that is listed for a
+        # role and silently dropped is a rule the seat never sees (#116).
+        echo "skill-inject: WARNING role $ROLE lists more packs than max_packs=$MAX_PACKS; dropping: ${packs#*$p}" >&2
         break
     fi
     selected+=("$p")
