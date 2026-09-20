@@ -1,10 +1,18 @@
-# Review Wave -- dispatch all 7 reviewers in parallel
-# Usage: ./scripts/dispatch.sh <repo-url> templates/review-wave.txt
-# Replace BRANCH with the actual branch name
-1 | security-reviewer        | Review branch BRANCH for security vulnerabilities         | review/security-BRANCH
-1 | api-reviewer             | Review branch BRANCH for API contract issues              | review/api-BRANCH
-1 | migration-reviewer       | Review branch BRANCH for migration safety                 | review/migration-BRANCH
-1 | perf-reviewer            | Review branch BRANCH for performance regressions          | review/perf-BRANCH
-1 | red-team-reviewer        | Adversarial review of branch BRANCH                       | review/redteam-BRANCH
-1 | testing-reviewer         | Review branch BRANCH for test quality and coverage gaps   | review/testing-BRANCH
-1 | maintainability-reviewer | Review branch BRANCH for code quality                     | review/maintain-BRANCH
+# Review wave: every active reviewer on one branch, in parallel.
+# Usage: make review REPO=<repo-url> BRANCH=<branch>   (BRANCH is substituted below)
+#
+# The six single-topic reviewers this template used to dispatch (api,
+# migration, perf, red-team, testing, maintainability) are archived: their
+# coverage folded into the discipline critics, the security reviewer and the
+# CTO gate (roles/_archived/README.md). The seats below are the ones that
+# exist today. Drop any line whose discipline the branch does not touch.
+#
+# TIER: C
+# CONSTRAINTS: read-only review, no commits, no push, no labels, temporary writes only
+# CONSTRAINTS: record the head SHA at start and at report, and review that SHA
+# CONSTRAINTS: no long dash anywhere, no Co-Authored-By trailer
+1 | security-reviewer | Review branch BRANCH for security defects: authentication, authorisation, secrets, injection, and any data that crosses a trust boundary. Executable findings where a test can express them. | review/security-BRANCH
+1 | backend-critic    | Review the Go changes on branch BRANCH. Failing tests and contract violations, never prose. | review/backend-BRANCH
+1 | frontend-critic   | Review the web changes on branch BRANCH. Failing tests and contract violations, never prose. | review/frontend-BRANCH
+1 | database-critic   | Review the schema and query changes on branch BRANCH: migration safety, reversibility, and what the change does to rows that already exist. | review/database-BRANCH
+1 | api-critic        | Review the api.yaml surface on branch BRANCH: contract breaks, spec and runtime drift, and what an existing client sees. | review/api-BRANCH
