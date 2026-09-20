@@ -57,7 +57,7 @@ Track your fix attempts. After 3 failed hypotheses:
 - Every hypothesis must be stated before testing
 - Every fix attempt must include the test that validates it
 - Include "What I tried" section in all issue comments
-- Use `git stash` before each new hypothesis to keep a clean slate
+- Commit the current attempt on your own branch before each new hypothesis, or test it in a throwaway worktree. Never `git stash`: the stash is one ref shared by every worktree of a repository, and seats run in parallel worktrees of the same repo, so two seats stashing at once can pop each other's work
 - Commit messages reference the issue: `fix: resolve flaky timeout in payment webhook (#123)`
 
 ## Issue Lifecycle
