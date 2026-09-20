@@ -199,6 +199,9 @@ test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch
 	@echo "== fix-round plan check (seat rule blocks + dispatch gate) =="
 	@./tests/run-plan-check-tests.sh
 	@echo ""
+	@echo "== plan constraints header =="
+	@./tests/run-constraints-tests.sh
+	@echo ""
 	@echo "== fleet ledger (W1: seat records, rollups, manual readings) =="
 	@./tests/run-ledger-tests.sh
 	@echo ""
