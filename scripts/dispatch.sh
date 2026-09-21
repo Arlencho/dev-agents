@@ -762,6 +762,20 @@ constraints_delivered() { # <plan file> <task desc>... -> 1 when a seat did not 
 # ---- constraints-header:end ----
 
 # --------------------------------------------------
+# Trim leading and trailing whitespace.
+#
+# Deliberately not `echo "$x" | xargs`. xargs parses its input as shell words,
+# so a single apostrophe anywhere in a task description ("the day's data")
+# aborts the entire dispatch with "xargs: unterminated quote" before a single
+# seat starts, and quotes and backslashes elsewhere are silently eaten. Plan
+# text is prose written by a person and must survive verbatim.
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
+
 # Parse tasks into waves
 # --------------------------------------------------
 # Detect format: if first field of first task is a number, it's wave-aware
@@ -771,7 +785,7 @@ detect_wave_format() {
     local fields
     IFS='|' read -ra fields <<< "$first_line"
     local first_field
-    first_field=$(echo "${fields[0]}" | xargs)
+    first_field=$(trim "${fields[0]}")
     if [[ "$first_field" =~ ^[0-9]+$ ]]; then
         echo "wave"
     else
@@ -797,19 +811,19 @@ for i in "${!TASKS[@]}"; do
     # branch is re-joined as the description. Plans that legitimately use
     # branch names without '/' fall back to a generated branch name.
     last=""
-    [ "$n" -ge 1 ] && last=$(echo "${fields[$((n-1))]}" | xargs)
+    [ "$n" -ge 1 ] && last=$(trim "${fields[$((n-1))]}")
     is_branch=false
     case "$last" in
         */*) case "$last" in *[!A-Za-z0-9/_.-]*) is_branch=false ;; *) is_branch=true ;; esac ;;
     esac
 
     if [ "$FORMAT" = "wave" ]; then
-        wave=$(echo "${fields[0]}" | xargs)
-        agent=$(echo "${fields[1]}" | xargs)
+        wave=$(trim "${fields[0]}")
+        agent=$(trim "${fields[1]}")
         start=2
     else
         wave=1
-        agent=$(echo "${fields[0]}" | xargs)
+        agent=$(trim "${fields[0]}")
         start=1
     fi
 
@@ -820,7 +834,7 @@ for i in "${!TASKS[@]}"; do
     else
         desc=$(IFS='|'; echo "${fields[*]:$start}")
     fi
-    desc=$(echo "$desc" | xargs)
+    desc=$(trim "$desc")
 
     branch="${branch:-fix/$agent-$(date +%s)}"
 
@@ -848,7 +862,7 @@ if [ "$PLAN_SOURCE" != "--interactive" ]; then
             TASK_DESC[$i]="$CONSTRAINTS_PREFIX ${TASK_DESC[$i]}"
         done
         constraints_delivered "$PLAN_SOURCE" "${TASK_DESC[@]}" || exit 1
-        echo -e "Constraints: $(plan_constraints "$PLAN_SOURCE" | wc -l | xargs) from the plan header, on every task."
+        echo -e "Constraints: $(plan_constraints "$PLAN_SOURCE" | wc -l | tr -d "[:space:]") from the plan header, on every task."
     fi
 fi
 
@@ -945,7 +959,7 @@ if [ "$SKIP_AUTH_PREFLIGHT" = false ]; then
             primary=$(get_provider "$agent")
             chain=$(get_failover_chain "$agent")
             for v in $primary $chain; do
-                v=$(echo "$v" | xargs)
+                v=$(trim "$v")
                 [ -n "$v" ] && NEED_VENDORS["$v"]=1
             done
         done
