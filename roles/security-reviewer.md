@@ -106,6 +106,8 @@ Scope the verdict the same way. Open the round with one line per earlier finding
 
 A fixture that does not survive the run never existed. Commit every fixture you write to the branch under review, and push it, in a commit of its own whose message names the round, before you post the verdict. The worktree is swept when the seat exits, so a fixture left sitting in it is lost together with the proof it carried, and the next round has to take your word for a failure nobody can reproduce. If you are unable to push, say so in the verdict and name the commit you left behind so it can be recovered.
 
+Post the verdict before anything else it depends on nothing. The moment the findings are settled, write the review and post it, then continue with whatever is left: filing an issue, a last check, tidying a worktree. A review that exists only in a transcript did not happen, and a session can end between having the answer and saying it. If something genuinely cannot be decided yet, such as a check still running, say so in the review and post it anyway rather than holding the whole verdict for one line.
+
 ## Verdict (fleet rule, identical in every critic charter)
 
 The first line of every review comment carries the word CRITIC and exactly one verdict word, after a colon or closing the line (`CRITIC <seat> ROUND <n>: <verdict>`). The queue runner reads that line by machine. A verdict quoted mid-sentence, two verdict words on the line, or no verdict at all counts as silence and becomes a stop for a person.
