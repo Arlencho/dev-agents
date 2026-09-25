@@ -14,6 +14,7 @@
 # Claude accepts tier aliases OR full IDs (e.g. claude-opus-5).
 # Kimi launcher IGNORES Claude tier names and uses the CLI default (Kimi K3).
 # Grok launcher: same. Tier names are not Grok models; leave default unless pinning.
+# Codex launcher: same. Tier names are ignored, the CLI default model runs.
 #
 # Owner multi-vendor seats:
 #   First-party trust seats → claude-opus-5
@@ -35,9 +36,13 @@
 # claude-opus-5 to save spend. Provider routing is unchanged.
 #
 # Owner decision 2026-09-13: every producer seat except web-frontend moves to
-# grok for a five-task trial; producers never fail over to claude. The model
-# column below still pins the tier a seat runs when its provider is claude;
-# the kimi and grok launchers ignore it.
+# grok for a five-task trial. The model column below still pins the tier a
+# seat runs when its provider is claude; the kimi, grok and codex launchers
+# ignore it.
+# Owner decision 2026-09-25: producers may fail over to claude as the last
+# resort. The chain is primary, the other non-Anthropic seat, codex, claude
+# (see provider_failover below); the "never claude" rule of the trial no
+# longer holds, the primaries do not change.
 # Owner decision 2026-09-16: Fable is available again. The judgment seats
 # (security reviewer and the four critics) run claude-fable-5-1, because
 # finding what a producer missed is where the strongest model pays for
@@ -119,17 +124,21 @@ title_patterns:
 # provider is rate-capped/cooling — exit 75 — or unavailable — exit 69).
 # Resolution: [provider_preferences from workers.yaml] + chain, deduplicated.
 provider_failover:
-  # Producers (routing trial 2026-09-13): kimi and grok only, never claude.
-  # The primary comes first: web-frontend is the kimi seat, the rest are grok.
-  web-frontend: [kimi, grok]
-  go-backend: [grok, kimi]
-  db-architect: [grok, kimi]
-  api-designer: [grok, kimi]
-  devops: [grok, kimi]
-  test-engineer: [grok, kimi]
-  mobile: [grok, kimi]
-  investigate: [grok, kimi]
-  docs-writer: [grok, kimi]
+  # Producers: the primary comes first (web-frontend is the kimi seat, the
+  # rest are grok), then the other non-Anthropic seat, then codex, then
+  # claude. The trial rule of 2026-09-13 ("never claude") is lifted: owner
+  # decision 2026-09-25 allows claude as the LAST RESORT for producers, so a
+  # producer reaches it only when grok, kimi and codex are all capped or
+  # unavailable. The primaries are unchanged.
+  web-frontend: [kimi, grok, codex, claude]
+  go-backend: [grok, kimi, codex, claude]
+  db-architect: [grok, kimi, codex, claude]
+  api-designer: [grok, kimi, codex, claude]
+  devops: [grok, kimi, codex, claude]
+  test-engineer: [grok, kimi, codex, claude]
+  mobile: [grok, kimi, codex, claude]
+  investigate: [grok, kimi, codex, claude]
+  docs-writer: [grok, kimi, codex, claude]
   # Discipline critics keep the first-party primary and fall only to grok.
   backend-critic: [claude, grok]
   frontend-critic: [claude, grok]

@@ -22,9 +22,9 @@ grok login    # once, against SuperGrok / X Premium+
 
 ## Producer seats (routing trial, owner decision 2026-09-13)
 
-`providers/grok/launch.sh` is a full producer launcher (charter injection + rate-cap classification). Under the trial it is the primary for every producer seat except `web-frontend`: `go-backend`, `db-architect`, `api-designer`, `devops`, `test-engineer`, `mobile`, `investigate` and `docs-writer` (`workers.yaml provider_preferences`). Producer failover chains list only grok and kimi, so a producer never falls back to the first-party seat.
+`providers/grok/launch.sh` is a full producer launcher (charter injection + rate-cap classification). Under the trial it is the primary for every producer seat except `web-frontend`: `go-backend`, `db-architect`, `api-designer`, `devops`, `test-engineer`, `mobile`, `investigate` and `docs-writer` (`workers.yaml provider_preferences`). Producer failover chains run grok, kimi, codex, claude (owner decision 2026-09-25: claude is the last resort, reached only when the three other vendors are capped or unavailable; see `providers/codex/README.md`).
 
-- **Assignment**: grok primary, kimi failover (`web-frontend` keeps the reverse order: kimi primary, grok failover). Why: first-party seats hit the subscription spend limit on 2026-09-13 and killed every seat for three hours; producers are the larger share of that spend and the critics are where the quality lives.
+- **Assignment**: grok primary, kimi failover, then codex, then claude (`web-frontend` keeps the reverse order at the top: kimi primary, grok failover). Why: first-party seats hit the subscription spend limit on 2026-09-13 and killed every seat for three hours; producers are the larger share of that spend and the critics are where the quality lives.
 - **Trial length**: five tasks per producer seat.
 - **Metric**: rounds to SAFE per task, counted against the Kimi and Claude baselines in [`wave-plans/ab-metrics.csv`](../../wave-plans/ab-metrics.csv).
 - **Exit rule**: a producer whose median rounds to SAFE exceed the baseline by one goes back to its previous seat.

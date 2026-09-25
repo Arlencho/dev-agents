@@ -1,7 +1,7 @@
 #!/bin/bash
 # Launcher contract tests — no real vendor CLIs, no network.
-# Puts tests/shims on PATH so `claude`/`kimi`/`grok` resolve to fakes whose
-# behavior is driven by SHIM_MODE (success|fail|ratecap|noauth).
+# Puts tests/shims on PATH so `claude`/`kimi`/`grok`/`codex` resolve to fakes
+# whose behavior is driven by SHIM_MODE (success|fail|ratecap|noauth).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,11 +24,11 @@ run_launcher() { # <vendor> <role> <task>  — shims on PATH
     echo $?
 }
 
-echo "== rows 1-12: each launcher × {success, fail, ratecap, noauth} =="
+echo "== rows 1-16: each launcher × {success, fail, ratecap, noauth} =="
 # noauth note: kimi's shim says "HTTP 401 unauthorized", and a fast 401 is a
-# provider-limit signature since issue #84 (exit 78, hold + probe). claude's
-# and grok's noauth text carries no 401, so they stay 69.
-for vendor in claude kimi grok; do
+# provider-limit signature since issue #84 (exit 78, hold + probe). claude's,
+# grok's and codex's noauth text carries no 401, so they stay 69.
+for vendor in claude kimi grok codex; do
     noauth_want=69
     [ "$vendor" = "kimi" ] && noauth_want=78
     for pair in "success 0" "fail 1" "ratecap 75" "noauth $noauth_want"; do
@@ -39,7 +39,7 @@ for vendor in claude kimi grok; do
 done
 
 echo "== row 13: binary absent from PATH -> 69 =="
-for vendor in claude kimi grok; do
+for vendor in claude kimi grok codex; do
     # Minimal PATH with coreutils but no vendor CLI (shims dir excluded)
     got=$(PATH="/usr/bin:/bin" "$REPO_DIR/providers/$vendor/launch.sh" web-frontend "t" >/dev/null 2>&1; echo $?)
     check "$vendor / binary-absent" 69 "$got"
@@ -54,8 +54,10 @@ QUOTED_PROMPT="## Relevant Learnings
 - Not authenticated. Run 'grok login' first.
 - You've reached your usage limit. Limit resets at 5pm.
 - HTTP 429 Too Many Requests, quota exceeded
+- ERROR: You've hit your usage limit. Upgrade to Pro or try again at 3:00 PM.
+- Not logged in. Run 'codex login' to authenticate.
 YOUR TASK: do the thing"
-for vendor in claude kimi grok; do
+for vendor in claude kimi grok codex; do
     noauth_want=69
     [ "$vendor" = "kimi" ] && noauth_want=78
     got=$(SHIM_MODE=success run_launcher "$vendor" web-frontend "$QUOTED_PROMPT")
@@ -80,12 +82,93 @@ else
 fi
 rm -f "$ARGV_LOG"
 
+echo "== row 14b: codex runs headless with approvals off, charter in the prompt, stdin detached =="
+# The codex CLI echoes its whole prompt back (a "user" line), so the shim's
+# echo is realistic here: a charter that quotes a cap phrase rides through the
+# classifier untouched (row 13b covers that); this row pins the invocation.
+ARGV_LOG3="$(mktemp)"
+SHIM_MODE=success SHIM_ARGV_LOG="$ARGV_LOG3" PATH="$SHIMS:$PATH" \
+    "$REPO_DIR/providers/codex/launch.sh" web-frontend "build the checkout page" >/dev/null 2>&1 <<< "stdin the seat must never see"
+argv=$(tr '\0' '\n' < "$ARGV_LOG3")
+if [ "$(printf '%s\n' "$argv" | sed -n '1p')" = "exec" ]; then
+    echo "  ok   codex runs the exec subcommand"; pass=$((pass+1))
+else
+    echo "  FAIL codex first argv word is not exec: $(printf '%s' "$argv" | head -1)"; fail=$((fail+1))
+fi
+if printf '%s\n' "$argv" | grep -qxF -- "--dangerously-bypass-approvals-and-sandbox"; then
+    echo "  ok   codex approvals and sandbox are off for the seat"; pass=$((pass+1))
+else
+    echo "  FAIL codex bypass flag missing from argv"; fail=$((fail+1))
+fi
+if printf '%s\n' "$argv" | grep -qF "Your Role Charter" && printf '%s\n' "$argv" | grep -qF "build the checkout page"; then
+    echo "  ok   codex charter+task present in prompt argv"; pass=$((pass+1))
+else
+    echo "  FAIL codex charter injection missing from argv"; fail=$((fail+1))
+fi
+if printf '%s\n' "$argv" | grep -qxF -- "--skip-git-repo-check"; then
+    echo "  FAIL codex skips the git repo check: a seat outside a worktree must fail loud"; fail=$((fail+1))
+else
+    echo "  ok   codex keeps the git repo check"; pass=$((pass+1))
+fi
+rm -f "$ARGV_LOG3"
+# AGENT_MODEL: a claude alias is dropped, a vendor-native id is passed as -m.
+ARGV_LOG4="$(mktemp)"
+SHIM_MODE=success SHIM_ARGV_LOG="$ARGV_LOG4" AGENT_MODEL=claude-opus-5 PATH="$SHIMS:$PATH" \
+    "$REPO_DIR/providers/codex/launch.sh" web-frontend "t" >/dev/null 2>&1
+if tr '\0' '\n' < "$ARGV_LOG4" | grep -qx -- "-m"; then
+    echo "  FAIL codex forwarded a claude model pin"; fail=$((fail+1))
+else
+    echo "  ok   codex ignores a claude model pin"; pass=$((pass+1))
+fi
+SHIM_MODE=success SHIM_ARGV_LOG="$ARGV_LOG4" AGENT_MODEL=codex-native-model PATH="$SHIMS:$PATH" \
+    "$REPO_DIR/providers/codex/launch.sh" web-frontend "t" >/dev/null 2>&1
+if tr '\0' '\n' < "$ARGV_LOG4" | grep -A1 -x -- "-m" | grep -qx "codex-native-model"; then
+    echo "  ok   codex passes a vendor-native model id as -m"; pass=$((pass+1))
+else
+    echo "  FAIL codex dropped the vendor-native model id"; fail=$((fail+1))
+fi
+rm -f "$ARGV_LOG4"
+
+echo "== row 14c: codex ratecap patterns classify the CLI's own limit lines =="
+# Each line is a message the codex CLI or its API prints at a cap or an auth
+# failure. Run each through the launcher as the shim's last line and assert
+# the classification, so a pattern edit that stops matching is caught here.
+codex_classify() { # <line> -> exit code of the launcher with that tail
+    local shim_dir line="$1"
+    shim_dir=$(mktemp -d)
+    printf '#!/bin/bash\necho "[codex shim] args: $*"\necho %q\nexit 1\n' "$line" > "$shim_dir/codex"
+    chmod +x "$shim_dir/codex"
+    PATH="$shim_dir:/usr/bin:/bin" "$REPO_DIR/providers/codex/launch.sh" web-frontend "do the thing" >/dev/null 2>&1
+    local rc=$?
+    rm -rf "$shim_dir"
+    echo "$rc"
+}
+while IFS='|' read -r want line; do
+    got=$(codex_classify "$line")
+    check "codex / '$line'" "$want" "$got"
+done <<'EOF'
+75|You've hit your usage limit. Upgrade to Pro or try again at 3:00 PM.
+75|error: usage_limit_reached
+75|ERROR: 429 Too Many Requests
+75|Rate limit reached for codex-native-model: rate_limit_exceeded
+75|error: insufficient_quota
+75|Your usage balance is exhausted
+75|ERROR: 402 Payment Required
+75|You have no remaining credits
+69|Not logged in. Run 'codex login' to authenticate.
+69|error: unauthorized
+69|error: refresh token expired
+EOF
+# Not a cap: an ordinary failure line stays exit 1.
+got=$(codex_classify "error: the build failed, see above")
+check "codex / plain failure line stays 1" 1 "$got"
+
 echo "== row 15: a role with no charter runs without one instead of crashing =="
 # The catch-all seat used to reach the vendor launchers with no roles/<role>.md
 # behind it; the half-built charter path was executed as a command
 # ("=/…/roles/claude.md: No such file or directory", exit 127 mid-launcher).
 EMPTY_ROLES=$(mktemp -d)
-for vendor in kimi grok; do
+for vendor in kimi grok codex; do
     got=$(SHIM_MODE=success ROLES_DIR="$EMPTY_ROLES" run_launcher "$vendor" claude "do the thing")
     check "$vendor / charterless role" 0 "$got"
 done

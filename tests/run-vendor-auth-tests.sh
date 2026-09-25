@@ -32,8 +32,20 @@ export GROK_HOME="$TMPHOME/.grok"
 export VENDOR_AUTH_TIMEOUT_SEC=5
 
 echo "== vendor-auth: all ok with shims + fake credentials =="
-got=$(SHIM_MODE=success PATH="$SHIMS:$PATH" "$CHECK" --vendors claude,kimi,grok >/dev/null 2>&1; echo $?)
+got=$(SHIM_MODE=success PATH="$SHIMS:$PATH" "$CHECK" --vendors claude,kimi,grok,codex >/dev/null 2>&1; echo $?)
 check "all vendors ok" 0 "$got"
+
+echo "== vendor-auth: codex login status =="
+got=$(SHIM_MODE=success PATH="$SHIMS:$PATH" "$CHECK" --vendors codex >/dev/null 2>&1; echo $?)
+check "codex logged in ok" 0 "$got"
+got=$(SHIM_MODE=noauth PATH="$SHIMS:$PATH" "$CHECK" --vendors codex >/dev/null 2>&1; echo $?)
+check "codex not logged in fails" 1 "$got"
+out=$(SHIM_MODE=success PATH="$SHIMS:$PATH" "$CHECK" 2>&1) || true
+if echo "$out" | grep -q codex; then
+    echo "  ok   codex is in the default vendor set"; pass=$((pass+1))
+else
+    echo "  FAIL codex missing from ALL_VENDORS"; fail=$((fail+1))
+fi
 
 echo "== vendor-auth: claude loggedIn=false =="
 got=$(SHIM_MODE=noauth PATH="$SHIMS:$PATH" "$CHECK" --vendors claude >/dev/null 2>&1; echo $?)
@@ -75,6 +87,12 @@ if echo "$out" | grep -q kimi && [ "$ec" -eq 0 ]; then
 else
     echo "  FAIL plan web-frontend (exit $ec)"; echo "$out" | head -20; fail=$((fail+1))
 fi
+# The producer chain now ends codex then claude: both are preflighted too.
+if echo "$out" | grep -q codex && echo "$out" | grep -q claude; then
+    echo "  ok   plan preflights the codex and claude failover rungs"; pass=$((pass+1))
+else
+    echo "  FAIL plan did not preflight codex + claude:"; echo "$out" | head -20; fail=$((fail+1))
+fi
 rm -f "$PLAN"
 
 echo "== vendor-auth: --json overall ok =="
@@ -94,6 +112,18 @@ if grep -qE 'claude\|auth\|oauth session expired' "$PAT" \
 else
     echo "  FAIL oauth patterns missing from ratecap-patterns.conf"; fail=$((fail+1))
 fi
+
+echo "== ratecap-patterns: codex rows cover cap, quota, 429, 402, balance and auth =="
+for want in 'codex\|ratecap\|HTTP\.\*429' 'codex\|ratecap\|.*usage limit' 'codex\|ratecap\|quota' \
+            'codex\|ratecap\|402 Payment Required' 'codex\|ratecap\|usage balance' \
+            'codex\|auth\|not logged in' 'codex\|auth\|codex login' 'codex\|auth\|unauthorized' \
+            'codex\|limit\|HTTP\.\*401'; do
+    if grep -qE "^$want" "$PAT"; then
+        echo "  ok   pattern present: $want"; pass=$((pass+1))
+    else
+        echo "  FAIL pattern missing: $want"; fail=$((fail+1))
+    fi
+done
 
 echo ""
 echo "== $pass passed, $fail failed =="

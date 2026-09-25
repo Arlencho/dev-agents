@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Bootstrap a new machine with AI coding agent definitions
 # Usage: ./scripts/bootstrap.sh [provider]
-# Providers: claude (default), openai, cursor, grok
+# Providers: claude (default), kimi, grok, codex (placeholders: openai, cursor)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
@@ -49,16 +49,24 @@ case "$PROVIDER" in
     done
     ;;
 
-  openai|cursor|grok)
+  kimi|grok|codex)
+    # These launchers read roles/<role>.md directly (charter injected into the
+    # prompt), so there is nothing to link. Login is the only setup.
+    echo "Provider '$PROVIDER' needs no agent links: providers/$PROVIDER/launch.sh reads roles/ directly."
+    echo "Setup: '$PROVIDER login' on this machine, then ./scripts/vendor-auth-check.sh --vendors $PROVIDER"
+    exit 0
+    ;;
+
+  openai|cursor)
     echo "Provider '$PROVIDER' is not yet supported."
-    echo "Placeholder exists at providers/$PROVIDER/"
+    echo "Placeholder exists at providers/$PROVIDER/ (openai: see providers/codex/)"
     echo "Contributions welcome!"
     exit 0
     ;;
 
   *)
     echo "Unknown provider: $PROVIDER"
-    echo "Available: claude, openai, cursor, grok"
+    echo "Available: claude, kimi, grok, codex (placeholders: openai, cursor)"
     exit 1
     ;;
 esac

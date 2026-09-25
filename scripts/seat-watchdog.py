@@ -16,7 +16,7 @@ SEAT_QUIET_AFTER_S seconds, kills the whole child process tree and exits 124
 A model event is work the model actually did:
   - a stream-json line whose type is "assistant" or "user" (a tool result
     rides in a user event)
-  - in plain-text output (kimi/grok), any line that is not a known ticker
+  - in plain-text output (kimi/grok/codex), any line that is not a known ticker
 Never a model event:
   - system lines (hook_started, hook_response, init, thinking_tokens)
   - rate_limit_event lines

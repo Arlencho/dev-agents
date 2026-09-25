@@ -2,7 +2,7 @@
 
 Portable, project-agnostic, **multi-vendor** orchestration toolkit for AI-powered parallel development.
 
-Run agents via **claude**, **kimi**, and **grok** CLIs with **zero API keys** — subscription login only. Agents pair cross-vendor for decorrelated review and rate-cap failover out of the box.
+Run agents via **claude**, **kimi**, **grok** and **codex** CLIs with **zero API keys**: subscription login only. Agents pair cross-vendor for decorrelated review and rate-cap failover out of the box.
 
 ## What this is
 
@@ -10,7 +10,7 @@ Source of truth for:
 
 1. **Agent role charters** (`roles/*.md`) — **20 active** provider-agnostic roles (engineers, critics, ops, meta). Niche reviewers are parked in `roles/_archived/` (see its README).
 2. **Heterogeneous producer-critic pattern** — every implementation task pairs a producer agent with an independent critic on a different model. Charter-level invariant.
-3. **Multi-vendor CLI orchestration** — agents run via `claude`, `kimi`, and `grok` subscription CLIs on owned hardware. Provider selection via `workers.yaml provider_preferences` + `routing.yaml provider_failover`. Rate-cap sentinel marks vendors cooling and fails over automatically.
+3. **Multi-vendor CLI orchestration**: agents run via `claude`, `kimi`, `grok` and `codex` subscription CLIs on owned hardware. Provider selection via `workers.yaml provider_preferences` + `routing.yaml provider_failover`. Rate-cap sentinel marks vendors cooling and fails over automatically.
 4. **Multi-product orchestration** (`companies/*.md`) — one manifest per product wiring agents, budgets, runtime config, and the source-of-truth product repo path.
 5. **L2 skill packs** (`skills/*/SKILL.md` + `config/role-skills.yaml`) — versioned playbooks injected at launch (not identity; not auto-memory). Global packs live here; project packs live in the product repo and **replace** global by pack id. Evolution is PR-gated (human merge for global). See [skills evolution synthesis](docs/proposals/skills-evolution-SYNTHESIS.md).
 6. **Paperclip integration** — the `claude_local` adapter runs these agents under the Paperclip orchestration platform (`127.0.0.1:3100`) with task routing, board automation, and budget enforcement.
@@ -30,11 +30,11 @@ Critics report to CTO for independence, but pair with their producer counterpart
 
 | Producer role | Vendor (CLI) | Model tier | Critic role | Critic vendor | Critic tier | Discipline |
 |---|---|---|---|---|---|---|
-| Frontend Engineer (`web-frontend`) | **kimi** (failover: grok) | **K3** | Frontend Critic | **claude** | **claude-opus-5** | Next.js / React / Tailwind / a11y |
-| Backend Engineer (`go-backend`) | **grok** (failover: kimi) | CLI default | Backend Critic | claude | **claude-opus-5** | Go / Chi / pgx / sqlc / OpenAPI |
-| Database Engineer (`db-architect`) | **grok** (failover: kimi) | CLI default | Database Critic | claude | **claude-opus-5** | Postgres migrations / sqlc / indexes |
-| API Designer (`api-designer`) | **grok** (failover: kimi) | CLI default | API Critic | claude | **claude-opus-5** | `api.yaml` / generated TS client / envelopes |
-| DevOps Engineer (`devops`) | **grok** (failover: kimi) | CLI default | `devops-critic` | **grok** | failover kimi | CI / deploy / infra |
+| Frontend Engineer (`web-frontend`) | **kimi** (failover: grok, codex, claude) | **K3** | Frontend Critic | **claude** | **claude-opus-5** | Next.js / React / Tailwind / a11y |
+| Backend Engineer (`go-backend`) | **grok** (failover: kimi, codex, claude) | CLI default | Backend Critic | claude | **claude-opus-5** | Go / Chi / pgx / sqlc / OpenAPI |
+| Database Engineer (`db-architect`) | **grok** (failover: kimi, codex, claude) | CLI default | Database Critic | claude | **claude-opus-5** | Postgres migrations / sqlc / indexes |
+| API Designer (`api-designer`) | **grok** (failover: kimi, codex, claude) | CLI default | API Critic | claude | **claude-opus-5** | `api.yaml` / generated TS client / envelopes |
+| DevOps Engineer (`devops`) | **grok** (failover: kimi, codex, claude) | CLI default | `devops-critic` | **grok** | failover kimi | CI / deploy / infra |
 | Plan review (autoplan Pass 4) | n/a | n/a | Plan Critic | **grok** | default | Wave-plan review (`autoplan.sh`) |
 
 > **Config wins:** live vendor + Claude tier = `config/workers.yaml` + `config/routing.yaml`. **Producer routing trial (owner decision 2026-09-13):** every producer except `web-frontend` runs on the grok seat for **five tasks**; critics, `security-reviewer`, `cto` and `orchestrator` keep the first-party seat. **Metric:** rounds to SAFE per producer task, counted against the Kimi and Claude baselines in [`wave-plans/ab-metrics.csv`](wave-plans/ab-metrics.csv). **Exit rule:** a producer whose median rounds to SAFE exceed the baseline by one goes back to its previous seat.
@@ -70,7 +70,7 @@ The heterogeneity invariant extended across vendors — same-vendor different-ti
 
 **Rate-cap sentinel + failover** — a vendor that emits a cap pattern (`config/ratecap-patterns.conf`) exits 75; the vendor is marked cooling (`logs/provider-state/`, `cooldown_minutes` in routing.yaml), the event is logged + notified, and `dispatch.sh` **fails the task over** to the next provider in `routing.yaml provider_failover` — reusing the existing retry loop. `make scorecard` shows cooldown state, cap events, and per-provider task outcomes.
 
-**Seats today**: `web-frontend` → **Kimi K3** primary, `grok` failover (`providers/kimi/README.md`). Every other producer (`go-backend`, `db-architect`, `api-designer`, `devops`, `test-engineer`, `mobile`, `investigate`, `docs-writer`) → **Grok** primary, `kimi` failover, under the five-task routing trial (owner decision 2026-09-13): rounds to SAFE counted against the Kimi and Claude baselines in `wave-plans/ab-metrics.csv`, and a producer whose median exceeds the baseline by one goes back (`providers/grok/README.md`). The discipline critics keep a first-party primary on **claude-opus-5** with grok as the only failover; `security-reviewer`, `cto` and `orchestrator` carry no failover entry. **Grok Plan Critic** runs as Pass 4 of `autoplan.sh` via the grok CLI (`providers/grok/README.md`).
+**Seats today**: `web-frontend` → **Kimi K3** primary, `grok` failover (`providers/kimi/README.md`), then `codex`, then `claude`. Every other producer (`go-backend`, `db-architect`, `api-designer`, `devops`, `test-engineer`, `mobile`, `investigate`, `docs-writer`) → **Grok** primary, `kimi` failover, then `codex`, then `claude` as the last resort (owner decision 2026-09-25; `providers/codex/README.md`), under the five-task routing trial (owner decision 2026-09-13): rounds to SAFE counted against the Kimi and Claude baselines in `wave-plans/ab-metrics.csv`, and a producer whose median exceeds the baseline by one goes back (`providers/grok/README.md`). The discipline critics keep a first-party primary on **claude-opus-5** with grok as the only failover; `security-reviewer`, `cto` and `orchestrator` carry no failover entry. **Grok Plan Critic** runs as Pass 4 of `autoplan.sh` via the grok CLI (`providers/grok/README.md`).
 
 **Non-goals**: no vendor swap on orchestrator, CTO gate, security, or the critic primaries; trust-critical seats stay on harness-proven Claude.
 
@@ -424,8 +424,8 @@ provider_preferences:
 **Edit `config/routing.yaml`** to define failover chains:
 ```yaml
 provider_failover:
-  web-frontend: [kimi, grok]    # Try kimi first; if capped, use grok
-  go-backend: [grok, kimi]      # Trial producers: grok first, never claude
+  web-frontend: [kimi, grok, codex, claude]   # Try kimi first; then grok, codex, claude last
+  go-backend: [grok, kimi, codex, claude]     # Trial producers: grok first; claude only as the last resort (2026-09-25)
   default: [claude, kimi]       # Default chain: claude first
 ```
 
@@ -678,12 +678,12 @@ The sync script resolves agent → provider file via a 3-level lookup:
 
 | Agent | Vendor (CLI) | Model tier | Scope |
 |---|---|---|---|
-| `go-backend` | **grok** (failover kimi) | CLI default | Handlers, services, providers, middleware |
-| `web-frontend` | **kimi** (failover grok) | **K3** | Pages, components, styling, API integration |
-| `mobile` | **grok** (failover kimi) | CLI default | Screens, navigation, native features |
-| `db-architect` | **grok** (failover kimi) | CLI default | Migrations, sqlc queries, index strategy |
-| `api-designer` | **grok** (failover kimi) | CLI default | OpenAPI spec, type generation, response envelopes |
-| `devops` | **grok** (failover kimi) | CLI default | Docker, CI/CD, deployment, scripts |
+| `go-backend` | **grok** (failover kimi, codex, claude) | CLI default | Handlers, services, providers, middleware |
+| `web-frontend` | **kimi** (failover grok, codex, claude) | **K3** | Pages, components, styling, API integration |
+| `mobile` | **grok** (failover kimi, codex, claude) | CLI default | Screens, navigation, native features |
+| `db-architect` | **grok** (failover kimi, codex, claude) | CLI default | Migrations, sqlc queries, index strategy |
+| `api-designer` | **grok** (failover kimi, codex, claude) | CLI default | OpenAPI spec, type generation, response envelopes |
+| `devops` | **grok** (failover kimi, codex, claude) | CLI default | Docker, CI/CD, deployment, scripts |
 
 ### Critics (prefer cross-tier / cross-vendor vs producer)
 
