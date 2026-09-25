@@ -105,6 +105,13 @@ check 'empty credit file emits no numeric errors' 1 grep -q 'integer expression 
 # Exhaust the untried chain to exercise the primary fallback credit read.
 : > "$PROVIDER_STATE_DIR/codex.credit-until"
 check 'empty primary credit file permits legacy rate fallback' 0 test "$(resolve_provider web-frontend 'codex kimi grok claude')" = codex
+printf '#!/bin/sh\necho "Logged in using subscription"\nexit "${AUTH_EXIT:-0}"\n' > "$TMP/bin/codex"
+chmod +x "$TMP/bin/codex"
+for auth_exit in 0 1; do
+    check "preflight preserves auth result with empty credit file: $auth_exit" "$auth_exit" env AUTH_EXIT="$auth_exit" bash "$ROOT/scripts/vendor-auth-check.sh" --vendors codex --json
+    cp "$TMP/output" "$TMP/preflight-output"
+    check "preflight empty credit file emits no numeric errors: $auth_exit" 1 grep -qE 'integer (expression )?expected' "$TMP/preflight-output"
+done
 # A fresh CLI probe must persist the same long cooldown and expose the reason.
 rm "$PROVIDER_STATE_DIR/codex.credit-until"
 printf '#!/bin/sh\necho "Error: HTTP 402 Payment Required" >&2\nexit 1\n' > "$TMP/bin/codex"

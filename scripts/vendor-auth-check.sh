@@ -461,7 +461,9 @@ check_gh() {
 run_check() {
     local vendor="$1"
     local credit="${PROVIDER_STATE_DIR:-$REPO_DIR/logs/provider-state}/${vendor}.credit-until"
-    if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$(date +%s)" ]; then
+    local val
+    val=$(cat "$credit" 2>/dev/null || true)
+    if [ "${val:-0}" -gt "$(date +%s)" ]; then
         PROBE_STATUS="out-of-credit"
         PROBE_DETAIL="out of credit; paid balance cooldown active"
         PROBE_FIX="replenish the paid balance, then clear $credit"
@@ -504,7 +506,8 @@ for vendor in "${VENDORS[@]}"; do
     else
         FAIL=1
         credit="${PROVIDER_STATE_DIR:-$REPO_DIR/logs/provider-state}/${vendor}.credit-until"
-        if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$(date +%s)" ]; then
+        val=$(cat "$credit" 2>/dev/null || true)
+        if [ "${val:-0}" -gt "$(date +%s)" ]; then
             PROBE_STATUS="out-of-credit"
             PROBE_DETAIL="out of credit; paid balance cooldown active"
             PROBE_FIX="replenish the paid balance, then clear $credit"
