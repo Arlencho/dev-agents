@@ -48,16 +48,9 @@ done <<< "$PAIRS"
 # Anything else is a same-seat pair and must be listed here with a reason, so
 # that an exception is a deliberate, visible decision rather than a silent one.
 # ----------------------------------------------------------------------
+# No exceptions remain: codex producers differ from every critic vendor.
 exception_reason() { # <producer>
     case "$1" in
-        devops)
-            # Routing trial 2026-09-13: the devops producer sits on the grok
-            # trial seat while devops-critic is pinned grok (non-Anthropic by
-            # design), so this pair is same-vendor for the five-task trial
-            # window. Bounded by the exit rule in README + providers/grok/
-            # README.md: median rounds to SAFE worse than baseline by one and
-            # the producer goes back.
-            echo "TRIAL 2026-09-13: grok x grok pair accepted for the routing trial" ;;
         *) echo "" ;;
     esac
 }

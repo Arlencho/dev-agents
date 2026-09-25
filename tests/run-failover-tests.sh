@@ -1,5 +1,5 @@
 #!/bin/bash
-# Failover decision tests (rows 16-17) — exercises dispatch.sh's provider
+# Failover decision tests (rows 16-17) - exercises dispatch.sh's provider
 # resolution + cooldown logic without the ssh transport (Remote Login off here;
 # the transport itself is unchanged plumbing already covered by the retry loop).
 set -uo pipefail
@@ -25,11 +25,11 @@ check() { if [ "$2" = "$3" ]; then printf '  ok   %-48s (%s)\n' "$1" "$3"; pass=
 # Clean slate
 rm -f "$STATE_DIR"/*.cooldown 2>/dev/null
 
-echo "== row 16: kimi capped -> task fails over to grok =="
+echo "== row 16: codex capped -> task fails over to kimi =="
 # Emulate dispatch_task's per-task provider progression across a rate-cap retry.
 tried=""
 p1=$(resolve_provider web-frontend "$tried")
-check "first dispatch picks primary" "kimi" "$p1"
+check "first dispatch picks primary" "codex" "$p1"
 
 # run-remote records a cap on exit 75: cooldown file + ratecap.log (mirror it here)
 mkdir -p "$STATE_DIR"
@@ -38,14 +38,14 @@ echo "$(date -u +%FT%TZ)|$p1|web-frontend|localhost|ratecap" >> "$STATE_DIR/rate
 tried="$tried $p1"   # dispatch appends the capped vendor to the task's tried-set
 
 p2=$(resolve_provider web-frontend "$tried")
-check "retry fails over to next provider" "grok" "$p2"
-check "cooldown file was written" "yes" "$([ -f "$STATE_DIR/kimi.cooldown" ] && echo yes || echo no)"
-check "kimi now reads as cooling" "yes" "$(provider_cooling kimi && echo yes || echo no)"
+check "retry fails over to next provider" "kimi" "$p2"
+check "cooldown file was written" "yes" "$([ -f "$STATE_DIR/codex.cooldown" ] && echo yes || echo no)"
+check "codex now reads as cooling" "yes" "$(provider_cooling codex && echo yes || echo no)"
 
 # notify.sh ratecap path fires without error and stays stdout-only under the
-# silent switch — `make test` must never pop "Provider Rate-Capped" toasts.
+# silent switch - `make test` must never pop "Provider Rate-Capped" toasts.
 export FLEET_NOTIFY_SILENT=1
-notify_out=$("$REPO_DIR/scripts/notify.sh" web-frontend localhost feat/x ratecap kimi 2>/dev/null) \
+notify_out=$("$REPO_DIR/scripts/notify.sh" web-frontend localhost feat/x ratecap codex 2>/dev/null) \
     && notify_rc=ok || notify_rc=err
 check "notify ratecap path" "ok" "$notify_rc"
 case "$notify_out" in
@@ -63,28 +63,26 @@ EOF
 chmod +x "$SHIM_DIR/osascript"
 export OSASCRIPT_CALLS="$SHIM_DIR/calls"
 : > "$OSASCRIPT_CALLS"
-PATH="$SHIM_DIR:$PATH" "$REPO_DIR/scripts/notify.sh" web-frontend localhost feat/x ratecap kimi >/dev/null 2>&1
+PATH="$SHIM_DIR:$PATH" "$REPO_DIR/scripts/notify.sh" web-frontend localhost feat/x ratecap codex >/dev/null 2>&1
 check "silent: osascript not invoked" "0" "$(wc -l < "$OSASCRIPT_CALLS" | tr -d ' ')"
 if [ "$(uname)" = "Darwin" ]; then
-    PATH="$SHIM_DIR:$PATH" env -u FLEET_NOTIFY_SILENT "$REPO_DIR/scripts/notify.sh" web-frontend localhost feat/x ratecap kimi >/dev/null 2>&1
+    PATH="$SHIM_DIR:$PATH" env -u FLEET_NOTIFY_SILENT "$REPO_DIR/scripts/notify.sh" web-frontend localhost feat/x ratecap codex >/dev/null 2>&1
     check "unsilenced on macOS: osascript invoked" "1" "$(wc -l < "$OSASCRIPT_CALLS" | tr -d ' ')"
 fi
 rm -rf "$SHIM_DIR"
 
-echo "== row 16b: grok and kimi both capped -> codex before claude (owner 2026-09-25) =="
-date +%s > "$STATE_DIR/grok.cooldown"     # kimi.cooldown is still there from row 16
+echo "== row 16b: codex and kimi capped -> grok before claude (owner 2026-09-25) =="
+date +%s > "$STATE_DIR/kimi.cooldown"     # codex.cooldown remains from row 16
 p3=$(resolve_provider go-backend "")
-check "go-backend with grok+kimi cooling picks codex" "codex" "$p3"
-date +%s > "$STATE_DIR/codex.cooldown"
+check "go-backend with codex+kimi cooling picks grok" "grok" "$p3"
+date +%s > "$STATE_DIR/grok.cooldown"
 p4=$(resolve_provider go-backend "")
-check "go-backend with codex cooling too reaches claude" "claude" "$p4"
-rm -f "$STATE_DIR/codex.cooldown"
+check "go-backend with codex+kimi+grok cooling reaches claude" "claude" "$p4"
 
 echo "== row 17: all chain vendors cooling -> primary anyway (never deadlock) =="
-date +%s > "$STATE_DIR/codex.cooldown"
 date +%s > "$STATE_DIR/claude.cooldown"
-p_all=$(resolve_provider web-frontend "")   # kimi, grok, codex and claude all cooling
-check "returns primary despite all cooling" "kimi" "$p_all"
+p_all=$(resolve_provider web-frontend "")   # codex, kimi, grok and claude all cooling
+check "returns primary despite all cooling" "codex" "$p_all"
 
 # Cleanup
 rm -f "$STATE_DIR"/*.cooldown "$STATE_DIR/ratecap.log" 2>/dev/null
