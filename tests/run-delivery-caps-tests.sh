@@ -84,7 +84,7 @@ for v in claude kimi grok codex; do
     echo $(( $(date +%s) + 86400 )) > "$PROVIDER_STATE_DIR/$v.credit-until"
 done
 check 'routing stops when every provider is out of credit' 1 resolve_provider devops
-check 'preflight reports exhausted credit' 1 bash "$ROOT/scripts/vendor-auth-check.sh" --vendors kimi --json
+check 'preflight reports exhausted credit' 0 bash "$ROOT/scripts/vendor-auth-check.sh" --vendors kimi --json
 grep -q '"status":"out-of-credit"' "$TMP/output" || fail=$((fail + 1))
 echo '0 1 devops kimi default feat/test local 1s no-delivery test.log' > "$TMP/waves/seat.log"
 check 'scorecard exposes credit and missing delivery' 0 env WAVE_PLANS_DIR="$TMP/waves" bash "$ROOT/scripts/provider-scorecard.sh"
@@ -112,11 +112,25 @@ for auth_exit in 0 1; do
     cp "$TMP/output" "$TMP/preflight-output"
     check "preflight empty credit file emits no numeric errors: $auth_exit" 1 grep -qE 'integer (expression )?expected' "$TMP/preflight-output"
 done
+# Probe the last provider in the isolated chain after replenishing its balance.
+probe_vendor="$v"
+echo $(( $(date +%s) + 86400 )) > "$PROVIDER_STATE_DIR/$probe_vendor.credit-until"
+printf '#!/bin/sh\necho "Logged in using subscription"\necho AUTH_OK\n' > "$TMP/bin/$probe_vendor"
+check 'successful fresh probe reports recovery during credit cooldown' 0 bash "$ROOT/scripts/vendor-auth-check.sh" --vendors "$probe_vendor" --deep --json
+grep -q '"status":"ok"' "$TMP/output" || fail=$((fail + 1))
+check 'successful fresh probe clears credit marker' 0 test ! -e "$PROVIDER_STATE_DIR/$probe_vendor.credit-until"
+echo 'invalid-credit-time' > "$PROVIDER_STATE_DIR/$probe_vendor.credit-until"
+check 'non-numeric credit marker is not cooling' 1 provider_cooling "$probe_vendor"
+cp "$TMP/output" "$TMP/cooling-output"
+check 'non-numeric credit marker emits no numeric errors' 1 grep -qE 'integer (expression )?expected' "$TMP/cooling-output"
+echo $(( $(date +%s) + 86400 )) > "$PROVIDER_STATE_DIR/$probe_vendor.credit-until"
+check 'human preflight treats credit cooldown as non-fatal' 0 bash "$ROOT/scripts/vendor-auth-check.sh" --vendors "$probe_vendor"
+grep -q 'out-of-credit' "$TMP/output" || fail=$((fail + 1))
 # A fresh CLI probe must persist the same long cooldown and expose the reason.
 rm "$PROVIDER_STATE_DIR/codex.credit-until"
 printf '#!/bin/sh\necho "Error: HTTP 402 Payment Required" >&2\nexit 1\n' > "$TMP/bin/codex"
 chmod +x "$TMP/bin/codex"
-check 'fresh preflight credit error is not an auth failure' 1 env OUT_OF_CREDIT_COOLDOWN_MINUTES=180 bash "$ROOT/scripts/vendor-auth-check.sh" --vendors codex --json
+check 'fresh preflight credit error is not an auth failure' 0 env OUT_OF_CREDIT_COOLDOWN_MINUTES=180 bash "$ROOT/scripts/vendor-auth-check.sh" --vendors codex --json
 grep -q '"status":"out-of-credit"' "$TMP/output" || fail=$((fail + 1))
 check 'preflight persists configurable long cooldown' 0 test "$(cat "$PROVIDER_STATE_DIR/codex.credit-until")" -gt "$(( $(date +%s) + 10700 ))"
 echo "$pass passed, $fail failed"

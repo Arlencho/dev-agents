@@ -378,7 +378,7 @@ provider_cooling() {
     local credit="$REPO_DIR/logs/provider-state/${vendor}.credit-until"
     local val
     val=$(cat "$credit" 2>/dev/null || true)
-    if [ "${val:-0}" -gt "$(date +%s)" ]; then
+    if [[ "$val" =~ ^[0-9]+$ ]] && [ "$val" -gt "$(date +%s)" ]; then
         return 0
     fi
     local f="$REPO_DIR/logs/provider-state/${vendor}.cooldown"
@@ -413,7 +413,7 @@ resolve_provider() {
         local credit="$REPO_DIR/logs/provider-state/${candidate}.credit-until"
         local val
         val=$(cat "$credit" 2>/dev/null || true)
-        if [ "${val:-0}" -gt "$(date +%s)" ]; then
+        if [[ "$val" =~ ^[0-9]+$ ]] && [ "$val" -gt "$(date +%s)" ]; then
             continue
         fi
         echo "$candidate"; return 0
@@ -421,7 +421,7 @@ resolve_provider() {
     local credit="$REPO_DIR/logs/provider-state/${primary}.credit-until"
     local val
     val=$(cat "$credit" 2>/dev/null || true)
-    if [ "${val:-0}" -gt "$(date +%s)" ]; then
+    if [[ "$val" =~ ^[0-9]+$ ]] && [ "$val" -gt "$(date +%s)" ]; then
         return 1
     fi
     echo "$primary"
