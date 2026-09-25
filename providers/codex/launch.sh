@@ -69,6 +69,7 @@ The task below was approved by the repository owner. Where it names files, direc
 If a helper the charter mentions (for example scripts/task-worktree.sh or PAPERCLIP_TASK_ID) does not exist, work in the current directory and branch you were started in.
 Finish the task end to end: change the code, run the tests it names, commit, push and open the pull request it asks for.
 Never create or commit handoff, notes or summary files (for example handoff.md); put what a reviewer needs in the pull request description.
+Never use adb, emulators or any connected phone or device, and never install or launch apps on a device; the owner's phone is in use. Verify with tests, typecheck and exports only.
 
 $PROMPT"
 
