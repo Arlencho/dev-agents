@@ -107,6 +107,7 @@ case "$MODE" in
         echo "work complete."
         exit 0 ;;
     work)
+        case "$*" in *"Reply with the single word: ok"*) echo ok; exit 0 ;; esac
         [ -n "${SHIM_CWD_LOG:-}" ] && pwd -P >> "$SHIM_CWD_LOG"
         stamp="seat-${SHIM_WORK_TAG:-$$}.txt"
         date -u +%FT%TZ > "$stamp"
@@ -116,10 +117,14 @@ case "$MODE" in
         sleep "${SHIM_WORK_SLEEP:-3}"
         echo "work complete."
         exit 0 ;;
+    credit)
+        echo "Error: HTTP 402 Payment Required: usage balance exhausted" >&2
+        exit 1 ;;
     fail)
         echo "error: something broke in the task"
         exit 1 ;;
     ratecap)
+        exec 1>&2
         case "$VENDOR" in
             claude) echo "You've reached your usage limit. Limit resets at 5pm." ;;
             kimi)   echo "HTTP 429: rate limit exceeded, please retry later" ;;
@@ -128,6 +133,7 @@ case "$MODE" in
         esac
         exit 1 ;;
     noauth)
+        exec 1>&2
         case "$VENDOR" in
             claude) echo "Not logged in. Please run /login" ;;
             kimi)   echo "HTTP 401 unauthorized — please run 'kimi login'" ;;

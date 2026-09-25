@@ -94,6 +94,14 @@ def is_model_event(raw):
             return True
         if isinstance(event, dict) and event.get("type") in ("assistant", "user"):
             return True
+        if isinstance(event, dict) and event.get("type") in (
+            "item.started", "item.updated", "item.completed"
+        ):
+            item = event.get("item")
+            return isinstance(item, dict) and item.get("type") in (
+                "agent_message", "reasoning", "command_execution", "file_change",
+                "mcp_tool_call", "web_search",
+            )
         return False
     text = line.decode("utf-8", "replace")
     for pattern in TICKER_RES:
@@ -119,6 +127,15 @@ def tool_deltas(raw):
         return (), ()
     if not isinstance(event, dict):
         return (), ()
+    item = event.get("item")
+    if isinstance(item, dict) and item.get("id") and item.get("type") in (
+        "command_execution", "file_change", "mcp_tool_call", "web_search"
+    ):
+        tool_id = str(item["id"])
+        if event.get("type") == "item.started":
+            return ((tool_id, item["type"]),), ()
+        if event.get("type") == "item.completed":
+            return (), (tool_id,)
     message = event.get("message")
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, list):
@@ -215,7 +232,7 @@ class Watchdog(object):
                 self.cmd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 start_new_session=True,
                 bufsize=0,
             )
@@ -235,19 +252,21 @@ class Watchdog(object):
         watcher = threading.Thread(target=self.checker, daemon=True)
         watcher.start()
 
-        out = sys.stdout.buffer
-        child_out = self.proc.stdout
-        while True:
-            raw = child_out.readline()
-            if not raw:
-                break
-            try:
-                out.write(raw)
-                out.flush()
-            except (BrokenPipeError, OSError):
-                # The log side is gone; keep supervising the child anyway.
-                pass
-            self.note(raw)
+        def relay(stream, output):
+            for raw in iter(stream.readline, b""):
+                try:
+                    output.write(raw)
+                    output.flush()
+                except (BrokenPipeError, OSError):
+                    pass
+                self.note(raw)
+
+        errors = threading.Thread(
+            target=relay, args=(self.proc.stderr, sys.stderr.buffer), daemon=True
+        )
+        errors.start()
+        relay(self.proc.stdout, sys.stdout.buffer)
+        errors.join()
 
         rc = self.proc.wait()
         self.done.set()

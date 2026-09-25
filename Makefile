@@ -150,6 +150,7 @@ lint: ## Check sync + validate YAML
 test: ## Ground Truth unit tests (launchers, failover, routing, roster, dispatch lock, seat worktrees, autoplan fail-closed, vendor-auth, detached dispatch, orchestrator loop, critic verdict rule)
 	@echo "== launcher contract =="
 	@./tests/run-launcher-tests.sh
+	@./tests/run-delivery-caps-tests.sh
 	@echo ""
 	@echo "== failover =="
 	@./tests/run-failover-tests.sh

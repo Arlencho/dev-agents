@@ -52,7 +52,7 @@ unset DISPATCH_DETACHED DISPATCH_RUN_LOG FLEET_DISPATCH_ID
 
 seat() { # <task-id> <branch> [dispatch-id]   env: SHIM_WORK_SLEEP SHIM_WORK_TAG AGENT_PROVIDER
     AGENT_PROVIDER="${AGENT_PROVIDER:-claude}" AGENT_WAVE=1 AGENT_TASK_ID="$1" FLEET_DISPATCH_ID="${3:-d1}" \
-        bash "$FLEET/scripts/run-remote.sh" localhost "$ORIGIN" devops "do the thing" "$2"
+        bash "$FLEET/scripts/run-remote.sh" localhost "$ORIGIN" devops "${4:-do the thing}" "$2"
 }
 # A seat in its own process group: what a terminal Ctrl-C targets. Sets SEAT_PID.
 seat_group() { # <task-id> <branch> <logfile>
@@ -321,6 +321,27 @@ git -C "$FETCH" checkout -q main && echo local > "$FETCH/local.txt" \
 SHIM_WORK_SLEEP=1 SHIM_WORK_TAG=m4 seat 25 main > "$SANDBOX/main4.log" 2>&1
 check "a seat on a local main that is ahead of origin starts" "0" "$?"
 check "the unpushed local commit reached origin under the seat's" "chore: seat work m4 chore: unpushed local main chore: seat work m3 chore: seat work m chore: seed" "$(origin_log main)"
+
+echo "== delivery requires a new commit on every attempt =="
+SHIM_MODE=success seat 90 feat/no-delivery > "$SANDBOX/no-delivery.log" 2>&1
+check "zero exit without commit is no-delivery" 79 "$?"
+SHIM_MODE=success seat 91 feat/r1 > "$SANDBOX/old-delivery.log" 2>&1
+check "existing branch commit is not fresh delivery" 79 "$?"
+
+echo "== worker records long paid-credit cooldown =="
+OUT_OF_CREDIT_COOLDOWN_MINUTES=120 SHIM_MODE=credit seat 92 feat/credit > "$SANDBOX/credit.log" 2>&1
+check "credit exhaustion has distinct exit" 76 "$?"
+credit_until=$(cat "$FLEET/logs/provider-state/claude.credit-until" 2>/dev/null || echo 0)
+check_true "configured credit cooldown lasts nearly two hours" test "$credit_until" -gt "$(( $(date +%s) + 7100 ))"
+check_true "credit event is recorded" grep -q '|out-of-credit$' "$FLEET/logs/provider-state/ratecap.log"
+mkdir -p "$SANDBOX/bin"
+printf '#!/bin/sh\nprintf "[]\\n"\n' > "$SANDBOX/bin/gh"
+chmod +x "$SANDBOX/bin/gh"
+PATH="$SANDBOX/bin:$PATH" SHIM_WORK_SLEEP=0 SHIM_WORK_TAG=missing-pr seat 93 feat/missing-pr d-pr 'Open a pull request' > "$SANDBOX/missing-pr.log" 2>&1
+check "new commit without requested PR is no-delivery" 79 "$?"
+printf '#!/bin/sh\nprintf '\''[{"number":12}]\\n'\''\n' > "$SANDBOX/bin/gh"
+PATH="$SANDBOX/bin:$PATH" SHIM_WORK_SLEEP=0 SHIM_WORK_TAG=with-pr seat 94 feat/with-pr d-pr2 'Open a PR' > "$SANDBOX/with-pr.log" 2>&1
+check "new commit with requested PR delivers" 0 "$?"
 
 echo ""
 echo "== $pass passed, $fail failed =="

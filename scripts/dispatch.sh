@@ -375,6 +375,10 @@ get_cooldown_minutes() {
 # True (0) if a vendor is currently cooling from a recent rate-cap.
 provider_cooling() {
     local vendor="$1"
+    local credit="$REPO_DIR/logs/provider-state/${vendor}.credit-until"
+    if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$(date +%s)" ]; then
+        return 0
+    fi
     local f="$REPO_DIR/logs/provider-state/${vendor}.cooldown"
     [ -f "$f" ] || return 1
     local ts now mins
@@ -386,8 +390,8 @@ provider_cooling() {
 
 # Pick the provider to run <agent>: primary (workers.yaml) then failover chain,
 # skipping any vendor in the excluded set (already tried this task) or cooling.
-# Never deadlocks — if every candidate is excluded/cooling, returns the primary
-# anyway (same philosophy as find_worker's forced third pass).
+# Short rate caps keep the legacy fallback when every candidate is cooling.
+# Paid-credit cooldowns never fall back to an exhausted vendor.
 resolve_provider() {
     local agent="$1"; shift
     local excluded="$*"
@@ -404,8 +408,16 @@ resolve_provider() {
     done
     for candidate in $ordered; do
         case " $excluded " in *" $candidate "*) continue ;; esac
+        local credit="$REPO_DIR/logs/provider-state/${candidate}.credit-until"
+        if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$(date +%s)" ]; then
+            continue
+        fi
         echo "$candidate"; return 0
     done
+    local credit="$REPO_DIR/logs/provider-state/${primary}.credit-until"
+    if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$(date +%s)" ]; then
+        return 1
+    fi
     echo "$primary"
 }
 
@@ -1122,7 +1134,12 @@ dispatch_task() {
     # Resolve provider through the failover chain, skipping vendors already
     # tried on this task (rate-capped/unavailable) and any currently cooling.
     local provider
-    provider=$(resolve_provider "$agent" "${TASK_TRIED_PROVIDERS[$idx]:-}")
+    if ! provider=$(resolve_provider "$agent" "${TASK_TRIED_PROVIDERS[$idx]:-}"); then
+        echo "No funded provider available for $agent" >&2
+        ( exit 76 ) &
+        DISPATCH_PID=$!
+        return 0
+    fi
     RESULT_PROVIDER[$idx]="$provider"
 
     local model="${TASK_MODEL[$idx]:-}"
@@ -1194,7 +1211,7 @@ dispatch_task() {
 # Seat outcome → event stream
 # --------------------------------------------------
 # fleet_seat_exit <idx> <status> <exit_code> <duration_s>
-# status: success | failed | blocked | ratecap | unavailable | held | hung
+# status: success | no-delivery | out-of-credit | failed | blocked | ratecap | unavailable | held | hung
 emit_seat_exit() {
     local idx="$1" status="$2" code="$3" duration="$4"
     fleet_event seat_exit task_id="$idx" agent="${TASK_AGENT[$idx]}" \
@@ -1497,6 +1514,16 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$idx]} completed in ${duration}s"
             emit_seat_exit "$idx" success "$status" "$duration"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "success" 2>/dev/null || true
+        elif [ $status -eq 79 ] || [ $status -eq 76 ]; then
+            outcome=no-delivery
+            if [ "$status" -eq 76 ]; then
+                outcome=out-of-credit
+                TASK_TRIED_PROVIDERS[$idx]="${TASK_TRIED_PROVIDERS[$idx]:-} ${RESULT_PROVIDER[$idx]}"
+            fi
+            RESULT_STATUS[$idx]="$outcome"
+            FAILED_TASKS[$idx]=0
+            emit_seat_exit "$idx" "$outcome" "$status" "$duration"
+            echo "  ${TASK_AGENT[$idx]}: $outcome after ${duration}s"
         elif [ $status -eq 77 ]; then
             RESULT_STATUS[$idx]="BLOCKED"
             FAILED_TASKS[$idx]=0
@@ -1609,6 +1636,15 @@ for wave_num in "${SORTED_WAVES[@]}"; do
                     fi
                     unset 'FAILED_TASKS[$idx]'
                     break
+                elif [ $retry_status -eq 79 ] || [ $retry_status -eq 76 ]; then
+                    outcome=no-delivery
+                    if [ "$retry_status" -eq 76 ]; then
+                        outcome=out-of-credit
+                        TASK_TRIED_PROVIDERS[$idx]="${TASK_TRIED_PROVIDERS[$idx]:-} ${RESULT_PROVIDER[$idx]}"
+                    fi
+                    RESULT_STATUS[$idx]="$outcome"
+                    emit_seat_exit "$idx" "$outcome" "$retry_status" "$duration"
+                    echo "  ${TASK_AGENT[$idx]} retry $local_attempts: $outcome"
                 elif [ $retry_status -eq 78 ]; then
                     # The retry landed on a provider at its spend/session
                     # limit: the seat is held, not failed, and the retry

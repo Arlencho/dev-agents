@@ -10,8 +10,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
-STATE_DIR="$REPO_DIR/logs/provider-state"
-WAVE_PLANS_DIR="$REPO_DIR/wave-plans"
+STATE_DIR="${PROVIDER_STATE_DIR:-$REPO_DIR/logs/provider-state}"
+WAVE_PLANS_DIR="${WAVE_PLANS_DIR:-$REPO_DIR/wave-plans}"
 ROUTING_CONFIG="$REPO_DIR/config/routing.yaml"
 
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
@@ -34,6 +34,11 @@ MINS=$(cooldown_minutes)
 NOW=$(date +%s)
 echo -e "${BOLD}State${NC} (cooldown window: ${MINS}m)"
 for v in $VENDORS; do
+    credit="$STATE_DIR/${v}.credit-until"
+    if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$NOW" ]; then
+        echo "  out of credit  $v  ($(( ($(cat "$credit") - NOW + 59) / 60 ))m remaining)"
+        continue
+    fi
     f="$STATE_DIR/${v}.cooldown"
     if [ -f "$f" ]; then
         ts=$(cat "$f" 2>/dev/null || echo 0)
@@ -80,12 +85,14 @@ if ls "$WAVE_PLANS_DIR"/*.log >/dev/null 2>&1; then
             key=prov
             if (st ~ /^success/)      ok[key]++
             else if (st ~ /^ratecap/) cap[key]++
+            else if (st == "no-delivery") missing[key]++
+            else if (st == "out-of-credit") credit[key]++
             else if (st != "")        fail[key]++
             seen[key]=1
         }
         END {
             for (p in seen)
-                printf "  %-8s ok=%d fail=%d ratecap=%d\n", p, ok[p]+0, fail[p]+0, cap[p]+0
+                printf "  %-8s ok=%d fail=%d ratecap=%d no-delivery=%d out-of-credit=%d\n", p, ok[p]+0, fail[p]+0, cap[p]+0, missing[p]+0, credit[p]+0
         }
     ' "$WAVE_PLANS_DIR"/*.log | sort
 else

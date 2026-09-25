@@ -214,7 +214,7 @@ else
 
     echo ""
     echo "== a probe success releases the hold =="
-    echo success > "$MODEFILE"
+    echo work > "$MODEFILE"
     plan_one resumed feat/resumed-seat
     check "resumed dispatch exit" "0" "$(SHIM_MODE=unused disp resumed)"
     EV4="$(events_now)"

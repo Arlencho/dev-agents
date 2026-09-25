@@ -203,7 +203,16 @@ run_with_timeout() {
     # Usage: run_with_timeout <sec> <cmd...>
     # Prefer perl alarm (portable on macOS without GNU timeout).
     local sec="$1"; shift
-    perl -e 'alarm shift; exec @ARGV' "$sec" "$@" 2>&1
+    local output rc=0
+    output=$(perl -e 'alarm shift; exec @ARGV' "$sec" "$@" 2>&1) || rc=$?
+    printf '%s\n' "$output"
+    if printf '%s\n' "$output" | grep -qiE '(^|[^0-9])402([^0-9]|$)|usage balance (is )?exhausted|Payment Required|no remaining credits'; then
+        local state="${PROVIDER_STATE_DIR:-$REPO_DIR/logs/provider-state}"
+        mkdir -p "$state"
+        echo $(( $(date +%s) + ${OUT_OF_CREDIT_COOLDOWN_MINUTES:-1440} * 60 )) > "$state/${1}.credit-until"
+        return 76
+    fi
+    return "$rc"
 }
 
 # status|detail  via globals last set by check_* 
@@ -451,6 +460,13 @@ check_gh() {
 
 run_check() {
     local vendor="$1"
+    local credit="${PROVIDER_STATE_DIR:-$REPO_DIR/logs/provider-state}/${vendor}.credit-until"
+    if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$(date +%s)" ]; then
+        PROBE_STATUS="out-of-credit"
+        PROBE_DETAIL="out of credit; paid balance cooldown active"
+        PROBE_FIX="replenish the paid balance, then clear $credit"
+        return 1
+    fi
     case "$vendor" in
         claude) check_claude ;;
         kimi)   check_kimi ;;
@@ -487,6 +503,12 @@ for vendor in "${VENDORS[@]}"; do
         fi
     else
         FAIL=1
+        credit="${PROVIDER_STATE_DIR:-$REPO_DIR/logs/provider-state}/${vendor}.credit-until"
+        if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$(date +%s)" ]; then
+            PROBE_STATUS="out-of-credit"
+            PROBE_DETAIL="out of credit; paid balance cooldown active"
+            PROBE_FIX="replenish the paid balance, then clear $credit"
+        fi
         if [ "$JSON_OUT" = true ]; then
             JSON_PARTS+=("{\"vendor\":\"$vendor\",\"status\":\"$PROBE_STATUS\",\"detail\":$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$PROBE_DETAIL"),\"fix\":$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$PROBE_FIX")}")
         else

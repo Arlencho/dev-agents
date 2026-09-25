@@ -5,8 +5,11 @@
 #   Env in:  AGENT_MODEL, ROLES_DIR, RATECAP_PATTERNS (all optional)
 #   Stdout:  agent output (streamed); stderr: launcher diagnostics
 #   Exit:    0 success · 1 task failure · 75 RATE_CAP · 69 UNAVAILABLE
-#            78 PROVIDER_LIMIT · 124 HUNG
+#            76 OUT_OF_CREDIT · 78 PROVIDER_LIMIT · 124 HUNG
+#   Worker:  79 NO_DELIVERY (process succeeded without commit/requested PR)
 
+EXIT_OUT_OF_CREDIT=76   # paid balance exhausted, long vendor cooldown
+EXIT_NO_DELIVERY=79     # clean process exit without the requested delivery
 EXIT_RATECAP=75         # sysexits EX_TEMPFAIL — retry on another provider
 EXIT_UNAVAILABLE=69     # sysexits EX_UNAVAILABLE — CLI missing / not logged in
 EXIT_PROVIDER_LIMIT=78  # account spend/session limit: hold, probe, no retry burn
@@ -84,14 +87,16 @@ provider_limit_gate_ok() { # <tail_out> <elapsed_s> <cmd_exit>
 
 # Run a vendor CLI, classify the outcome against the rate-cap pattern table.
 # Usage: AGENT_PROMPT_TEXT=<prompt> run_and_classify <vendor> <cmd...>
-# Only the LAST 25 lines of output are matched — cap/auth messages appear at
-# the end of a run; agents may legitimately discuss rate limits mid-transcript.
+# Only structured API failures on stdout and CLI diagnostics on stderr match.
 # Lines that appear verbatim in AGENT_PROMPT_TEXT are never matched.
 run_and_classify() {
     local vendor="$1"; shift
     local patterns="${RATECAP_PATTERNS:-$(dirname "${BASH_SOURCE[0]}")/../config/ratecap-patterns.conf}"
-    local tmp
+    local tmp err err_pipe err_pid
     tmp=$(mktemp)
+    err=$(mktemp)
+    err_pipe="${err}.pipe"
+    mkfifo "$err_pipe"
 
     # Optional live-stream reader: a pass-through filter between the CLI and
     # the log. It folds progress facts out of a streaming run for the Ops Floor
@@ -110,9 +115,13 @@ run_and_classify() {
     local cmd_exit start_ts elapsed
     watchdog_runner "$@"
     start_ts=$(date +%s)
+    tee "$err" < "$err_pipe" >&2 &
+    err_pid=$!
     set +e
-    "${RUNNER[@]}" 2>&1 | "${reader[@]}" | tee "$tmp"
+    "${RUNNER[@]}" 2> "$err_pipe" | "${reader[@]}" | tee "$tmp"
     cmd_exit="${PIPESTATUS[0]}"
+    wait "$err_pid"
+    rm -f "$err_pipe"
     set -e
     elapsed=$(( $(date +%s) - start_ts ))
 
@@ -122,20 +131,20 @@ run_and_classify() {
     # watchdog's own stop line is in the log, pass its reason through.
     if [ "$cmd_exit" -eq "$EXIT_HUNG" ]; then
         local hung_note
-        hung_note=$(grep '^seat-watchdog: ' "$tmp" 2>/dev/null | tail -1 || true)
+        hung_note=$(grep -h '^seat-watchdog: ' "$tmp" "$err" 2>/dev/null | tail -1 || true)
         case "$hung_note" in
             *" tool ceiling;"*)
                 echo "HUNG seat: ${hung_note#seat-watchdog: }" >&2 ;;
             *)
                 echo "HUNG seat: no model event for ${SEAT_QUIET_AFTER_S:-1800}s (exit $EXIT_HUNG)" >&2 ;;
         esac
-        rm -f "$tmp"
+        rm -f "$tmp" "$err"
         return "$EXIT_HUNG"
     fi
 
     local tail_out
-    tail_out=$(tail -25 "$tmp")
-    rm -f "$tmp"
+    tail_out=$(python3 "$(dirname "${BASH_SOURCE[0]}")/cli-errors.py" "$tmp" "$err")
+    rm -f "$tmp" "$err"
 
     # Classify the CLI's own output only. The prompt carries injected text
     # (charter, preamble, learnings, task) that may quote a cap or auth phrase,
@@ -149,6 +158,12 @@ run_and_classify() {
         printf '%s\n' "$AGENT_PROMPT_TEXT" | sed '/^[[:space:]]*$/d' > "$prompt_lines"
         tail_out=$(printf '%s\n' "$tail_out" | grep -vxF -f "$prompt_lines" || true)
         rm -f "$prompt_lines"
+    fi
+
+    # Paid credit is vendor-independent and takes priority over rate limits.
+    if printf '%s\n' "$tail_out" | grep -qiE '(^|[^0-9])402([^0-9]|$)|usage balance (is )?exhausted|Payment Required|no remaining credits'; then
+        echo "OUT_OF_CREDIT detected for $vendor" >&2
+        return "$EXIT_OUT_OF_CREDIT"
     fi
 
     if [ -f "$patterns" ]; then
@@ -178,4 +193,22 @@ run_and_classify() {
 
     [ "$cmd_exit" -eq 0 ] && return 0
     return 1
+}
+
+# Called inside the seat before its worktree is removed. A retry snapshots its
+# own starting tip, so commits from an earlier attempt cannot count again.
+verify_delivery() { # <start-sha> <branch> <original-task>
+    local start="$1" branch="$2" task="$3" count prs
+    count=$(git rev-list --count "$start..refs/heads/$branch" 2>/dev/null) || return 79
+    if [ "$count" -lt 1 ]; then
+        echo "NO_DELIVERY: branch $branch gained no commits" >&2
+        return 79
+    fi
+    if printf '%s\n' "$task" | grep -qiE '(open|create|submit|raise|file|push|with|a)[[:space:]]+(a[[:space:]]+|the[[:space:]]+|draft[[:space:]]+)?(pull[ -]request|PR)([^[:alnum:]]|$)'; then
+        prs=$(gh pr list --head "$branch" --state all --json number 2>/dev/null) || return 79
+        if ! printf '%s' "$prs" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin) else 1)'; then
+            echo "NO_DELIVERY: requested pull request for $branch is missing" >&2
+            return 79
+        fi
+    fi
 }
