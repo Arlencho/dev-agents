@@ -19,11 +19,11 @@ kimi login    # device-code OAuth against your Kimi for Coding subscription
 kimi -p "say ok" --output-format text   # smoke test
 ```
 
-No key export, nothing provisioned on the dispatcher. If `kimi` is missing or not logged in, the launcher exits 69 and dispatch **fails over to the next provider** in `routing.yaml provider_failover` (`web-frontend: [kimi, claude]`).
+No key export, nothing provisioned on the dispatcher. If `kimi` is missing or not logged in, the launcher exits 69 and dispatch **fails over to the next provider** in `routing.yaml provider_failover` (`web-frontend: [kimi, grok, codex, claude]`; claude is the last resort, owner decision 2026-09-25).
 
 ## Rate-cap behavior
 
-If Kimi returns a cap/quota message (patterns in `config/ratecap-patterns.conf`), the launcher exits 75: `run-remote.sh` marks kimi cooling (`logs/provider-state/kimi.cooldown`, 60 min) and logs the event; `dispatch.sh` fails the task over to `claude` and notifies you. See `make scorecard`.
+If Kimi returns a cap/quota message (patterns in `config/ratecap-patterns.conf`), the launcher exits 75: `run-remote.sh` marks kimi cooling (`logs/provider-state/kimi.cooldown`, 60 min) and logs the event; `dispatch.sh` fails the task over to the next provider in the chain (grok, then codex, then claude) and notifies you. See `make scorecard`.
 
 ## Trial gate (before expanding K3 to other seats)
 

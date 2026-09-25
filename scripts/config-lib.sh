@@ -131,7 +131,7 @@ get_model() {
 # whether a role needs a copy in providers/<vendor>/agents/.
 #
 # Only Claude needs such a copy (its `--agent <name>` registry resolves through
-# ~/.claude/agents symlinks). The kimi and grok launchers read roles/<role>.md
+# ~/.claude/agents symlinks). The kimi, grok and codex launchers read roles/<role>.md
 # directly and strip_frontmatter() it. A grok-only seat must therefore NOT be
 # synced into providers/claude/agents/: doing so registers a Claude agent pinned
 # to a model Claude cannot resolve.

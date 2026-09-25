@@ -15,7 +15,7 @@ WAVE_PLANS_DIR="$REPO_DIR/wave-plans"
 ROUTING_CONFIG="$REPO_DIR/config/routing.yaml"
 
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
-VENDORS="claude kimi grok"
+VENDORS="claude kimi grok codex"
 
 cooldown_minutes() {
     local v

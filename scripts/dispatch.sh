@@ -1024,10 +1024,10 @@ check_worker_capacity() {
     local max
     max=$(get_max_agents "$wname")
     local running
-    # Count all three vendor CLIs — a worker may be running kimi/grok agents too.
+    # Count every vendor CLI: a worker may be running kimi/grok/codex agents too.
     # `pgrep … | wc -l` (not `pgrep -c`) — BSD/macOS pgrep has no -c flag; the
     # old `pgrep -c claude` silently returned 0 on Mac workers via the fallback.
-    running=$(ssh -o ConnectTimeout=5 "$host" "pgrep -fl 'claude|kimi|grok' 2>/dev/null | wc -l | tr -d ' '" 2>/dev/null || echo 0)
+    running=$(ssh -o ConnectTimeout=5 "$host" "pgrep -fl 'claude|kimi|grok|codex' 2>/dev/null | wc -l | tr -d ' '" 2>/dev/null || echo 0)
     running="${running:-0}"
     if [ "$running" -ge "$max" ]; then
         return 1  # at capacity

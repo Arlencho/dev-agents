@@ -5,7 +5,7 @@
 #
 # Usage:
 #   ./scripts/vendor-auth-check.sh                  # all known vendors on this host
-#   ./scripts/vendor-auth-check.sh --vendors claude,kimi
+#   ./scripts/vendor-auth-check.sh --vendors claude,kimi   # any of claude,kimi,grok,codex
 #   ./scripts/vendor-auth-check.sh --plan path.plan  # plan roles → primary+failover
 #   ./scripts/vendor-auth-check.sh --json
 #   ./scripts/vendor-auth-check.sh --host user@box --vendors claude
@@ -26,7 +26,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKERS_CONFIG="${WORKERS_CONFIG:-$REPO_DIR/config/workers.yaml}"
 ROUTING_CONFIG="${ROUTING_CONFIG:-$REPO_DIR/config/routing.yaml}"
 
-ALL_VENDORS=(claude kimi grok)
+ALL_VENDORS=(claude kimi grok codex)
 VENDORS=()
 PLAN_FILE=""
 JSON_OUT=false
@@ -377,6 +377,56 @@ PY
     return 0
 }
 
+check_codex() {
+    PROBE_FIX="codex login"
+    if ! command -v codex >/dev/null 2>&1; then
+        PROBE_STATUS="missing"
+        PROBE_DETAIL="codex CLI not on PATH"
+        return 1
+    fi
+    # `codex login status` prints "Logged in using <method>" (subscription or the API-key
+    # variant) and exits 0; logged out it prints "Not logged in" and exits 1.
+    local out
+    set +e
+    out=$(run_with_timeout "$TIMEOUT_SEC" codex login status 2>&1)
+    local ec=$?
+    set -e
+    if [ $ec -ne 0 ] || echo "$out" | grep -qiE 'not logged in|login required|expired'; then
+        PROBE_STATUS="expired"
+        PROBE_DETAIL="codex login status exit $ec: $(echo "$out" | head -2 | tr '\n' ' ')"
+        return 1
+    fi
+    if ! echo "$out" | grep -qi 'logged in'; then
+        PROBE_STATUS="unknown"
+        PROBE_DETAIL="unexpected login status output: $(echo "$out" | head -2 | tr '\n' ' ')"
+        return 1
+    fi
+    local how
+    how=$(echo "$out" | grep -i 'logged in' | head -1 | tr -s ' ')
+    # Deep: a tiny headless one-shot (status alone can lie while exec fails).
+    # Read-only sandbox, no session file, git check skipped: the probe may run
+    # from $HOME, and it only has to answer, not edit.
+    if [ "$DEEP" = true ]; then
+        local hout
+        set +e
+        hout=$(run_with_timeout "$TIMEOUT_SEC" codex exec --skip-git-repo-check --sandbox read-only \
+            --ephemeral --color never "Reply with exactly: AUTH_OK" 2>&1 </dev/null)
+        local hec=$?
+        set -e
+        if [ $hec -ne 0 ] || ! echo "$hout" | grep -q 'AUTH_OK'; then
+            PROBE_STATUS="expired"
+            PROBE_DETAIL="login status ok but headless failed: $(echo "$hout" | tr '\n' ' ' | head -c 200)"
+            return 1
+        fi
+        PROBE_STATUS="ok"
+        PROBE_DETAIL="${how:-logged in} + headless AUTH_OK"
+        return 0
+    fi
+    PROBE_STATUS="ok"
+    PROBE_DETAIL="${how:-logged in}"
+    return 0
+}
+
 check_gh() {
     PROBE_FIX="gh auth login"
     if ! command -v gh >/dev/null 2>&1; then
@@ -405,6 +455,7 @@ run_check() {
         claude) check_claude ;;
         kimi)   check_kimi ;;
         grok)   check_grok ;;
+        codex)  check_codex ;;
         gh)     check_gh ;;
         *)
             PROBE_STATUS="unknown"

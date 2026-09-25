@@ -73,8 +73,8 @@ for agents_dir in "${PROVIDER_DIRS[@]}"; do
 
         # Vendor ownership. Only providers that may actually run this role get a
         # copy. Claude is the only provider needing one at all: `claude --agent
-        # <name>` resolves through its own agent registry, while the kimi and
-        # grok launchers read roles/<role>.md directly and strip the frontmatter.
+        # <name>` resolves through its own agent registry, while the kimi, grok
+        # and codex launchers read roles/<role>.md directly and strip the frontmatter.
         # Copying a grok-owned seat into providers/claude/agents/ registers a
         # Claude agent pinned to a model Claude cannot resolve.
         if ! echo " $(role_providers "$role") " | grep -q " $provider "; then

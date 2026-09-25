@@ -44,6 +44,12 @@ case "$PROVIDER" in
         run_and_classify grok \
             grok -p "$PROBE_PROMPT"
         ;;
+    codex)
+        # Read-only, no session file, git check skipped: the probe runs from
+        # the dispatcher host, not a seat worktree, and only has to answer.
+        run_and_classify codex \
+            codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never "$PROBE_PROMPT"
+        ;;
     *)
         echo "provider-probe: unknown provider '$PROVIDER'" >&2
         exit "$EXIT_UNAVAILABLE"

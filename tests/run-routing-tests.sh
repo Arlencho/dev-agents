@@ -32,6 +32,9 @@ check "kimi + empty" "vendor-default-k3" "$(effective_model kimi "")"
 check "kimi + native id" "kimi-for-coding" "$(effective_model kimi kimi-for-coding)"
 check "grok + sonnet (ignored)" "vendor-default" "$(effective_model grok sonnet)"
 check "grok + empty" "vendor-default" "$(effective_model grok "")"
+check "codex + claude-opus-5 (ignored pin)" "vendor-default" "$(effective_model codex claude-opus-5)"
+check "codex + empty" "vendor-default" "$(effective_model codex "")"
+check "codex + native id" "codex-native-model" "$(effective_model codex codex-native-model)"
 
 echo "== routing.yaml: build and gate seats run claude-opus-5 (owner decision 2026-09-14) =="
 for role in db-architect test-engineer api-designer devops go-backend web-frontend \
@@ -59,14 +62,16 @@ for role in go-backend db-architect api-designer devops test-engineer mobile inv
   check "$role primary" "grok" "$(get_provider "$role")"
 done
 
-echo "== routing trial 2026-09-13: no producer failover chain contains claude =="
+echo "== producer failover (owner 2026-09-25): primary, other non-Anthropic seat, codex, claude last =="
+check "web-frontend failover chain" "kimi grok codex claude" "$(get_failover_chain web-frontend | xargs)"
+for role in go-backend db-architect api-designer devops test-engineer mobile investigate docs-writer; do
+  check "$role failover chain" "grok kimi codex claude" "$(get_failover_chain "$role" | xargs)"
+done
+# claude is the last resort only: never a primary, never ahead of codex.
 for role in web-frontend go-backend db-architect api-designer devops test-engineer mobile investigate docs-writer; do
-  chain="$(get_failover_chain "$role")"
-  case " $chain " in
-    *" claude "*) got="contains claude: $chain" ;;
-    *)            got="claude-free" ;;
-  esac
-  check "$role failover chain" "claude-free" "$got"
+  chain="$(get_failover_chain "$role" | xargs)"
+  check "$role chain ends with claude" "claude" "${chain##* }"
+  check "$role primary is not claude" "no" "$([ "$(get_provider "$role")" = "claude" ] && echo yes || echo no)"
 done
 
 echo "== every discipline critic primary is claude, failover claude then grok =="

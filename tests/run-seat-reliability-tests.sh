@@ -73,7 +73,7 @@ check "the stop names the tool and the ceiling" "0" "$?"
 
 echo ""
 echo "== issue 84: the fast spend-limit exit is 78, a slow one is not =="
-for vendor in claude kimi grok; do
+for vendor in claude kimi grok codex; do
     got=$(run_launcher "$vendor" limit)
     check "$vendor / spend-limit stream (real 2026-09-13 log)" "78" "$got"
 done
