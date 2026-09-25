@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Vendor auth preflight tests — no real network logins.
+# Vendor auth preflight tests - no real network logins.
 # Uses tests/shims on PATH + temp HOME for kimi/grok credential files.
 set -uo pipefail
 
@@ -74,24 +74,24 @@ echo "== vendor-auth: binary absent =="
 got=$(PATH="/usr/bin:/bin" "$CHECK" --vendors claude >/dev/null 2>&1; echo $?)
 check "claude binary-absent fails" 1 "$got"
 
-echo "== vendor-auth: --plan resolves web-frontend → kimi (+failover) =="
+echo "== vendor-auth: --plan resolves web-frontend → codex (+failover) =="
 PLAN=$(mktemp)
 cat > "$PLAN" <<'EOF'
 1 | web-frontend | smoke only | feat/smoke
 EOF
 # success path with credentials + shim
-out=$(SHIM_MODE=success PATH="$SHIMS:$PATH" "$CHECK" --plan "$PLAN" 2>&1) || true
+out=$(SHIM_MODE=success PATH="$SHIMS:$PATH" "$CHECK" --plan "$PLAN" 2>&1)
 ec=$?
-if echo "$out" | grep -q kimi && [ "$ec" -eq 0 ]; then
-    echo "  ok   plan resolves and checks kimi (exit 0)"; pass=$((pass+1))
+if echo "$out" | grep -q codex && [ "$ec" -eq 0 ]; then
+    echo "  ok   plan resolves and checks codex (exit 0)"; pass=$((pass+1))
 else
     echo "  FAIL plan web-frontend (exit $ec)"; echo "$out" | head -20; fail=$((fail+1))
 fi
-# The producer chain now ends codex then claude: both are preflighted too.
-if echo "$out" | grep -q codex && echo "$out" | grep -q claude; then
-    echo "  ok   plan preflights the codex and claude failover rungs"; pass=$((pass+1))
+# Every failover provider is preflighted after the codex primary.
+if echo "$out" | grep -q kimi && echo "$out" | grep -q grok && echo "$out" | grep -q claude; then
+    echo "  ok   plan preflights the kimi, grok and claude failover rungs"; pass=$((pass+1))
 else
-    echo "  FAIL plan did not preflight codex + claude:"; echo "$out" | head -20; fail=$((fail+1))
+    echo "  FAIL plan did not preflight kimi + grok + claude:"; echo "$out" | head -20; fail=$((fail+1))
 fi
 rm -f "$PLAN"
 

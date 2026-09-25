@@ -50,22 +50,19 @@ check "unknown role → default claude-opus-5" "claude-opus-5" "$(get_model this
 
 echo "== cross-vendor critic seats (non-Anthropic by design) =="
 check "devops-critic → grok" "grok" "$(get_provider devops-critic)"
-check "devops-critic failover stays non-Anthropic" "grok kimi" "$(echo $(get_failover_chain devops-critic))"
+check "devops-critic failover stays non-Anthropic" "grok kimi" "$(get_failover_chain devops-critic | xargs)"
 check "devops-critic effective model (alias ignored)" "vendor-default" "$(effective_model grok "$(get_model devops-critic)")"
 check "plan-critic → grok" "grok" "$(get_provider plan-critic)"
-check "plan-critic never fails over to claude" "grok" "$(echo $(get_failover_chain plan-critic))"
+check "plan-critic never fails over to claude" "grok" "$(get_failover_chain plan-critic | xargs)"
 
-echo "== routing trial 2026-09-13: no producer primary is claude =="
-# web-frontend is the kimi seat; every other producer is a grok trial seat.
-check "web-frontend primary" "kimi" "$(get_provider web-frontend)"
-for role in go-backend db-architect api-designer devops test-engineer mobile investigate docs-writer; do
-  check "$role primary" "grok" "$(get_provider "$role")"
+echo "== producer primaries (owner 2026-09-25): codex first =="
+for role in web-frontend go-backend db-architect api-designer devops test-engineer mobile investigate docs-writer; do
+  check "$role primary" "codex" "$(get_provider "$role")"
 done
 
-echo "== producer failover (owner 2026-09-25): primary, other non-Anthropic seat, codex, claude last =="
-check "web-frontend failover chain" "kimi grok codex claude" "$(get_failover_chain web-frontend | xargs)"
-for role in go-backend db-architect api-designer devops test-engineer mobile investigate docs-writer; do
-  check "$role failover chain" "grok kimi codex claude" "$(get_failover_chain "$role" | xargs)"
+echo "== producer failover (owner 2026-09-25): codex, kimi, grok, claude last =="
+for role in web-frontend go-backend db-architect api-designer devops test-engineer mobile investigate docs-writer; do
+  check "$role failover chain" "codex kimi grok claude" "$(get_failover_chain "$role" | xargs)"
 done
 # claude is the last resort only: never a primary, never ahead of codex.
 for role in web-frontend go-backend db-architect api-designer devops test-engineer mobile investigate docs-writer; do
@@ -77,7 +74,7 @@ done
 echo "== every discipline critic primary is claude, failover claude then grok =="
 for role in backend-critic frontend-critic database-critic api-critic; do
   check "$role primary" "claude" "$(get_provider "$role")"
-  check "$role failover chain" "claude grok" "$(echo $(get_failover_chain "$role"))"
+  check "$role failover chain" "claude grok" "$(get_failover_chain "$role" | xargs)"
 done
 
 echo "== trust seats carry no failover entry (fall through to default) =="
@@ -94,11 +91,16 @@ check "security-reviewer primary stays claude" "claude" "$(get_provider security
 
 echo "== role charters: model line agrees with workers.yaml + routing.yaml =="
 # grok-primary seats pin model: grok (CLI default, like plan-critic already did).
-# Every other seat's charter frontmatter matches the model_routing column.
+# Codex strips charter frontmatter and uses the routed model's vendor default.
+# The remaining seats' charter frontmatter matches the model_routing column.
 for role_file in "$REPO_DIR"/roles/*.md; do
   role=$(basename "$role_file" .md)
   fm=$(grep -m1 '^model:' "$role_file" | sed 's/model: *//')
-  if [ "$(get_provider "$role")" = "grok" ]; then
+  if [ "$(get_provider "$role")" = "codex" ]; then
+    check "$role routed model uses codex default" "vendor-default" "$(effective_model codex "$(get_model "$role")")"
+    check "$role prompt excludes charter model metadata" "no" "$(strip_frontmatter "$role_file" | grep -q '^model:' && echo yes || echo no)"
+    continue
+  elif [ "$(get_provider "$role")" = "grok" ]; then
     want="grok"
   else
     want="$(get_model "$role")"
@@ -106,7 +108,7 @@ for role_file in "$REPO_DIR"/roles/*.md; do
   check "$role charter model line" "$want" "$fm"
 done
 
-echo "== kimi effective for routed web-frontend =="
+echo "== kimi failover effective for routed web-frontend =="
 req="$(get_model web-frontend)"
 eff="$(effective_model kimi "$req")"
 check "web-frontend requested claude pin → effective k3 default" "vendor-default-k3" "$eff"
