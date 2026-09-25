@@ -376,7 +376,9 @@ get_cooldown_minutes() {
 provider_cooling() {
     local vendor="$1"
     local credit="$REPO_DIR/logs/provider-state/${vendor}.credit-until"
-    if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$(date +%s)" ]; then
+    local val
+    val=$(cat "$credit" 2>/dev/null || true)
+    if [ "${val:-0}" -gt "$(date +%s)" ]; then
         return 0
     fi
     local f="$REPO_DIR/logs/provider-state/${vendor}.cooldown"
@@ -409,13 +411,17 @@ resolve_provider() {
     for candidate in $ordered; do
         case " $excluded " in *" $candidate "*) continue ;; esac
         local credit="$REPO_DIR/logs/provider-state/${candidate}.credit-until"
-        if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$(date +%s)" ]; then
+        local val
+        val=$(cat "$credit" 2>/dev/null || true)
+        if [ "${val:-0}" -gt "$(date +%s)" ]; then
             continue
         fi
         echo "$candidate"; return 0
     done
     local credit="$REPO_DIR/logs/provider-state/${primary}.credit-until"
-    if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$(date +%s)" ]; then
+    local val
+    val=$(cat "$credit" 2>/dev/null || true)
+    if [ "${val:-0}" -gt "$(date +%s)" ]; then
         return 1
     fi
     echo "$primary"
@@ -1136,6 +1142,7 @@ dispatch_task() {
     local provider
     if ! provider=$(resolve_provider "$agent" "${TASK_TRIED_PROVIDERS[$idx]:-}"); then
         echo "No funded provider available for $agent" >&2
+        RESULT_STATUS[$idx]="out-of-credit"
         ( exit 76 ) &
         DISPATCH_PID=$!
         return 0
@@ -1514,6 +1521,8 @@ for wave_num in "${SORTED_WAVES[@]}"; do
             echo -e "  ${GREEN}✓${NC} ${TASK_AGENT[$idx]} completed in ${duration}s"
             emit_seat_exit "$idx" success "$status" "$duration"
             [ -x "$NOTIFY_SCRIPT" ] && "$NOTIFY_SCRIPT" "${TASK_AGENT[$idx]}" "${RESULT_WORKER[$idx]}" "${TASK_BRANCH[$idx]}" "success" 2>/dev/null || true
+        elif [ $status -eq 76 ] && [ "${RESULT_STATUS[$idx]}" = out-of-credit ]; then
+            emit_seat_exit "$idx" out-of-credit "$status" "$duration"
         elif [ $status -eq 79 ] || [ $status -eq 76 ]; then
             outcome=no-delivery
             if [ "$status" -eq 76 ]; then
@@ -1634,6 +1643,10 @@ for wave_num in "${SORTED_WAVES[@]}"; do
                         stop_clear "seat-hung-${FLEET_DISPATCH_ID:-run}-$idx" "the retry did the work"
                         unset 'HUNG_TASKS[$idx]'
                     fi
+                    unset 'FAILED_TASKS[$idx]'
+                    break
+                elif [ $retry_status -eq 76 ] && [ "${RESULT_STATUS[$idx]}" = out-of-credit ]; then
+                    emit_seat_exit "$idx" out-of-credit "$retry_status" "$duration"
                     unset 'FAILED_TASKS[$idx]'
                     break
                 elif [ $retry_status -eq 79 ] || [ $retry_status -eq 76 ]; then

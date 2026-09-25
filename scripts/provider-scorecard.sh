@@ -35,8 +35,9 @@ NOW=$(date +%s)
 echo -e "${BOLD}State${NC} (cooldown window: ${MINS}m)"
 for v in $VENDORS; do
     credit="$STATE_DIR/${v}.credit-until"
-    if [ -f "$credit" ] && [ "$(cat "$credit")" -gt "$NOW" ]; then
-        echo "  out of credit  $v  ($(( ($(cat "$credit") - NOW + 59) / 60 ))m remaining)"
+    val=$(cat "$credit" 2>/dev/null || true)
+    if [ "${val:-0}" -gt "$NOW" ]; then
+        echo "  out of credit  $v  ($(( (${val:-0} - NOW + 59) / 60 ))m remaining)"
         continue
     fi
     f="$STATE_DIR/${v}.cooldown"

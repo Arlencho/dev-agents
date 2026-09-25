@@ -47,12 +47,31 @@ check 'retry cannot reuse an old commit' 79 verify_delivery "$(git rev-parse HEA
 mkdir "$TMP/bin"
 cat > "$TMP/bin/gh" <<'GH'
 #!/bin/bash
+[ "${GH_FAIL:-0}" = 0 ] || { echo "network unavailable" >&2; exit 1; }
 printf '%s\n' "${PR_RESULT:-[]}"
 GH
 chmod +x "$TMP/bin/gh"
 export PATH="$TMP/bin:$PATH"
 check 'requested PR must exist' 79 verify_delivery "$base" main 'Open a pull request'
 check 'requested PR plus commit delivers' 0 env PR_RESULT='[{"number":12}]' bash -c 'source "$1/providers/lib.sh"; verify_delivery "$2" main "Open a PR"' _ "$ROOT" "$base"
+for task in 'do not open a PR' "don't create a pull request" 'never submit a PR' 'conflicts with PR 125' 'review a PR' 'Do not open a new PR'; do
+    check "PR reference does not require delivery: $task" 0 verify_delivery "$base" main "$task"
+done
+check 'positive request after a negation still requires a PR' 79 verify_delivery "$base" main 'Do not open a PR here; create a PR for the fix'
+check 'failed GitHub lookup preserves real commits' 0 env GH_FAIL=1 bash -c 'source "$1/providers/lib.sh"; verify_delivery "$2" main "Open a PR"' _ "$ROOT" "$base"
+check 'terminal delivery statuses appear blocked' 0 python3 - "$ROOT" <<'PYTEST'
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts")
+import desk_live, experience_build
+for status in ("no-delivery", "out-of-credit"):
+    projection = desk_live.project([
+        {"event": "seat_dispatch", "task_id": "0", "agent": "devops"},
+        {"event": "seat_exit", "task_id": "0", "status": status},
+    ])
+    assert projection["seats"][0]["pipeline"] == "blocked"
+    assert 'st-fail' in experience_build.Renderer._seat_pill({"status": status})
+    assert experience_build.Renderer.status_kind(status) == "fail"
+PYTEST
 # Exercise real routing and read-only health commands with isolated state.
 REPO_DIR="$TMP/fleet"
 mkdir -p "$REPO_DIR/logs/provider-state" "$TMP/waves"
@@ -77,6 +96,15 @@ check 'paid credit stays blocked past a rate-cap window' 0 provider_cooling kimi
 rm "$PROVIDER_STATE_DIR/grok.credit-until"
 funded=$(resolve_provider web-frontend)
 check 'routing chooses a funded fallback' 0 test "$funded" = grok
+: > "$PROVIDER_STATE_DIR/grok.credit-until"
+check 'empty credit file permits funded fallback' 0 test "$(resolve_provider web-frontend)" = grok
+check 'empty credit file is not cooling' 1 provider_cooling grok
+check 'scorecard accepts empty credit files' 0 env WAVE_PLANS_DIR="$TMP/waves" bash "$ROOT/scripts/provider-scorecard.sh"
+cp "$TMP/output" "$TMP/scorecard-output"
+check 'empty credit file emits no numeric errors' 1 grep -q 'integer expression expected' "$TMP/scorecard-output"
+# Exhaust the untried chain to exercise the primary fallback credit read.
+: > "$PROVIDER_STATE_DIR/codex.credit-until"
+check 'empty primary credit file permits legacy rate fallback' 0 test "$(resolve_provider web-frontend 'codex kimi grok claude')" = codex
 # A fresh CLI probe must persist the same long cooldown and expose the reason.
 rm "$PROVIDER_STATE_DIR/codex.credit-until"
 printf '#!/bin/sh\necho "Error: HTTP 402 Payment Required" >&2\nexit 1\n' > "$TMP/bin/codex"

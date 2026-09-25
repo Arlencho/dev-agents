@@ -204,8 +204,24 @@ verify_delivery() { # <start-sha> <branch> <original-task>
         echo "NO_DELIVERY: branch $branch gained no commits" >&2
         return 79
     fi
-    if printf '%s\n' "$task" | grep -qiE '(open|create|submit|raise|file|push|with|a)[[:space:]]+(a[[:space:]]+|the[[:space:]]+|draft[[:space:]]+)?(pull[ -]request|PR)([^[:alnum:]]|$)'; then
-        prs=$(gh pr list --head "$branch" --state all --json number 2>/dev/null) || return 79
+    if python3 - "$task" <<'PYTASK'
+import re
+import sys
+# Evaluate each request separately so a negated request cannot hide a later one.
+text = sys.argv[1]
+request = r"\b(open|create|submit|raise|file|push)\s+(?:(?:a|the|draft|new)\s+)*(?:pull[ -]request|PR)\b"
+required = False
+for match in re.finditer(request, text, re.I):
+    prefix = re.split(r"[.;!?\n]", text[:match.start()])[-1]
+    if not re.search(r"\b(?:not|never|don['’]t|without)\b[^,;.!?]*$", prefix, re.I):
+        required = True
+sys.exit(0 if required else 1)
+PYTASK
+    then
+        if ! prs=$(gh pr list --head "$branch" --state all --json number); then
+            echo "Delivery PR lookup failed for $branch; keeping verified commits" >&2
+            return 0
+        fi
         if ! printf '%s' "$prs" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin) else 1)'; then
             echo "NO_DELIVERY: requested pull request for $branch is missing" >&2
             return 79

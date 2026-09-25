@@ -294,5 +294,33 @@ check "both attempts recorded as no-delivery" 2 "$(grep -c '"event":"seat_exit".
 check_true "final seat table exposes no-delivery" grep -q 'devops.*no-delivery' "$SANDBOX/missing.log"
 
 echo ""
+echo "== exhausted provider chain is terminal =="
+mkdir -p "$FLEET/logs/provider-state"
+for vendor in claude kimi grok codex; do
+    echo $(( $(date +%s) + 86400 )) > "$FLEET/logs/provider-state/$vendor.credit-until"
+done
+plan exhausted "No funded providers" feat/exhausted
+(cd "$FLEET" && FLEET_BACKOFF_DELAYS="1 1" "$BASH4" scripts/dispatch.sh "$ORIGIN" wave-plans/exhausted.plan --auto --retries 2 --skip-auth-preflight) > "$SANDBOX/exhausted.log" 2>&1
+check "exhausted dispatch reports normally" 0 "$?"
+ev="$EVENTS/$(cat "$EVENTS/latest")"
+check "exhausted seat emits one terminal event" 1 "$(grep -c '"event":"seat_exit".*"status":"out-of-credit"' "$ev")"
+check "exhausted seat never starts a worker" 0 "$(grep -c '"event":"seat_dispatch"' "$ev")"
+check "exhausted seat never retries" 0 "$(grep -c 'Retrying' "$SANDBOX/exhausted.log")"
+
+# A provider can run out of credit during an attempt. The next resolution
+# must terminate the retry loop, even when the configured budget is larger.
+: > "$FLEET/logs/provider-state/codex.credit-until"
+cat > "$FLEET/scripts/run-remote.sh" <<'CREDIT'
+#!/bin/bash
+echo $(( $(date +%s) + 86400 )) > logs/provider-state/codex.credit-until
+exit 76
+CREDIT
+plan depleted "Credit depleted during work" feat/depleted
+(cd "$FLEET" && FLEET_BACKOFF_DELAYS="1 1 1" "$BASH4" scripts/dispatch.sh "$ORIGIN" wave-plans/depleted.plan --auto --retries 3 --skip-auth-preflight) > "$SANDBOX/depleted.log" 2>&1
+check "depleted dispatch reports normally" 0 "$?"
+ev="$EVENTS/$(cat "$EVENTS/latest")"
+check "depleted seat starts only the funded attempt" 1 "$(grep -c '"event":"seat_dispatch"' "$ev")"
+check "depleted seat reports the attempt and terminal resolution once each" 2 "$(grep -c '"event":"seat_exit".*"status":"out-of-credit"' "$ev")"
+
 echo "== $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

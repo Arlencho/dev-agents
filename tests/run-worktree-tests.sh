@@ -64,6 +64,10 @@ seat_group() { # <task-id> <branch> <logfile>
 seat_trees() { git -C "$FETCH" worktree list --porcelain 2>/dev/null | grep -c "^worktree .*/worktrees/"; }
 origin_log() { git --git-dir="$ORIGIN" log --format=%s "$1" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'; }
 
+SHIM_MODE=success AGENT_PROVIDER=claude AGENT_TASK_ID=critic FLEET_DISPATCH_ID=critic \
+    bash "$FLEET/scripts/run-remote.sh" localhost "$ORIGIN" backend-critic "review the change" feat/review > "$SANDBOX/critic.log" 2>&1
+check "backend-critic exit zero without a commit succeeds" 0 "$?"
+
 echo "== two seats in one wave on two branches run at the same time =="
 SHIM_WORK_SLEEP=5 SHIM_WORK_TAG=a seat 0 feat/a > "$SANDBOX/a.log" 2>&1 & PA=$!
 SHIM_WORK_SLEEP=5 SHIM_WORK_TAG=b seat 1 feat/b > "$SANDBOX/b.log" 2>&1 & PB=$!

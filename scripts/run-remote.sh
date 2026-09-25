@@ -30,6 +30,13 @@ TASK="${4:?Missing task description}"
 BRANCH="${5:-fix/${AGENT}-$(date +%s)}"
 shift 5 2>/dev/null || shift $#
 
+# Producer roles from config/routing.yaml provider_failover.
+DELIVERY_REQUIRED=false
+case "$AGENT" in
+    web-frontend|go-backend|db-architect|api-designer|devops|test-engineer|mobile|investigate|docs-writer)
+        DELIVERY_REQUIRED=true ;;
+esac
+
 # Local worker? Never SSH — Claude OAuth does not survive BatchMode ssh.
 IS_LOCAL=0
 case "$HOST" in
@@ -343,6 +350,7 @@ export SEAT_TOOL_CEILING_S=$(printf '%q' "${SEAT_TOOL_CEILING_S:-5400}")
 export SEAT_QUIET_POLL_S=$(printf '%q' "${SEAT_QUIET_POLL_S:-5}")
 export SEAT_QUIET_KILL_GRACE_S=$(printf '%q' "${SEAT_QUIET_KILL_GRACE_S:-5}")
 FULL_TASK_B64=$(printf '%q' "$FULL_TASK_B64")
+DELIVERY_REQUIRED=$(printf '%q' "$DELIVERY_REQUIRED")
 DELIVERY_TASK=$(printf '%q' "$TASK")
 $PROGRESS_ENV
 WORKER_ENV
@@ -546,7 +554,7 @@ AGENT_MODEL="$MODEL" ROLES_DIR="$RUNTIME_DIR/roles" \
 AGENT_EXIT=${PIPESTATUS[0]}
 set -e
 
-if [ "$AGENT_EXIT" -eq 0 ]; then
+if [ "$AGENT_EXIT" -eq 0 ] && [ "$DELIVERY_REQUIRED" = true ]; then
     source "$RUNTIME_DIR/providers/lib.sh"
     verify_delivery "$SEAT_BASE_SHA" "$BRANCH" "$DELIVERY_TASK" || AGENT_EXIT=$?
 fi
