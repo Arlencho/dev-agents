@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared fake-CLI behavior for launcher tests. Symlinked as claude/kimi/grok.
+# Shared fake-CLI behavior for launcher tests. Symlinked as claude/kimi/grok/codex.
 # Driven by SHIM_MODE (or the contents of SHIM_MODE_FILE when set):
 # success | fail | ratecap | noauth | work | quiet | heartbeat | chatty |
 # limit | slow-limit | quiet-once | tool-open | tool-hung | tool-hung-once
@@ -83,6 +83,20 @@ if [ "$VENDOR" = "kimi" ] && [ "${1:-}" = "doctor" ]; then
     esac
 fi
 
+# codex login status → "Logged in using ChatGPT" (exit 0) or "Not logged in" (exit 1)
+if [ "$VENDOR" = "codex" ] && [ "${1:-}" = "login" ] && [ "${2:-}" = "status" ]; then
+    case "$MODE" in
+        success|ratecap)
+            echo "Logged in using ChatGPT"
+            exit 0
+            ;;
+        noauth|fail)
+            echo "Not logged in"
+            exit 1
+            ;;
+    esac
+fi
+
 # Emit a realistic prompt echo so charter-injection assertions have something
 # to grep. The prompt is the argument after -p / --prompt / --agent, but the
 # simplest robust thing is to echo every arg.
@@ -110,6 +124,7 @@ case "$MODE" in
             claude) echo "You've reached your usage limit. Limit resets at 5pm." ;;
             kimi)   echo "HTTP 429: rate limit exceeded, please retry later" ;;
             grok)   echo "Error: HTTP 429 Too Many Requests — quota exceeded" ;;
+            codex)  echo "ERROR: You've hit your usage limit. Upgrade to Pro or try again at 3:00 PM." ;;
         esac
         exit 1 ;;
     noauth)
@@ -117,6 +132,7 @@ case "$MODE" in
             claude) echo "Not logged in. Please run /login" ;;
             kimi)   echo "HTTP 401 unauthorized — please run 'kimi login'" ;;
             grok)   echo "Not authenticated. Run 'grok login' first." ;;
+            codex)  echo "Not logged in. Run 'codex login' to authenticate." ;;
         esac
         exit 1 ;;
     quiet)

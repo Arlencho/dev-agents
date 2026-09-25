@@ -3,13 +3,14 @@
 # The orchestrator and dispatch.sh read this to know where to send work.
 
 # Provider preference per agent role — PRIMARY provider only.
-# dispatch.sh reads this to select the CLI tool (claude | kimi | grok),
+# dispatch.sh reads this to select the CLI tool (claude | kimi | grok | codex),
 # then walks provider_failover in routing.yaml when the primary is
 # rate-capped (exit 75) or unavailable (exit 69).
 #
 # Owner multi-vendor seats (pair with routing.yaml model_routing):
-#   producers     → grok + CLI default (routing trial 2026-09-13, failover kimi)
-#   web-frontend  → kimi + K3 (CLI default, failover grok)
+#   producers     → grok + CLI default (routing trial 2026-09-13; failover
+#                   kimi, then codex, then claude as the last resort 2026-09-25)
+#   web-frontend  → kimi + K3 (CLI default; failover grok, codex, claude)
 #   critics       → claude + claude-opus-5 (failover grok)
 #   plan-critic   → grok + CLI default
 #   devops-critic → grok + CLI default (failover kimi, stays non-Anthropic)

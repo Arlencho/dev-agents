@@ -71,9 +71,19 @@ if [ "$(uname)" = "Darwin" ]; then
 fi
 rm -rf "$SHIM_DIR"
 
+echo "== row 16b: grok and kimi both capped -> codex before claude (owner 2026-09-25) =="
+date +%s > "$STATE_DIR/grok.cooldown"     # kimi.cooldown is still there from row 16
+p3=$(resolve_provider go-backend "")
+check "go-backend with grok+kimi cooling picks codex" "codex" "$p3"
+date +%s > "$STATE_DIR/codex.cooldown"
+p4=$(resolve_provider go-backend "")
+check "go-backend with codex cooling too reaches claude" "claude" "$p4"
+rm -f "$STATE_DIR/codex.cooldown"
+
 echo "== row 17: all chain vendors cooling -> primary anyway (never deadlock) =="
-date +%s > "$STATE_DIR/grok.cooldown"
-p_all=$(resolve_provider web-frontend "")   # kimi+grok both cooling
+date +%s > "$STATE_DIR/codex.cooldown"
+date +%s > "$STATE_DIR/claude.cooldown"
+p_all=$(resolve_provider web-frontend "")   # kimi, grok, codex and claude all cooling
 check "returns primary despite all cooling" "kimi" "$p_all"
 
 # Cleanup

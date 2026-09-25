@@ -91,7 +91,7 @@ LOG_DIR="\$HOME/dev/agent-logs"
 # Model tier or ID, set by dispatch.sh via AGENT_MODEL env var (e.g. opus,
 # sonnet, haiku, or an explicit model ID). Empty means use the CLI default.
 MODEL="${AGENT_MODEL:-}"
-# Provider (CLI vendor) set by dispatch.sh via AGENT_PROVIDER (claude|kimi|grok).
+# Provider (CLI vendor) set by dispatch.sh via AGENT_PROVIDER (claude|kimi|grok|codex).
 # Selects which providers/<provider>/launch.sh runs the agent. All authenticate
 # via subscription login on the worker — no API keys anywhere.
 PROVIDER="${AGENT_PROVIDER:-claude}"
@@ -349,7 +349,10 @@ WORKER_ENV
 set -euo pipefail
 
 # Ensure vendor CLIs are on PATH (ssh bare PATH; local session may already have them).
-export PATH="$HOME/.kimi-code/bin:$HOME/.grok/bin:$HOME/.local/bin:$PATH"
+# codex is a Homebrew binary, and the non-interactive ssh PATH on macOS lacks
+# /opt/homebrew/bin, so it is appended (appended, so a local session's own
+# ordering wins).
+export PATH="$HOME/.kimi-code/bin:$HOME/.grok/bin:$HOME/.local/bin:$PATH:/opt/homebrew/bin"
 
 mkdir -p "$LOG_DIR"
 

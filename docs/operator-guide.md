@@ -215,6 +215,7 @@ make vendor-auth PLAN=wave-plans/foo.plan # roles → primary + failover only
 | **claude** | `claude auth status` → `loggedIn: true` (also catches OAuth expired) |
 | **kimi** | CLI on PATH + non-empty `~/.kimi-code` credentials/oauth + `kimi doctor` |
 | **grok** | CLI on PATH + non-empty `~/.grok/auth.json` |
+| **codex** | CLI on PATH + `codex login status` → `Logged in` (`--deep` adds a read-only headless `AUTH_OK` one-shot) |
 | **gh** (optional) | `gh auth status` via `--with-gh` |
 
 `dispatch.sh` runs this automatically for vendors needed by the plan (primary + failover) on each worker host. Fail-closed: bad/expired auth aborts before clone/launch.
@@ -224,7 +225,7 @@ make vendor-auth PLAN=wave-plans/foo.plan # roles → primary + failover only
 ./scripts/dispatch.sh <repo> <plan> --skip-auth-preflight
 ```
 
-On failure, re-login on the **worker** machine (`claude login` / `kimi login` / `grok login`), then re-dispatch. This is separate from rate-cap cooldown (`make scorecard`).
+On failure, re-login on the **worker** machine (`claude login` / `kimi login` / `grok login` / `codex login`), then re-dispatch. This is separate from rate-cap cooldown (`make scorecard`).
 
 ---
 

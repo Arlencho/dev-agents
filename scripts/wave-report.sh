@@ -150,7 +150,7 @@ for tid, t in sorted(tasks.items()):
     if not requested:
         requested = legacy_model
     if not effective:
-        if vendor in ("kimi", "grok") and legacy_model in ("", "opus", "sonnet", "haiku"):
+        if vendor in ("kimi", "grok", "codex") and legacy_model in ("", "opus", "sonnet", "haiku"):
             effective = "vendor-default-k3" if vendor == "kimi" else "vendor-default"
             if legacy_model in ("opus", "sonnet", "haiku"):
                 effective = f"legacy-mislabel:{legacy_model}"
