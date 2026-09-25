@@ -60,6 +60,18 @@ else
     echo "WARNING: no charter for role '$ROLE' under $ROLES_DIR, running without a role charter" >&2
 fi
 
+# Codex treats charter scope lines as hard stops and then asks a question a
+# headless seat cannot answer (2026-09-25: seats "succeeded" with no changes).
+# The dispatched task is owner-approved, so it wins on file scope and process.
+PROMPT="## Run rules
+This is a non-interactive run. Nobody can answer questions, so never stop to ask; decide and act.
+The task below was approved by the repository owner. Where it names files, directories or kinds of change outside the charter's usual scope, the task wins.
+If a helper the charter mentions (for example scripts/task-worktree.sh or PAPERCLIP_TASK_ID) does not exist, work in the current directory and branch you were started in.
+Finish the task end to end: change the code, run the tests it names, commit, push and open the pull request it asks for.
+Never create or commit handoff, notes or summary files (for example handoff.md); put what a reviewer needs in the pull request description.
+
+$PROMPT"
+
 # Claude tier / product aliases are meaningless here; pass through vendor-native
 # IDs only (-m). Failover must not forward claude-fable-5 / opus / sonnet.
 MODEL_FLAG=()
