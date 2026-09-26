@@ -130,15 +130,15 @@ provider_failover:
   # decision 2026-09-25 allows claude as the LAST RESORT for producers, so a
   # producer reaches it only when grok, kimi and codex are all capped or
   # unavailable. The primaries are unchanged.
-  web-frontend: [kimi, grok, codex, claude]
-  go-backend: [grok, kimi, codex, claude]
-  db-architect: [grok, kimi, codex, claude]
-  api-designer: [grok, kimi, codex, claude]
-  devops: [grok, kimi, codex, claude]
-  test-engineer: [grok, kimi, codex, claude]
-  mobile: [grok, kimi, codex, claude]
-  investigate: [grok, kimi, codex, claude]
-  docs-writer: [grok, kimi, codex, claude]
+  web-frontend: [codex, kimi, grok, claude]
+  go-backend: [codex, kimi, grok, claude]
+  db-architect: [codex, kimi, grok, claude]
+  api-designer: [codex, kimi, grok, claude]
+  devops: [codex, kimi, grok, claude]
+  test-engineer: [kimi, codex, grok, claude]
+  mobile: [codex, kimi, grok, claude]
+  investigate: [codex, kimi, grok, claude]
+  docs-writer: [kimi, codex, grok, claude]
   # Discipline critics keep the first-party primary and fall only to grok.
   backend-critic: [claude, grok]
   frontend-critic: [claude, grok]

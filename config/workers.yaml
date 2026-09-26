@@ -19,15 +19,15 @@
 # NOTE: YAML parsers here don't strip inline comments — keep values bare.
 provider_preferences:
   # Producers (grok trial seats; web-frontend stays on kimi)
-  go-backend: grok
+  go-backend: codex
   # back on kimi 2026-09-20 after the weekly quota reset (#112); if the cap
   # is still live the ratecap patterns fail this seat over to grok (#111)
-  web-frontend: kimi
-  db-architect: grok
-  api-designer: grok
-  devops: grok
-  test-engineer: grok
-  mobile: grok
+  web-frontend: codex
+  db-architect: codex
+  api-designer: codex
+  devops: codex
+  test-engineer: kimi
+  mobile: codex
   # Critics + gate
   backend-critic: claude
   frontend-critic: claude
@@ -39,8 +39,8 @@ provider_preferences:
   cto: claude
   # Meta / ops
   orchestrator: claude
-  investigate: grok
-  docs-writer: grok
+  investigate: codex
+  docs-writer: kimi
   retro: claude
   default: claude
 
