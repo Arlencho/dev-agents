@@ -12,7 +12,7 @@
 #   ./scripts/vendor-auth-check.sh --with-gh         # also check gh auth status
 #   ./scripts/vendor-auth-check.sh --deep            # real headless one-shot (required before waves)
 #
-# Exit: 0 all required vendors OK · 1 one or more failed
+# Exit: 0 no blocking auth failures (credit cooldowns allowed) · 1 auth failed
 #
 # Env overrides (tests / unusual installs):
 #   KIMI_CODE_HOME   default $HOME/.kimi-code
@@ -203,7 +203,16 @@ run_with_timeout() {
     # Usage: run_with_timeout <sec> <cmd...>
     # Prefer perl alarm (portable on macOS without GNU timeout).
     local sec="$1"; shift
-    perl -e 'alarm shift; exec @ARGV' "$sec" "$@" 2>&1
+    local output rc=0
+    output=$(perl -e 'alarm shift; exec @ARGV' "$sec" "$@" 2>&1) || rc=$?
+    printf '%s\n' "$output"
+    if printf '%s\n' "$output" | grep -qiE '(^|[^0-9])402([^0-9]|$)|usage balance (is )?exhausted|Payment Required|no remaining credits'; then
+        local state="${PROVIDER_STATE_DIR:-$REPO_DIR/logs/provider-state}"
+        mkdir -p "$state"
+        echo $(( $(date +%s) + ${OUT_OF_CREDIT_COOLDOWN_MINUTES:-1440} * 60 )) > "$state/${1}.credit-until"
+        return 76
+    fi
+    return "$rc"
 }
 
 # status|detail  via globals last set by check_* 
@@ -451,6 +460,16 @@ check_gh() {
 
 run_check() {
     local vendor="$1"
+    local credit="${PROVIDER_STATE_DIR:-$REPO_DIR/logs/provider-state}/${vendor}.credit-until"
+    local val
+    val=$(cat "$credit" 2>/dev/null || true)
+    if [ "$DEEP" = false ] && [[ "$val" =~ ^[0-9]+$ ]] && [ "$val" -gt "$(date +%s)" ]; then
+        PROBE_STATUS="out-of-credit"
+        PROBE_DETAIL="out of credit; paid balance cooldown active"
+        PROBE_FIX="replenish the paid balance, then run vendor-auth-check.sh --vendors $vendor --deep"
+        return 1
+    fi
+    local rc=0
     case "$vendor" in
         claude) check_claude ;;
         kimi)   check_kimi ;;
@@ -463,7 +482,11 @@ run_check() {
             PROBE_FIX=""
             return 1
             ;;
-    esac
+    esac || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        rm -f "$credit"
+    fi
+    return "$rc"
 }
 
 # ── Execute ───────────────────────────────────────────────────────────
@@ -486,11 +509,25 @@ for vendor in "${VENDORS[@]}"; do
             echo -e "  ${GREEN}ok${NC}   ${BOLD}$vendor${NC}  — $PROBE_DETAIL"
         fi
     else
-        FAIL=1
+        credit="${PROVIDER_STATE_DIR:-$REPO_DIR/logs/provider-state}/${vendor}.credit-until"
+        val=$(cat "$credit" 2>/dev/null || true)
+        if [[ "$val" =~ ^[0-9]+$ ]] && [ "$val" -gt "$(date +%s)" ]; then
+            PROBE_STATUS="out-of-credit"
+            PROBE_DETAIL="out of credit; paid balance cooldown active"
+            PROBE_FIX="replenish the paid balance, then run vendor-auth-check.sh --vendors $vendor --deep"
+        fi
+        if [ "$PROBE_STATUS" = "out-of-credit" ]; then
+            label="SKIP"
+            color="$YELLOW"
+        else
+            FAIL=1
+            label="FAIL"
+            color="$RED"
+        fi
         if [ "$JSON_OUT" = true ]; then
             JSON_PARTS+=("{\"vendor\":\"$vendor\",\"status\":\"$PROBE_STATUS\",\"detail\":$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$PROBE_DETAIL"),\"fix\":$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$PROBE_FIX")}")
         else
-            echo -e "  ${RED}FAIL${NC} $vendor  [$PROBE_STATUS] — $PROBE_DETAIL"
+            echo -e "  ${color}${label}${NC} $vendor  [$PROBE_STATUS] - $PROBE_DETAIL"
             [ -n "$PROBE_FIX" ] && echo -e "        fix: ${YELLOW}$PROBE_FIX${NC}"
         fi
     fi
@@ -525,7 +562,7 @@ else
         echo "  make vendor-auth   # or: ./scripts/vendor-auth-check.sh"
         exit 1
     fi
-    echo -e "${GREEN}All required vendor sessions OK.${NC}"
+    echo -e "${GREEN}Preflight passed; credit-cooled vendors are skipped.${NC}"
 fi
 
 exit "$FAIL"

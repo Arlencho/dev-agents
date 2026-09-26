@@ -98,7 +98,7 @@ NAV = [
 # Pipeline language (Fleet Desk v2 SYNTHESIS §1): every surface talks in
 # Queued · In flight · Blocked · Settled. The Almanac only sees settled
 # trails, so Queued / In flight are honest dashes — never invented counts.
-BLOCKED_STATUSES = ("failed", "fail", "unavailable", "error")
+BLOCKED_STATUSES = ("failed", "fail", "unavailable", "error", "no-delivery", "out-of-credit")
 
 ISSUE_URL_RE = re.compile(r"github\.com/([^/\s]+)/([^/\s]+)/issues/(\d+)")
 
@@ -925,6 +925,8 @@ class Renderer:
             return '<span class="st st-warn">rate-capped</span>'
         if st in ("failed", "blocked", "unavailable"):
             return '<span class="st st-fail">blocked</span>'
+        if st in ("no-delivery", "out-of-credit"):
+            return f'<span class="st st-fail">{esc(st)}</span>'
         if st == "queued":
             return '<span class="st st-unk">queued</span>'
         return f'<span class="st st-unk">{esc(st)}</span>'

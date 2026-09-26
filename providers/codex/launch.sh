@@ -8,8 +8,7 @@ set -euo pipefail
 #
 # Headless flags, verified against codex-cli 0.154.0 (2026-09-25):
 #   exec          non-interactive; the prompt comes from argv, the transcript
-#                 is plain text on stdout (header, the prompt echoed under a
-#                 "user" line, the answer under "codex", then "tokens used").
+#                 uses JSONL events so model text stays inside message records.
 #   --dangerously-bypass-approvals-and-sandbox
 #                 approvals off and no sandbox. A seat works inside its own
 #                 git worktree and needs git push, gh, npm and the network,
@@ -17,7 +16,8 @@ set -euo pipefail
 #                 the permission level the other launchers already run with:
 #                 claude passes --dangerously-skip-permissions, kimi -p runs
 #                 with --auto, grok -p performs edits headless.
-#   --color never plain log lines for tee and the classifier.
+#   --json        structured events separate model/tool output from CLI errors.
+#   --color never plain diagnostics for tee and the classifier.
 # Not passed: --skip-git-repo-check (every seat runs inside a git worktree;
 # a run outside one should fail loud, not silently work in the wrong place).
 
@@ -93,5 +93,5 @@ exec 0</dev/null
 # shellcheck disable=SC2034  # read by run_and_classify in the sourced lib.sh
 AGENT_PROMPT_TEXT="$PROMPT"
 run_and_classify codex \
-    codex exec --dangerously-bypass-approvals-and-sandbox --color never \
+    codex exec --dangerously-bypass-approvals-and-sandbox --json --color never \
         ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} -- "$PROMPT"

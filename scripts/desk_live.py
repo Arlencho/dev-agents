@@ -114,6 +114,8 @@ PIPELINE = {
     "blocked": "blocked",
     "ratecap": "blocked",
     "unavailable": "blocked",
+    "no-delivery": "blocked",
+    "out-of-credit": "blocked",
 }
 
 

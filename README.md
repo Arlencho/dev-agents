@@ -440,6 +440,12 @@ How it works:
 - Grok (trial producer seats + plan-critic): [`providers/grok/README.md`](providers/grok/README.md)
 - Claude (default, trust-critical roles): `providers/claude/agents/` (copied from roles/ via `scripts/sync-providers.sh` (roles/ is upstream))
 
+A seat is successful only when its branch gains a commit beyond that attempt's starting tip. If its task requests a pull request, one must exist for the branch. An empty exit-zero run becomes `no-delivery` (worker exit 79), appears in the seat table, fleet events and scorecard, and uses the normal failure retry budget.
+
+CLI error diagnostics indicating HTTP 402, `Payment Required` or an exhausted usage balance produce `out-of-credit` (exit 76). The dispatcher skips that vendor for 24 hours by default, including when every candidate is exhausted. Set `OUT_OF_CREDIT_COOLDOWN_MINUTES` on the dispatcher or auth-check process to change this duration. State lives in `logs/provider-state/<vendor>.credit-until`; credit exhaustion is non-fatal in preflight so routing can use a funded fallback. After replenishing the balance, run `scripts/vendor-auth-check.sh --vendors <vendor> --deep` to probe again during the cooldown. A successful fresh probe clears the file and resumes routing. Both `make vendor-auth` and `make scorecard` report "out of credit". Ordinary rate caps retain their configured short cooldown.
+
+Classification uses CLI error diagnostics from stderr and structured API error records from stdout. Model prose, prompt echoes and tool/test output on stdout do not count as vendor failures.
+
 ### make scorecard
 
 View cross-vendor task outcomes, rate-cap events, and cooldown state:

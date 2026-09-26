@@ -152,6 +152,7 @@
     var st = seat.status || "queued";
     if (st === "success" || st === "done") return '<span class="st st-done">settled</span>';
     if (st === "running") return '<span class="st st-run">in flight</span>';
+    if (st === "no-delivery" || st === "out-of-credit") return '<span class="st st-fail">' + esc(st) + "</span>";
     if (st === "ratecap") return '<span class="st st-warn">rate-capped</span>';
     if (st === "failed" || st === "blocked" || st === "unavailable" || st === "unknown") {
       return '<span class="st st-fail">blocked</span>';

@@ -95,6 +95,11 @@ if [ "$(printf '%s\n' "$argv" | sed -n '1p')" = "exec" ]; then
 else
     echo "  FAIL codex first argv word is not exec: $(printf '%s' "$argv" | head -1)"; fail=$((fail+1))
 fi
+if printf '%s\n' "$argv" | grep -qxF -- "--json"; then
+    echo "  ok   codex uses structured events to separate model text from CLI errors"; pass=$((pass+1))
+else
+    echo "  FAIL codex must use structured events for error provenance"; fail=$((fail+1))
+fi
 if printf '%s\n' "$argv" | grep -qxF -- "--dangerously-bypass-approvals-and-sandbox"; then
     echo "  ok   codex approvals and sandbox are off for the seat"; pass=$((pass+1))
 else
@@ -136,7 +141,7 @@ echo "== row 14c: codex ratecap patterns classify the CLI's own limit lines =="
 codex_classify() { # <line> -> exit code of the launcher with that tail
     local shim_dir line="$1"
     shim_dir=$(mktemp -d)
-    printf '#!/bin/bash\necho "[codex shim] args: $*"\necho %q\nexit 1\n' "$line" > "$shim_dir/codex"
+    printf '#!/bin/bash\necho "[codex shim] args: $*"\necho %q >&2\nexit 1\n' "$line" > "$shim_dir/codex"
     chmod +x "$shim_dir/codex"
     PATH="$shim_dir:/usr/bin:/bin" "$REPO_DIR/providers/codex/launch.sh" web-frontend "do the thing" >/dev/null 2>&1
     local rc=$?
@@ -152,9 +157,9 @@ done <<'EOF'
 75|ERROR: 429 Too Many Requests
 75|Rate limit reached for codex-native-model: rate_limit_exceeded
 75|error: insufficient_quota
-75|Your usage balance is exhausted
-75|ERROR: 402 Payment Required
-75|You have no remaining credits
+76|Your usage balance is exhausted
+76|ERROR: 402 Payment Required
+76|You have no remaining credits
 69|Not logged in. Run 'codex login' to authenticate.
 69|error: unauthorized
 69|error: refresh token expired

@@ -72,7 +72,7 @@ cat > "$FLEET/scripts/run-remote.sh" <<'STUB'
 echo "stub seat: host=$1 agent=$3 branch=$5 provider=${AGENT_PROVIDER:-?} dispatch=${FLEET_DISPATCH_ID:-?}"
 sleep "${STUB_SEAT_SLEEP:-4}"
 echo "stub seat done"
-exit 0
+exit "${STUB_SEAT_EXIT:-0}"
 STUB
 chmod +x "$FLEET/scripts/run-remote.sh"
 # ssh fails at once: the worker probe prints OFFLINE, the capacity check reads 0.
@@ -284,6 +284,43 @@ printf '%s\n' "$tick6" | grep -q "busy: product (branch lock feat-attached.lock 
 printf '%s\n' "$tick6" | grep -q "skip: wave-plans/epsilon.plan (product is busy)"; check "tick 6 starts nothing for product" "0" "$?"
 kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null; rm -f "$LOCKS/feat-attached.lock"
 
+echo "== missing delivery is recorded and retried =="
+plan missing "Missing delivery" feat/missing
+(cd "$FLEET" && STUB_SEAT_SLEEP=0 STUB_SEAT_EXIT=79 FLEET_BACKOFF_DELAYS=1 "$BASH4" scripts/dispatch.sh "$ORIGIN" wave-plans/missing.plan --auto --retries 1 --skip-auth-preflight) > "$SANDBOX/missing.log" 2>&1
+check "dispatch finishes reporting failed seats" 0 "$?"
+check_true "missing delivery counts as a failed task" grep -q "0/1 succeeded.*1 failed" "$SANDBOX/missing.log"
+ev="$EVENTS/$(cat "$EVENTS/latest")"
+check "both attempts recorded as no-delivery" 2 "$(grep -c '"event":"seat_exit".*"status":"no-delivery"' "$ev")"
+check_true "final seat table exposes no-delivery" grep -q 'devops.*no-delivery' "$SANDBOX/missing.log"
+
 echo ""
+echo "== exhausted provider chain is terminal =="
+mkdir -p "$FLEET/logs/provider-state"
+for vendor in claude kimi grok codex; do
+    echo $(( $(date +%s) + 86400 )) > "$FLEET/logs/provider-state/$vendor.credit-until"
+done
+plan exhausted "No funded providers" feat/exhausted
+(cd "$FLEET" && FLEET_BACKOFF_DELAYS="1 1" "$BASH4" scripts/dispatch.sh "$ORIGIN" wave-plans/exhausted.plan --auto --retries 2 --skip-auth-preflight) > "$SANDBOX/exhausted.log" 2>&1
+check "exhausted dispatch reports normally" 0 "$?"
+ev="$EVENTS/$(cat "$EVENTS/latest")"
+check "exhausted seat emits one terminal event" 1 "$(grep -c '"event":"seat_exit".*"status":"out-of-credit"' "$ev")"
+check "exhausted seat never starts a worker" 0 "$(grep -c '"event":"seat_dispatch"' "$ev")"
+check "exhausted seat never retries" 0 "$(grep -c 'Retrying' "$SANDBOX/exhausted.log")"
+
+# A provider can run out of credit during an attempt. The next resolution
+# must terminate the retry loop, even when the configured budget is larger.
+: > "$FLEET/logs/provider-state/codex.credit-until"
+cat > "$FLEET/scripts/run-remote.sh" <<'CREDIT'
+#!/bin/bash
+echo $(( $(date +%s) + 86400 )) > logs/provider-state/codex.credit-until
+exit 76
+CREDIT
+plan depleted "Credit depleted during work" feat/depleted
+(cd "$FLEET" && FLEET_BACKOFF_DELAYS="1 1 1" "$BASH4" scripts/dispatch.sh "$ORIGIN" wave-plans/depleted.plan --auto --retries 3 --skip-auth-preflight) > "$SANDBOX/depleted.log" 2>&1
+check "depleted dispatch reports normally" 0 "$?"
+ev="$EVENTS/$(cat "$EVENTS/latest")"
+check "depleted seat starts only the funded attempt" 1 "$(grep -c '"event":"seat_dispatch"' "$ev")"
+check "depleted seat reports the attempt and terminal resolution once each" 2 "$(grep -c '"event":"seat_exit".*"status":"out-of-credit"' "$ev")"
+
 echo "== $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

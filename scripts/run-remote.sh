@@ -30,6 +30,13 @@ TASK="${4:?Missing task description}"
 BRANCH="${5:-fix/${AGENT}-$(date +%s)}"
 shift 5 2>/dev/null || shift $#
 
+# Producer roles from config/routing.yaml provider_failover.
+DELIVERY_REQUIRED=false
+case "$AGENT" in
+    web-frontend|go-backend|db-architect|api-designer|devops|test-engineer|mobile|investigate|docs-writer)
+        DELIVERY_REQUIRED=true ;;
+esac
+
 # Local worker? Never SSH — Claude OAuth does not survive BatchMode ssh.
 IS_LOCAL=0
 case "$HOST" in
@@ -343,6 +350,8 @@ export SEAT_TOOL_CEILING_S=$(printf '%q' "${SEAT_TOOL_CEILING_S:-5400}")
 export SEAT_QUIET_POLL_S=$(printf '%q' "${SEAT_QUIET_POLL_S:-5}")
 export SEAT_QUIET_KILL_GRACE_S=$(printf '%q' "${SEAT_QUIET_KILL_GRACE_S:-5}")
 FULL_TASK_B64=$(printf '%q' "$FULL_TASK_B64")
+DELIVERY_REQUIRED=$(printf '%q' "$DELIVERY_REQUIRED")
+DELIVERY_TASK=$(printf '%q' "$TASK")
 $PROGRESS_ENV
 WORKER_ENV
     cat <<'WORKER'
@@ -534,6 +543,7 @@ echo "Seat worktree: $SEAT_DIR ($(git rev-parse --short HEAD) on $BRANCH)"
 # installed + logged in, exiting 69 if not). The task arrives base64-encoded
 # and is decoded HERE on the worker. set +e so a launcher exit (69/75/1) is
 # captured, not aborted.
+SEAT_BASE_SHA=$(git rev-parse "refs/heads/$BRANCH")
 echo "Starting $PROVIDER launcher for agent $AGENT (model: ${MODEL:-default})..."
 echo "Logging to: $LOG_DIR/$LOG_FILE"
 FULL_TASK=$(printf '%s' "$FULL_TASK_B64" | base64 -d)
@@ -543,6 +553,11 @@ AGENT_MODEL="$MODEL" ROLES_DIR="$RUNTIME_DIR/roles" \
     bash "$RUNTIME_DIR/providers/$PROVIDER/launch.sh" "$AGENT" "$FULL_TASK" 2>&1 | tee "$LOG_DIR/$LOG_FILE"
 AGENT_EXIT=${PIPESTATUS[0]}
 set -e
+
+if [ "$AGENT_EXIT" -eq 0 ] && [ "$DELIVERY_REQUIRED" = true ]; then
+    source "$RUNTIME_DIR/providers/lib.sh"
+    verify_delivery "$SEAT_BASE_SHA" "$BRANCH" "$DELIVERY_TASK" || AGENT_EXIT=$?
+fi
 
 # Push the branch from the seat worktree
 echo "Pushing branch $BRANCH..."
@@ -613,6 +628,8 @@ fi
 FILES_JSON=$(printf '%s\n' "$FILES_TOUCHED" | awk 'NF { printf "%s\"%s\"", (c++ ? ", " : ""), $0 }')
 LEDGER_STATUS="failed"
 [ "$REMOTE_EXIT" -eq 0 ] && LEDGER_STATUS="done"
+[ "$REMOTE_EXIT" -eq 79 ] && LEDGER_STATUS="no-delivery"
+[ "$REMOTE_EXIT" -eq 76 ] && LEDGER_STATUS="out-of-credit"
 printf '{"task_id":"%s","wave":%s,"agent":"%s","provenance":{"vendor":"%s","model":"%s","requested_model":"%s","effective_model":"%s","host":"%s"},"branch":"%s","base_sha":"%s","head_sha":"%s","ts":"%s","status":"%s","orchestrator_fields":{"files_touched":[%s],"diff_stat":"%s","agent_exit":%s,"log":"%s"}}\n' \
     "$TASK_ID" "$WAVE" "$AGENT" "$PROVIDER" "$EFFECTIVE_MODEL" "${MODEL:-}" "$EFFECTIVE_MODEL" "$HOST" \
     "$BRANCH" "$BASE_SHA" "$HEAD_SHA" "$(date -u +%FT%TZ)" "$LEDGER_STATUS" \
@@ -658,6 +675,13 @@ if [ "$REMOTE_EXIT" -eq 75 ]; then
     [ -x "$SCRIPT_DIR/learnings.sh" ] && "$SCRIPT_DIR/learnings.sh" add "$REPO_NAME" "$PROVIDER" failure \
         "RATE_CAP: $PROVIDER consumer cap hit by $AGENT on $HOST" --severity high 2>/dev/null || true
     echo "RATE_CAP recorded for $PROVIDER — dispatch will fail over"
+fi
+
+if [ "$REMOTE_EXIT" -eq 76 ]; then
+    STATE_DIR="$SCRIPT_DIR/../logs/provider-state"
+    mkdir -p "$STATE_DIR"
+    echo $(( $(date +%s) + ${OUT_OF_CREDIT_COOLDOWN_MINUTES:-1440} * 60 )) > "$STATE_DIR/${PROVIDER}.credit-until"
+    echo "$(date -u +%FT%TZ)|$PROVIDER|$AGENT|$HOST|out-of-credit" >> "$STATE_DIR/ratecap.log"
 fi
 
 # Provider-limit sentinel (exit 78): record the hold where dispatch.sh reads
